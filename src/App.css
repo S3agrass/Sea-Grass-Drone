@@ -334,6 +334,8 @@ body {
 .camera-feed {
   flex: 1;
   min-height: 0;
+  max-height: 200px;
+  aspect-ratio: 4 / 3;
   border-radius: 6px;
   overflow: hidden;
   border: 1px solid var(--border);

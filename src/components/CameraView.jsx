@@ -52,47 +52,12 @@ export default function CameraView() {
           }} />
         )}
         {/* Simulated underwater scene */}
-        <svg width="100%" height="100%" style={{ position: 'absolute', inset: 0 }}>
-          <defs>
-            <radialGradient id="uw" cx="50%" cy="60%" r="60%">
-              <stop offset="0%" stopColor="#013a63" />
-              <stop offset="100%" stopColor="#001220" />
-            </radialGradient>
-          </defs>
-          <rect width="100%" height="100%" fill="url(#uw)" />
-          {/* Light rays */}
-          {[15, 30, 50, 70, 85].map((x, i) => (
-            <polygon key={i}
-              points={`${x}%,0 ${x - 4}%,100% ${x + 4}%,100%`}
-              fill={`rgba(79,195,247,${0.03 + i * 0.01})`}
-            />
-          ))}
-          {/* Particles */}
-          {Array.from({ length: 20 }).map((_, i) => (
-            <circle key={i}
-              cx={`${(i * 37 + 10) % 100}%`}
-              cy={`${(i * 53 + 5) % 100}%`}
-              r={i % 3 === 0 ? 2 : 1}
-              fill="rgba(79,195,247,0.4)"
-            />
-          ))}
-          {/* Seagrass silhouettes */}
-          {[10, 25, 40, 60, 75, 90].map((x, i) => (
-            <g key={i}>
-              <rect x={`${x}%`} y="75%" width="3" height="25%" fill="#0d4a1a" rx="1" />
-              <ellipse cx={`${x + 1}%`} cy="75%" rx="8" ry="12" fill="#0d4a1a" opacity="0.7" />
-            </g>
-          ))}
-          {/* HUD overlays */}
-          <rect x="4" y="4" width="80" height="18" rx="3" fill="rgba(0,0,0,0.5)" />
-          <text x="8" y="17" fill="#4fc3f7" fontSize="10" fontFamily="monospace">LIVE FEED</text>
-          <rect x="4" y="26" width="90" height="14" rx="2" fill="rgba(0,0,0,0.4)" />
-          <text x="8" y="37" fill="#80cbc4" fontSize="9" fontFamily="monospace">RES 1080p · 30fps</text>
-          {/* Crosshair */}
-          <line x1="48%" y1="44%" x2="52%" y2="44%" stroke="#4fc3f7" strokeWidth="1" opacity="0.6" />
-          <line x1="50%" y1="42%" x2="50%" y2="46%" stroke="#4fc3f7" strokeWidth="1" opacity="0.6" />
-          <circle cx="50%" cy="44%" r="12" fill="none" stroke="#4fc3f7" strokeWidth="0.8" opacity="0.4" />
-        </svg>
+        <img
+  src="http://10.104.18.141:8000/stream.mjpg"
+  style={{ width: '100%', height: '100%', objectFit: 'cover', position: 'absolute', inset: 0 }}
+  alt="Live drone feed"
+  onError={(e) => { e.target.style.display = 'none'; }}
+/>
         {/* Recording indicator */}
         {recording && (
           <div style={{
