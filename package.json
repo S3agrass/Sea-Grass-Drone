@@ -14,7 +14,6 @@
     "electron:build": "vite build && electron-builder"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.108.0",
     "leaflet": "^1.9.4",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
@@ -30,17 +29,5 @@
     "oxlint": "^1.69.0",
     "vite": "^8.1.0",
     "wait-on": "^9.0.10"
-  },
-  "description": "This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/S3agrass/Sea-Grass-Drone.git"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "bugs": {
-    "url": "https://github.com/S3agrass/Sea-Grass-Drone/issues"
-  },
-  "homepage": "https://github.com/S3agrass/Sea-Grass-Drone#readme"
+  }
 }
