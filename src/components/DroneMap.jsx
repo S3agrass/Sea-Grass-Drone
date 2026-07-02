@@ -1,138 +1,194 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
-	MapContainer,
-	TileLayer,
-	Marker,
-	Popup,
-	Polyline,
-	useMapEvents,
+  MapContainer,
+  TileLayer,
+  Marker,
+  Popup,
+  Polyline,
+  useMap,
+  useMapEvents,
 } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
-// Fix default marker icons
-delete L.Icon.Default.prototype._getIconUrl;
-L.Icon.Default.mergeOptions({
-	iconRetinaUrl:
-		"https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-	iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-	shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
-});
+const FALLBACK_CENTER = [37.8065, -122.4305]; // Fort Mason, San Francisco
 
 const droneIcon = L.divIcon({
-	className: "",
-	html: `<div style="
-    width:24px;height:24px;background:#00e5ff;border:2px solid #fff;
-    border-radius:50%;box-shadow:0 0 10px #00e5ff88;
-    display:flex;align-items:center;justify-content:center;
-  "><div style="width:8px;height:8px;background:#fff;border-radius:50%"></div></div>`,
-	iconSize: [24, 24],
-	iconAnchor: [12, 12],
+  className: "",
+  html: `<div class="marker-drone"><div></div></div>`,
+  iconSize: [26, 26],
+  iconAnchor: [13, 13],
 });
 
-const waypointIcon = (index) =>
-	L.divIcon({
-		className: "",
-		html: `<div style="
-    width:20px;height:20px;background:#ff6d00;border:2px solid #fff;
-    border-radius:50%;display:flex;align-items:center;justify-content:center;
-    font-size:9px;color:#fff;font-weight:bold;font-family:monospace;
-    box-shadow:0 0 8px #ff6d0088;
-  ">${index + 1}</div>`,
-		iconSize: [20, 20],
-		iconAnchor: [10, 10],
-	});
-
-const userLocationIcon = L.divIcon({
-	className: "",
-	html: `<div style="
-    width:18px;height:18px;background:#2b7fff;border:2px solid #fff;
-    border-radius:50%;box-shadow:0 0 12px #2b7fff88;
-  "></div>`,
-	iconSize: [18, 18],
-	iconAnchor: [9, 9],
+const userIcon = L.divIcon({
+  className: "",
+  html: `<div class="marker-user"></div>`,
+  iconSize: [16, 16],
+  iconAnchor: [8, 8],
 });
 
-function MapClickHandler({ mode, onAddWaypoint }) {
-	useMapEvents({
-		click(e) {
-			if (mode === "auto") {
-				onAddWaypoint([e.latlng.lat, e.latlng.lng]);
-			}
-		},
-	});
-	return null;
+const waypointIcon = (i) =>
+  L.divIcon({
+    className: "",
+    html: `<div class="marker-waypoint">${i + 1}</div>`,
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
+  });
+
+function ClickHandler({ onAddWaypoint }) {
+  useMapEvents({
+    click(e) {
+      onAddWaypoint([e.latlng.lat, e.latlng.lng]);
+    },
+  });
+  return null;
 }
 
-function DroneMarker({ position, heading }) {
-	const markerRef = useRef(null);
-	useEffect(() => {
-		if (markerRef.current) {
-			const el = markerRef.current.getElement();
-			if (el) el.style.transform += ` rotate(${heading}deg)`;
-		}
-	}, [heading]);
-	return <Marker position={position} icon={droneIcon} ref={markerRef} />;
-}
-
-function UserLocationMarker({ position }) {
-	if (!position) return null;
-
-	return (
-		<Marker position={position} icon={userLocationIcon} zIndexOffset={1000}>
-			<Popup>Your location</Popup>
-		</Marker>
-	);
+/** Imperatively controls the map: fly-to requests + follow mode. */
+function MapController({ flyTarget, follow, dronePos }) {
+  const map = useMap();
+  useEffect(() => {
+    if (flyTarget) map.flyTo(flyTarget.pos, flyTarget.zoom ?? 16, { duration: 1.2 });
+  }, [flyTarget, map]);
+  useEffect(() => {
+    if (follow && dronePos) map.panTo(dronePos, { animate: true });
+  }, [follow, dronePos, map]);
+  return null;
 }
 
 export default function DroneMap({
-	dronePos,
-	userLocation,
-	waypoints,
-	onAddWaypoint,
-	mode,
-	heading,
+  dronePos,
+  trail,
+  waypoints,
+  onAddWaypoint,
+  onClearWaypoints,
+  heading,
 }) {
-	const trailPath = [dronePos, ...waypoints];
-	const mapCenter = userLocation || dronePos;
+  const [userPos, setUserPos] = useState(null);
+  const [flyTarget, setFlyTarget] = useState(null);
+  const [follow, setFollow] = useState(false);
+  const [satellite, setSatellite] = useState(false);
+  const [locating, setLocating] = useState(false);
+  const flewOnce = useRef(false);
 
-	return (
-		<div className="map-container">
-			{mode === "auto" && (
-				<div className="map-hint">Click map to place waypoints</div>
-			)}
-			<MapContainer
-				center={mapCenter}
-				zoom={14}
-				style={{ width: "100%", height: "100%" }}
-				zoomControl={false}
-			>
-				<TileLayer
-					url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-					attribution='&copy; <a href="https://carto.com/">CARTO</a>'
-				/>
-				<MapClickHandler mode={mode} onAddWaypoint={onAddWaypoint} />
-				{/* Your location */}
-				<UserLocationMarker position={userLocation} />
-				{/* Drone position */}
-				<DroneMarker position={dronePos} heading={heading} />
-				{/* Waypoints */}
-				{waypoints.map((wp, i) => (
-					<Marker key={i} position={wp} icon={waypointIcon(i)} />
-				))}
-				{/* Trail / route line */}
-				{waypoints.length > 0 && (
-					<Polyline
-						positions={trailPath}
-						pathOptions={{
-							color: "#ff6d00",
-							weight: 2,
-							dashArray: "6 4",
-							opacity: 0.8,
-						}}
-					/>
-				)}
-			</MapContainer>
-		</div>
-	);
+  // Watch real device location; fly there on first fix.
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+    const id = navigator.geolocation.watchPosition(
+      (p) => {
+        const pos = [p.coords.latitude, p.coords.longitude];
+        setUserPos(pos);
+        if (!flewOnce.current) {
+          flewOnce.current = true;
+          setFlyTarget({ pos, zoom: 16 });
+        }
+      },
+      () => {},
+      { enableHighAccuracy: true, maximumAge: 10000, timeout: 10000 },
+    );
+    return () => navigator.geolocation.clearWatch(id);
+  }, []);
+
+  function locateMe() {
+    if (!navigator.geolocation) return;
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (p) => {
+        const pos = [p.coords.latitude, p.coords.longitude];
+        setUserPos(pos);
+        setFlyTarget({ pos, zoom: 17 });
+        setLocating(false);
+      },
+      () => setLocating(false),
+      { enableHighAccuracy: true, timeout: 10000 },
+    );
+  }
+
+  const center = dronePos || userPos || FALLBACK_CENTER;
+
+  return (
+    <div className="map-wrap">
+      <MapContainer
+        center={center}
+        zoom={15}
+        zoomControl={false}
+        style={{ width: "100%", height: "100%" }}
+      >
+        {satellite ? (
+          <TileLayer
+            url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+            attribution="Tiles &copy; Esri"
+          />
+        ) : (
+          <TileLayer
+            url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+            attribution='&copy; <a href="https://carto.com/">CARTO</a>'
+          />
+        )}
+        <MapController flyTarget={flyTarget} follow={follow} dronePos={dronePos} />
+        <ClickHandler onAddWaypoint={onAddWaypoint} />
+
+        {userPos && (
+          <Marker position={userPos} icon={userIcon} zIndexOffset={900}>
+            <Popup>Your location</Popup>
+          </Marker>
+        )}
+
+        {dronePos && (
+          <Marker position={dronePos} icon={droneIcon} zIndexOffset={1000}>
+            <Popup>
+              Seagrass · heading {heading == null ? "—" : `${Math.round(heading)}°`}
+            </Popup>
+          </Marker>
+        )}
+
+        {trail.length > 1 && (
+          <Polyline
+            positions={trail}
+            pathOptions={{ color: "#3bd9bb", weight: 2, opacity: 0.65 }}
+          />
+        )}
+
+        {waypoints.map((wp, i) => (
+          <Marker key={`${wp[0]}-${wp[1]}-${i}`} position={wp} icon={waypointIcon(i)} />
+        ))}
+        {waypoints.length > 0 && dronePos && (
+          <Polyline
+            positions={[dronePos, ...waypoints]}
+            pathOptions={{ color: "#ffb454", weight: 2, dashArray: "6 5", opacity: 0.85 }}
+          />
+        )}
+      </MapContainer>
+
+      {/* floating controls */}
+      <div className="map-controls">
+        <button
+          className={`map-btn ${locating ? "busy" : ""}`}
+          title="Fly to my location"
+          onClick={locateMe}
+        >
+          ◎ {locating ? "Locating…" : "My location"}
+        </button>
+        <button
+          className={`map-btn ${follow ? "on" : ""}`}
+          title="Keep the drone centered"
+          onClick={() => setFollow((f) => !f)}
+        >
+          ⌖ Follow drone
+        </button>
+        <button
+          className={`map-btn ${satellite ? "on" : ""}`}
+          onClick={() => setSatellite((s) => !s)}
+        >
+          ▤ {satellite ? "Dark map" : "Satellite"}
+        </button>
+        {waypoints.length > 0 && (
+          <button className="map-btn danger" onClick={onClearWaypoints}>
+            ✕ Clear {waypoints.length} waypoint{waypoints.length === 1 ? "" : "s"}
+          </button>
+        )}
+      </div>
+      <div className="map-hint mono">Click the map to drop a waypoint</div>
+    </div>
+  );
 }
