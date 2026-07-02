@@ -4,7 +4,7 @@ import sys
 import tty
 import termios
 
-master = mavutil.mavlink_connection('tcp:127.0.0.1:5760')
+master = mavutil.mavlink_connection('/dev/ttyACM0', baud=115200)
 master.wait_heartbeat()
 print("Connected!")
 
@@ -26,6 +26,7 @@ def set_rc(channel, pwm):
         master.target_component,
         *rc
     )
+    print(f"  -> Sent: Channel {channel} = {pwm}")
 
 def all_stop():
     rc = [1500, 1500, 1500, 1500, 65535, 65535, 65535, 65535]
@@ -118,23 +119,10 @@ def handle_key(key):
 try:
     master.set_mode('MANUAL')
     arm()
-
-    forward()
-    time.sleep(3)
-    all_stop()
-
-    ascend()
-    time.sleep(2)
-    hold_depth()
-    time.sleep(1)
-    descend()
-    time.sleep(2)
-    hold_depth()
-
-    light_on()
-    time.sleep(2)
-    light_off()
-
+    print("Ready! WASD to move, Q/E depth, L/K light, X to quit")
+    while True:
+        key = get_key()
+        handle_key(key)
 finally:
     all_stop()
     light_off()
