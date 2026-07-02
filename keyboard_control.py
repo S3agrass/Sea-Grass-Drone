@@ -1,14 +1,12 @@
 from pymavlink import mavutil
 import time
-import sys
-import tty
-import termios
+from pynput import keyboard
 
 master = mavutil.mavlink_connection('/dev/ttyACM0', baud=115200)
 master.wait_heartbeat()
 print("Connected!")
 
-def arm(): 
+def arm():
     master.arducopter_arm()
     master.motors_armed_wait()
     print("Armed!")
@@ -20,7 +18,7 @@ def disarm():
 
 def set_rc(channel, pwm):
     rc = [65535] * 8
-    rc[channel - 1] = pwm 
+    rc[channel - 1] = pwm
     master.mav.rc_channels_override_send(
         master.target_system,
         master.target_component,
@@ -37,93 +35,88 @@ def all_stop():
     )
     print("All stop")
 
-def forward():
-    set_rc(1, 1650)
-    print("Forward")
+pressed_keys = set()
 
-def backward():
-    set_rc(1, 1350)
-    print("Backward")
+FORWARD_PWM = 1650
+BACKWARD_PWM = 1350
+NEUTRAL_PWM = 1500
+ASCEND_PWM = 1650
+DESCEND_PWM = 1350
 
-def turn_left():
-    set_rc(2, 1350)
-    print("Left")
+def update_motion():
+    forward = 'w' in pressed_keys
+    backward = 's' in pressed_keys
+    left = 'a' in pressed_keys
+    right = 'd' in pressed_keys
 
-def turn_right():
-    set_rc(2, 1650)
-    print("Right")
+    if forward and not backward:
+        set_rc(1, FORWARD_PWM)
+    elif backward and not forward:
+        set_rc(1, BACKWARD_PWM)
+    else:
+        set_rc(1, NEUTRAL_PWM)
 
-def stop_movement():
-    set_rc(1, 1500)
-    set_rc(2, 1500)
-    print("Stop movement")
+    if right and not left:
+        set_rc(2, FORWARD_PWM)
+    elif left and not right:
+        set_rc(2, BACKWARD_PWM)
+    else:
+        set_rc(2, NEUTRAL_PWM)
 
-def ascend():
-    set_rc(3, 1650)
-    print("Ascending")
+def update_depth():
+    ascend = 'q' in pressed_keys
+    descend = 'e' in pressed_keys
 
-def descend():
-    set_rc(3, 1350)
-    print("Descending")
+    if ascend and not descend:
+        set_rc(3, ASCEND_PWM)
+    elif descend and not ascend:
+        set_rc(3, DESCEND_PWM)
+    else:
+        set_rc(3, NEUTRAL_PWM)
 
-def hold_depth():
-    set_rc(3, 1500)
-    print("Holding depth")
-
-def light_on():
-    set_rc(4, 1900)
-    print("Light ON")
-
-def light_off():
-    set_rc(4, 1500)
-    print("Light OFF")
-
-def get_key():
-    fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
+def on_press(key):
     try:
-        tty.setraw(fd)
-        key = sys.stdin.read(1)
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
-    return key
+        k = key.char
+    except AttributeError:
+        k = None
 
-def handle_key(key):
-    if key == 'w':
-        forward()
-    elif key == 's':
-        backward()
-    elif key == 'd':
-        turn_right()
-    elif key == 'a':
-        turn_left()
-    elif key == ' ':
-        stop_movement()
-    elif key == 'q':
-        ascend()
-    elif key == 'e':
-        descend()
-    elif key == 'h':
-        hold_depth()
-    elif key == 'l':
-        light_on()
-    elif key == 'k':
-        light_off()
-    elif key == 'x':
-        all_stop()
-        light_off()
-        disarm()
-        sys.exit(0)
+    if k:
+        pressed_keys.add(k)
+        if k in ('w', 's', 'a', 'd'):
+            update_motion()
+        elif k in ('q', 'e'):
+            update_depth()
+        elif k == 'l':
+            set_rc(4, 1900)
+            print("Light ON")
+        elif k == 'k':
+            set_rc(4, 1500)
+            print("Light OFF")
+        elif k == 'x':
+            return False
 
+def on_release(key):
+    try:
+        k = key.char
+    except AttributeError:
+        k = None
+
+    if k in pressed_keys:
+        pressed_keys.discard(k)
+        if k in ('w', 's', 'a', 'd'):
+            update_motion()
+        elif k in ('q', 'e'):
+            update_depth()
 
 try:
     master.set_mode('MANUAL')
     arm()
     print("Ready! WASD to move, Q/E depth, L/K light, X to quit")
-    while True:
-        key = get_key()
-        handle_key(key)
+
+    with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
+        listener.join()
+
 finally:
     all_stop()
-    light_off()
+    set_rc(4, 1500)
     disarm()
