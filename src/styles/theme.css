@@ -1,0 +1,153 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Sora:wght@600;700;800&display=swap");
+
+:root {
+  /* palette — ocean survey console */
+  --abyss: #06111e;
+  --console: #0c1c2e;
+  --rail: #102540;
+  --line: #1c3a57;
+  --line-soft: #14304c;
+  --ink: #e9f2f8;
+  --muted: #7c97ad;
+  --faint: #4d6a82;
+  --teal: #3bd9bb;
+  --teal-dim: #1e8f7c;
+  --amber: #ffb454;
+  --red: #ff5c6c;
+  --blue: #59a8ff;
+  --green: #4ade80;
+
+  --font-display: "Sora", sans-serif;
+  --font-body: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+
+  --radius: 10px;
+  --radius-sm: 6px;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--abyss);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+::selection { background: rgba(59, 217, 187, 0.3); }
+
+/* scrollbars */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--faint); }
+
+button {
+  font-family: var(--font-body);
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+}
+button:focus-visible, input:focus-visible, a:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+
+input, select {
+  font-family: var(--font-body);
+  background: var(--abyss);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  padding: 10px 12px;
+  font-size: 14px;
+  width: 100%;
+}
+input::placeholder { color: var(--faint); }
+input:focus { border-color: var(--teal-dim); outline: none; }
+
+/* shared primitives */
+.mono { font-family: var(--font-mono); }
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid var(--line);
+  background: var(--rail);
+  color: var(--ink);
+  transition: background 0.15s, border-color 0.15s, transform 0.05s;
+}
+.btn:hover { background: var(--line-soft); border-color: var(--faint); }
+.btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+
+.btn-primary {
+  background: var(--teal);
+  border-color: var(--teal);
+  color: #04241d;
+}
+.btn-primary:hover { background: #57e6cc; border-color: #57e6cc; }
+
+.btn-danger {
+  background: rgba(255, 92, 108, 0.12);
+  border-color: rgba(255, 92, 108, 0.5);
+  color: var(--red);
+}
+.btn-danger:hover { background: rgba(255, 92, 108, 0.22); border-color: var(--red); }
+
+.btn-ghost { background: transparent; }
+
+/* sonar ping — the signature */
+@keyframes sonar {
+  0% { transform: scale(1); opacity: 0.7; }
+  100% { transform: scale(3.2); opacity: 0; }
+}
+.ping-dot {
+  position: relative;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.ping-dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: inherit;
+  animation: sonar 2s ease-out infinite;
+}
+.ping-dot.live { background: var(--teal); }
+.ping-dot.off { background: var(--faint); }
+.ping-dot.off::after { animation: none; }
+.ping-dot.warn { background: var(--amber); }
+
+@keyframes blink { 50% { opacity: 0.25; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .ping-dot::after { animation: none; }
+  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
