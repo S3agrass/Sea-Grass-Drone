@@ -38,6 +38,8 @@ BAUD = int(os.environ.get("PIXHAWK_BAUD", "115200"))
 WS_HOST = "0.0.0.0"
 WS_PORT = int(os.environ.get("SEAGRASS_PORT", "8765"))
 TOKEN = os.environ.get("SEAGRASS_TOKEN", "")  # empty = auth disabled (LAN only!)
+if not TOKEN:
+    raise SystemExit("SEAGRASS_TOKEN must be set — export it before running this script.")
 WATCHDOG_S = 1.5
 
 NEUTRAL_PWM = 1500
@@ -282,9 +284,6 @@ async def client_handler(ws):
 
 async def main():
     connect_pixhawk()
-    if not TOKEN:
-        print("WARNING: SEAGRASS_TOKEN not set — anyone on the network can control "
-              "the drone. Set a token before exposing this beyond your LAN.")
     async with websockets.serve(client_handler, WS_HOST, WS_PORT):
         print(f"Seagrass drone server listening on ws://{WS_HOST}:{WS_PORT}")
         await asyncio.Future()
