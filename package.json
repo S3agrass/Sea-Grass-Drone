@@ -14,12 +14,13 @@
     "electron:build": "vite build && electron-builder"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.47.0",
+    "firebase": "^12.15.0",
     "leaflet": "^1.9.4",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-leaflet": "^5.0.0",
-    "react-router-dom": "^7.1.0",
-    "@supabase/supabase-js": "^2.47.0"
+    "react-router-dom": "^7.1.0"
   },
   "devDependencies": {
     "@types/react": "^19.2.17",

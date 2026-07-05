@@ -1,59 +1,58 @@
 import { createContext, useContext, useEffect, useState } from "react";
-import { supabase, supabaseConfigured } from "../lib/supabase";
+import { onAuthStateChanged } from "firebase/auth";
+
+import { auth } from "../firebase/config";
+import { login, register, logout } from "../firebase/auth";
 
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [session, setSession] = useState(null);
-  const [loading, setLoading] = useState(supabaseConfigured);
-  const [localMode, setLocalMode] = useState(
-    () => sessionStorage.getItem("seagrass-local-mode") === "1",
-  );
+	const [user, setUser] = useState(null);
+	const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    if (!supabaseConfigured) return;
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      setLoading(false);
-    });
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
-      setSession(s);
-    });
-    return () => sub.subscription.unsubscribe();
-  }, []);
+	const [localMode, setLocalMode] = useState(
+		() => sessionStorage.getItem("seagrass-local-mode") === "1",
+	);
 
-  const signIn = (email, password) =>
-    supabase.auth.signInWithPassword({ email, password });
+	useEffect(() => {
+		const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+			setUser(firebaseUser);
+			setLoading(false);
+		});
 
-  const signUp = (email, password) => supabase.auth.signUp({ email, password });
+		return unsubscribe;
+	}, []);
 
-  const signOut = async () => {
-    sessionStorage.removeItem("seagrass-local-mode");
-    setLocalMode(false);
-    if (supabaseConfigured) await supabase.auth.signOut();
-  };
+	const signIn = login;
 
-  const enterLocalMode = () => {
-    sessionStorage.setItem("seagrass-local-mode", "1");
-    setLocalMode(true);
-  };
+	const signUp = register;
 
-  const value = {
-    session,
-    user: session?.user ?? null,
-    loading,
-    localMode,
-    supabaseConfigured,
-    authed: Boolean(session) || localMode,
-    signIn,
-    signUp,
-    signOut,
-    enterLocalMode,
-  };
+	const signOut = async () => {
+		sessionStorage.removeItem("seagrass-local-mode");
+		setLocalMode(false);
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+		await logout();
+	};
+
+	const enterLocalMode = () => {
+		sessionStorage.setItem("seagrass-local-mode", "1");
+		setLocalMode(true);
+	};
+
+	const value = {
+		user,
+		loading,
+		localMode,
+		authed: !!user || localMode,
+		signIn,
+		signUp,
+		signOut,
+		enterLocalMode,
+	};
+
+	return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {
-  return useContext(AuthContext);
+	return useContext(AuthContext);
 }
