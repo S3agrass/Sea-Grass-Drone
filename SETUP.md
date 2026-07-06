@@ -1,60 +1,69 @@
 # Seagrass GCS — Setup Guide
 
-Three layers, matching the production architecture:
+For full architecture details see [ARCHITECTURE.md](./ARCHITECTURE.md). This guide covers the steps to get everything running.
 
-```
-[React UI — Netlify]  ⇄  [Supabase — auth + drone registry]
-        ⇅ wss / https (Cloudflare Tunnel for remote)
-[Raspberry Pi 5 — drone_server.py + camera_stream.py]  ⇄  [Pixhawk / ArduSub]
+---
+
+## 1. Frontend
+
+```bash
+npm install
+cp .env.example .env   # fill in Firebase credentials (see step 2)
+npm run dev            # http://localhost:5173
+npm run electron:dev   # or run as the desktop app
 ```
 
 ---
 
-## 1. Run the UI locally
+## 2. Firebase (authentication)
 
-```bash
-npm install
-npm run dev          # browser at http://localhost:5173
-npm run electron:dev # or as the desktop app
+1. Go to [console.firebase.google.com](https://console.firebase.google.com) and create a project.
+2. Authentication → Sign-in method → enable **Email/Password**.
+3. Project Settings → Your apps → Add a Web app → copy the config object.
+4. Fill in `.env`:
+```
+VITE_FIREBASE_API_KEY=AIza...
+VITE_FIREBASE_AUTH_DOMAIN=your-project.firebaseapp.com
+VITE_FIREBASE_PROJECT_ID=your-project-id
+VITE_FIREBASE_STORAGE_BUCKET=your-project.appspot.com
+VITE_FIREBASE_MESSAGING_SENDER_ID=123456789
+VITE_FIREBASE_APP_ID=1:123:web:abc
+```
+5. Restart `npm run dev`. The login page will now sign users in with Firebase.
+
+**Sign up:** use the "Create account" tab on the login page. If you want to manage users directly, use the Firebase console Authentication → Users tab.
+
+---
+
+## 3. Supabase (optional — cloud fleet registry)
+
+Without Supabase, drone configs are saved in `localStorage` on the device (local mode). To share a fleet across devices/users, set up Supabase:
+
+1. Create a project at [supabase.com](https://supabase.com).
+2. SQL Editor → run `supabase-schema.sql` (creates the `drones` table with Row Level Security).
+3. Project Settings → API → copy URL and anon key.
+4. Add to `.env`:
+```
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=eyJ...
 ```
 
-Without a `.env`, the app runs in **local mode** (no accounts, drones saved on
-the device). Add Supabase to enable secure sign-in.
+---
 
-## 2. Supabase (secure sign-in + drone registry)
-
-1. Create a project at supabase.com.
-2. SQL Editor → paste and run `supabase-schema.sql` (creates the `drones`
-   table with Row Level Security — each user can only see their own drones).
-3. Project Settings → API → copy the URL and anon key.
-4. `cp .env.example .env` and fill both values. Restart `npm run dev`.
-5. In Netlify: Site settings → Environment variables → add the same two
-   `VITE_…` variables, then redeploy.
-
-Auth → Providers → Email: leave "Confirm email" on for real users, or turn it
-off while developing so sign-ups log in instantly.
-
-## 3. Drone server on the Pi
+## 4. Raspberry Pi — drone server
 
 ```bash
 ssh pi@seagrass-pi.local
 pip install pymavlink websockets --break-system-packages
 cd ~/Sea-Grass-Drone/server
-
 SEAGRASS_TOKEN=pick-a-long-secret python3 drone_server.py
 ```
 
-- Pixhawk plugs in over USB (`/dev/ttyACM0`); override with `PIXHAWK_PORT`.
-- The token must match the "Access token" saved for the drone in the UI.
-  With no token set, anyone on the network can drive — LAN testing only.
-- Safety built in: watchdog forces all-stop if the link goes silent while
-  keys are held, all-stop on disconnect, and only one operator holds the
-  helm at a time.
-- Keep `camera_stream.py` running (or the `camera-stream.service` systemd
-  unit) for the video feed on port 8000.
+- Pixhawk connects over USB (`/dev/ttyACM0`). Override with `PIXHAWK_PORT=` env var.
+- `SEAGRASS_TOKEN` must match the "Access token" saved for the drone in the Fleet UI.
+- Without a token set the server will refuse to start — this is intentional.
 
-Autostart (same pattern as the camera service):
-
+**Autostart with systemd:**
 ```ini
 # /etc/systemd/system/drone-server.service
 [Unit]
@@ -70,66 +79,149 @@ User=pi
 [Install]
 WantedBy=multi-user.target
 ```
-
 ```bash
 sudo systemctl enable --now drone-server
 ```
 
-## 4. Remote access (not just local) — Cloudflare Tunnel
+---
 
-The Netlify site is served over HTTPS, so remote drone links must be
-`wss://` and the camera `https://`. A Cloudflare Tunnel gives you both
-without opening any ports on the Founders Inc network:
+## 5. Raspberry Pi — camera (WebRTC via MediaMTX)
 
-```bash
-# on the Pi
-curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64 -o cloudflared
-chmod +x cloudflared && sudo mv cloudflared /usr/local/bin/
+The camera system has two parts: MediaMTX (always-on media server) and the GStreamer pipeline (started on demand by drone_server.py when the operator clicks "Camera On" in the UI).
 
-cloudflared tunnel login
-cloudflared tunnel create seagrass
-```
-
-`~/.cloudflared/config.yml`:
-
-```yaml
-tunnel: seagrass
-credentials-file: /home/pi/.cloudflared/<tunnel-id>.json
-ingress:
-  - hostname: drone.yourdomain.com
-    service: ws://localhost:8765
-  - hostname: cam.yourdomain.com
-    service: http://localhost:8000
-  - service: http_status:404
-```
+### 5a. Install dependencies
 
 ```bash
-cloudflared tunnel route dns seagrass drone.yourdomain.com
-cloudflared tunnel route dns seagrass cam.yourdomain.com
-sudo cloudflared service install && sudo systemctl start cloudflared
+# GStreamer + plugins
+sudo apt update
+sudo apt install -y \
+  gstreamer1.0-tools \
+  gstreamer1.0-plugins-good \
+  gstreamer1.0-plugins-bad \
+  gstreamer1.0-libav \
+  gstreamer1.0-plugins-ugly
+
+# Verify
+gst-launch-1.0 --version
 ```
 
-Then in the UI's Settings page set:
+### 5b. Install MediaMTX
 
-- Drone link: `wss://drone.yourdomain.com`
-- Camera: `https://cam.yourdomain.com/stream.mjpg`
+MediaMTX is a single binary — no dependencies.
 
-Now the deployed Netlify site controls the drone from anywhere.
+```bash
+# Check https://github.com/bluenviron/mediamtx/releases for the latest version
+wget https://github.com/bluenviron/mediamtx/releases/latest/download/mediamtx_v1.x.x_linux_arm64v8.tar.gz
+tar -xzf mediamtx_*.tar.gz
+sudo mv mediamtx /usr/local/bin/
+```
 
-## 5. Deploy the UI
+The default `mediamtx.yml` works out of the box. MediaMTX listens on:
+- `:8554` — RTSP ingest (where `camera_stream.py` pushes to)
+- `:8889` — WebRTC / WHEP (where the browser connects from)
 
-Netlify is already connected to the repo — push to the deploy branch and it
-builds automatically (`npm run build`, publish `dist`). Because the app uses
-hash routing, no redirect rules are needed.
+**Autostart:**
+```ini
+# /etc/systemd/system/mediamtx.service
+[Unit]
+Description=MediaMTX media server
+After=network.target
 
-## Control mapping (identical to keyboard_control.py)
+[Service]
+ExecStart=/usr/local/bin/mediamtx
+Restart=always
+User=pi
 
-| Keys  | Channel | Action                     |
-|-------|---------|----------------------------|
-| W / S | 1       | Propulsion forward / back  |
-| A / D | 2       | Steer right / left         |
-| Q / E | 3       | Buoyancy rise / dive       |
-| L / K | 4       | Light on / off             |
-| Space | all     | All stop (neutral PWM)     |
+[Install]
+WantedBy=multi-user.target
+```
+```bash
+sudo systemctl enable --now mediamtx
+```
 
-PWM: 1500 neutral · 1650 forward · 1350 reverse · 1900 light on.
+### 5c. Test the camera pipeline manually
+
+Before using the UI, verify GStreamer can stream to MediaMTX:
+
+```bash
+python3 ~/Sea-Grass-Drone/server/camera_stream.py
+```
+
+Then open a browser and go to `http://<pi-tailscale-ip>:8889/cam` — you should see a test page with the live stream.
+
+### 5d. Environment variables for camera_stream.py
+
+All optional — defaults work for most setups:
+
+| Variable | Default | Description |
+|---|---|---|
+| `MEDIAMTX_HOST` | `127.0.0.1` | Where MediaMTX RTSP is listening |
+| `MEDIAMTX_RTSP_PORT` | `8554` | MediaMTX RTSP port |
+| `STREAM_NAME` | `cam` | Stream path in MediaMTX |
+| `CAM_WIDTH` | `1280` | Capture width in pixels |
+| `CAM_HEIGHT` | `720` | Capture height in pixels |
+| `CAM_FPS` | `30` | Frame rate |
+| `CAM_BITRATE` | `2000` | H.264 bitrate in kbps |
+
+---
+
+## 6. Remote access — Tailscale
+
+Tailscale creates an encrypted P2P VPN between the Pi and the operator's machine. The Pi gets a stable `100.x.x.x` address reachable from anywhere without port forwarding.
+
+### On the Pi
+
+```bash
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+```
+
+Note the Pi's Tailscale IP from `tailscale ip -4` (e.g. `100.64.0.1`).
+
+### On the operator's machine
+
+Install the Tailscale client from [tailscale.com/download](https://tailscale.com/download) and sign in to the same account.
+
+### In the Fleet UI
+
+When registering the drone, set:
+- **Drone link:** `ws://100.64.0.1:8765`
+- **Camera stream URL:** `http://100.64.0.1:8889/cam/whep`
+- **Access token:** matches `SEAGRASS_TOKEN` on the Pi
+
+The stream will now work from anywhere the operator has Tailscale running.
+
+---
+
+## 7. Deploy the web UI (Netlify)
+
+```bash
+npm run build   # outputs to dist/
+```
+
+Netlify auto-deploys on push. The app uses hash routing so no redirect rules are needed. Add the `VITE_FIREBASE_*` environment variables in Netlify → Site settings → Environment variables.
+
+---
+
+## 8. Running tests
+
+```bash
+npm test             # single run
+npm run test:watch   # watch mode
+```
+
+25 tests covering DroneLink protocol, DroneContext camera state, and CameraView UI. All tests are in `src/test/`.
+
+---
+
+## Control mapping
+
+| Key | Channel | Action |
+|---|---|---|
+| W / S | 1 | Propulsion forward / back |
+| A / D | 2 | Steer right / left |
+| Q / E | 3 | Buoyancy rise / dive |
+| L / K | 4 | Light on / off |
+| Space | all | Emergency all-stop |
+
+PWM: `1500` neutral · `1650` forward/right/rise · `1350` back/left/dive · `1900` light on.
