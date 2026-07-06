@@ -17,7 +17,7 @@ const LOCAL_DRONE = {
   id: "local",
   name: "Seagrass One",
   host: "ws://seagrass-pi.local:8765",
-  camera_url: "http://seagrass-pi.local:8000/stream.mjpg",
+  camera_url: "",
   token: "",
 };
 
@@ -56,6 +56,7 @@ export function DroneProvider({ children }) {
     lon: null,
     depth: null,
   });
+  const [cameraActive, setCameraActive] = useState(false);
   const [demoMode, setDemoMode] = useState(
     () => localStorage.getItem("seagrass-demo") === "1",
   );
@@ -148,6 +149,7 @@ export function DroneProvider({ children }) {
         if (event.status !== "connected") {
           setArmed(false);
           setPixhawkOk(false);
+          setCameraActive(false);
         }
       } else if (event.type === "message") {
         const m = event.data;
@@ -155,6 +157,7 @@ export function DroneProvider({ children }) {
           setArmed(Boolean(m.armed));
           if (m.mode) setFlightMode(m.mode);
           setPixhawkOk(Boolean(m.pixhawk));
+          setCameraActive(Boolean(m.camera));
         } else if (m.type === "telemetry") {
           setTelemetry((t) => ({ ...t, ...m }));
         }
@@ -187,6 +190,9 @@ export function DroneProvider({ children }) {
 
   const disconnect = useCallback(() => link.disconnect(), [link]);
 
+  const cameraOn = useCallback(() => link.cameraOn(), [link]);
+  const cameraOff = useCallback(() => link.cameraOff(), [link]);
+
   useEffect(() => () => link.disconnect(false), [link]);
 
   const value = {
@@ -200,6 +206,9 @@ export function DroneProvider({ children }) {
     selectDrone,
     connect,
     disconnect,
+    cameraActive,
+    cameraOn,
+    cameraOff,
     linkStatus,
     linkDetail,
     armed,

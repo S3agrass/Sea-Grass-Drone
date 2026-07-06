@@ -1,0 +1,108 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import CameraView from '../components/CameraView';
+
+// ---- helpers ----
+
+// streamType is not exported directly, so we test it via CameraView's rendered output.
+
+const mockDrone = {
+  activeDrone: { camera_url: 'http://100.64.0.1:8889/cam/whep' },
+  linkStatus: 'connected',
+  cameraActive: false,
+  cameraOn: vi.fn(),
+  cameraOff: vi.fn(),
+};
+
+// Replace useDrone with our mock.
+vi.mock('../context/DroneContext', () => ({
+  useDrone: () => mockCtx,
+}));
+
+let mockCtx;
+
+beforeEach(() => {
+  mockCtx = { ...mockDrone, cameraOn: vi.fn(), cameraOff: vi.fn() };
+  vi.clearAllMocks();
+});
+
+describe('CameraView — power toggle', () => {
+  it('shows "Off" toggle when camera is inactive', () => {
+    render(<CameraView />);
+    const btn = screen.getByRole('button', { name: /off/i });
+    expect(btn).toBeInTheDocument();
+    expect(btn).not.toBeDisabled();
+  });
+
+  it('calls cameraOn when toggle is clicked while off', () => {
+    render(<CameraView />);
+    fireEvent.click(screen.getByRole('button', { name: /off/i }));
+    expect(mockCtx.cameraOn).toHaveBeenCalledOnce();
+  });
+
+  it('shows "On" toggle when camera is active', () => {
+    mockCtx.cameraActive = true;
+    render(<CameraView />);
+    expect(screen.getByRole('button', { name: /on/i })).toBeInTheDocument();
+  });
+
+  it('calls cameraOff when toggle is clicked while on', () => {
+    mockCtx.cameraActive = true;
+    render(<CameraView />);
+    fireEvent.click(screen.getByRole('button', { name: /on/i }));
+    expect(mockCtx.cameraOff).toHaveBeenCalledOnce();
+  });
+
+  it('disables toggle when drone is not connected', () => {
+    mockCtx.linkStatus = 'disconnected';
+    render(<CameraView />);
+    expect(screen.getByRole('button', { name: /off/i })).toBeDisabled();
+  });
+
+  it('disables toggle when no camera URL is set', () => {
+    mockCtx.activeDrone = { camera_url: '' };
+    render(<CameraView />);
+    expect(screen.getByRole('button', { name: /off/i })).toBeDisabled();
+  });
+});
+
+describe('CameraView — placeholder states', () => {
+  it('shows "Camera is off" when camera inactive', () => {
+    render(<CameraView />);
+    expect(screen.getByText(/camera is off/i)).toBeInTheDocument();
+  });
+
+  it('shows "No stream URL configured" when camera_url is empty', () => {
+    mockCtx.activeDrone = { camera_url: '' };
+    render(<CameraView />);
+    expect(screen.getByText(/no stream url configured/i)).toBeInTheDocument();
+  });
+
+  it('disables Snapshot and Record when not live', () => {
+    render(<CameraView />);
+    expect(screen.getByRole('button', { name: /snapshot/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /record/i })).toBeDisabled();
+  });
+
+  it('disables Expand when not live', () => {
+    render(<CameraView />);
+    expect(screen.getByRole('button', { name: /expand/i })).toBeDisabled();
+  });
+});
+
+describe('CameraView — stream type detection', () => {
+  it('renders <video> for a WHEP URL', () => {
+    mockCtx.cameraActive = true;
+    const { container } = render(<CameraView />);
+    expect(container.querySelector('video')).toBeInTheDocument();
+    expect(container.querySelector('img')).not.toBeInTheDocument();
+  });
+
+  it('renders <img> for an MJPEG URL', () => {
+    mockCtx.activeDrone = { camera_url: 'http://pi.local:8000/stream.mjpg' };
+    mockCtx.cameraActive = true;
+    const { container } = render(<CameraView />);
+    expect(container.querySelector('img')).toBeInTheDocument();
+    expect(container.querySelector('video')).not.toBeInTheDocument();
+  });
+});

@@ -122,4 +122,6 @@ export default class DroneLink {
   disarm() { return this.send({ type: "disarm" }); }
   setMode(mode) { return this.send({ type: "mode", mode }); }
   allStop() { return this.send({ type: "stop" }); }
+  cameraOn() { return this.send({ type: "camera_on" }); }
+  cameraOff() { return this.send({ type: "camera_off" }); }
 }

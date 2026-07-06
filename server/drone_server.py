@@ -27,6 +27,7 @@ Run:
 import asyncio
 import json
 import os
+import subprocess
 import time
 
 import websockets
@@ -52,6 +53,44 @@ master = None
 pixhawk_ok = False
 armed = False
 mode = "MANUAL"
+
+# ---------------- camera subprocess ----------------
+_CAMERA_SCRIPT = os.path.join(os.path.dirname(__file__), "camera_stream.py")
+camera_proc: subprocess.Popen | None = None
+
+
+def camera_running() -> bool:
+    return camera_proc is not None and camera_proc.poll() is None
+
+
+def start_camera():
+    global camera_proc
+    if camera_running():
+        return
+    try:
+        camera_proc = subprocess.Popen(
+            ["python3", _CAMERA_SCRIPT],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        print(f"Camera stream started (pid {camera_proc.pid})")
+    except Exception as exc:  # noqa: BLE001
+        print(f"Failed to start camera: {exc}")
+
+
+def stop_camera():
+    global camera_proc
+    if not camera_running():
+        camera_proc = None
+        return
+    camera_proc.terminate()
+    try:
+        camera_proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        camera_proc.kill()
+        camera_proc.wait()
+    camera_proc = None
+    print("Camera stream stopped")
 
 
 def connect_pixhawk():
@@ -207,7 +246,13 @@ async def client_handler(ws):
 
     async def state():
         await send(
-            {"type": "state", "armed": armed, "mode": mode, "pixhawk": pixhawk_ok}
+            {
+                "type": "state",
+                "armed": armed,
+                "mode": mode,
+                "pixhawk": pixhawk_ok,
+                "camera": camera_running(),
+            }
         )
 
     async def telemetry_loop():
@@ -273,6 +318,12 @@ async def client_handler(ws):
             elif mtype == "stop":
                 pressed.clear()
                 all_stop()
+            elif mtype == "camera_on":
+                await asyncio.to_thread(start_camera)
+                await state()
+            elif mtype == "camera_off":
+                await asyncio.to_thread(stop_camera)
+                await state()
     finally:
         tele_task.cancel()
         if helm_holder is ws:
@@ -296,5 +347,6 @@ if __name__ == "__main__":
         pass
     finally:
         all_stop()
+        stop_camera()
         if master and armed:
             do_disarm()

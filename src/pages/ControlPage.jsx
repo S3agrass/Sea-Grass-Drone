@@ -74,7 +74,7 @@ export default function ControlPage() {
         </main>
 
         <aside className="deck-right">
-          <CameraView streamUrl={activeDrone.camera_url} />
+          <CameraView />
           <KeyboardControl />
         </aside>
       </div>
