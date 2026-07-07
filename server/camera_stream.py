@@ -63,7 +63,7 @@ RTSP_SINK = f"rtsp://{MEDIAMTX_HOST}:{MEDIAMTX_RTSP_PORT}/{STREAM_NAME}"
 GST_CMD = [
     "gst-launch-1.0", "-e",
     "libcamerasrc", "!",
-    f"video/x-raw,width={WIDTH},height={HEIGHT},framerate={FPS}/1", "!",
+    f"video/x-raw,format=NV12,width={WIDTH},height={HEIGHT},framerate={FPS}/1", "!",
     "videoconvert", "!",
     "x264enc", "tune=zerolatency", f"bitrate={BITRATE}", "speed-preset=ultrafast", "!",
     "video/x-h264,profile=baseline", "!",
