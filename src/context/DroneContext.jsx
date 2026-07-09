@@ -61,6 +61,14 @@ export function DroneProvider({ children }) {
     () => localStorage.getItem("seagrass-demo") === "1",
   );
 
+  /* ---------- helm ownership (keyboard vs. gamepad) ---------- */
+  const [activeInput, setActiveInput] = useState(null); // "keyboard" | "gamepad" | null
+  const claimInput = useCallback((source) => setActiveInput(source), []);
+  const releaseInput = useCallback(
+    (source) => setActiveInput((cur) => (cur === source ? null : cur)),
+    [],
+  );
+
   /* ---------- fleet loading ---------- */
   const refreshFleet = useCallback(async () => {
     setFleetLoading(true);
@@ -217,6 +225,9 @@ export function DroneProvider({ children }) {
     telemetry,
     demoMode,
     setDemoMode,
+    activeInput,
+    claimInput,
+    releaseInput,
   };
 
   return <DroneContext.Provider value={value}>{children}</DroneContext.Provider>;

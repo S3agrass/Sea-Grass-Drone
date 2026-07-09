@@ -4,6 +4,7 @@ import TopBar from "../components/TopBar";
 import DroneMap from "../components/DroneMap";
 import CameraView from "../components/CameraView";
 import KeyboardControl from "../components/KeyboardControl";
+import GamepadControl from "../components/GamepadControl";
 import ConnectionPanel from "../components/ConnectionPanel";
 import {
   Compass,
@@ -76,6 +77,7 @@ export default function ControlPage() {
         <aside className="deck-right">
           <CameraView />
           <KeyboardControl />
+          <GamepadControl />
         </aside>
       </div>
     </div>

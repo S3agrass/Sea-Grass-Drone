@@ -705,6 +705,8 @@
   margin-bottom: 10px;
 }
 
+.kbd-diag { margin-top: 10px; }
+
 .kbd-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
