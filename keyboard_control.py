@@ -115,6 +115,7 @@ def all_stop():
         master.target_component,
         *rc
     )
+    reset_motion_state()  # so the next tick doesn't resume ramping from the pre-stop speed
     print("All stop")
 
 # Keyboard and gamepad each get their own held-input set so that releasing
@@ -127,11 +128,9 @@ gamepad_keys = set()
 def held(k):
     return k in pressed_keys or k in gamepad_keys
 
-FORWARD_PWM = 1650
-BACKWARD_PWM = 1350
 NEUTRAL_PWM = 1500
-ASCEND_PWM = 1650
-DESCEND_PWM = 1350
+MAX_PWM_OFFSET = 150    # safe limit — PWM never goes past NEUTRAL_PWM +/- this
+RAMP_SECONDS = 0.6      # time to reach MAX_PWM_OFFSET from a standstill while held
 
 # This 2-motor SimpleROV-3 frame has no lateral thruster, so left/right
 # steering has to ride on Yaw (ch4) — sending it on Lateral (ch6) is a
@@ -143,36 +142,60 @@ DESCEND_PWM = 1350
 STEER_CHANNEL = 4
 LIGHT_CHANNEL = 7
 
-def update_motion():
+# Current commanded PWM per axis. Ramped a little every tick instead of
+# snapping straight to full/neutral, so holding a direction longer builds
+# up speed toward MAX_PWM_OFFSET rather than going 0-to-100 instantly.
+surge_pwm = NEUTRAL_PWM   # ch5 - forward/back
+steer_pwm = NEUTRAL_PWM   # STEER_CHANNEL - left/right
+depth_pwm = NEUTRAL_PWM   # ch3 - ascend/descend
+
+def reset_motion_state():
+    global surge_pwm, steer_pwm, depth_pwm
+    surge_pwm = steer_pwm = depth_pwm = NEUTRAL_PWM
+
+def _ramp(current, target, dt):
+    max_step = (MAX_PWM_OFFSET / RAMP_SECONDS) * dt
+    if current < target:
+        return min(current + max_step, target)
+    if current > target:
+        return max(current - max_step, target)
+    return current
+
+def update_motion(dt):
+    global surge_pwm, steer_pwm
     forward = held('w')
     backward = held('s')
     left = held('a')
     right = held('d')
 
+    surge_target = NEUTRAL_PWM
     if forward and not backward:
-        set_rc(5, FORWARD_PWM)
+        surge_target = NEUTRAL_PWM + MAX_PWM_OFFSET
     elif backward and not forward:
-        set_rc(5, BACKWARD_PWM)
-    else:
-        set_rc(5, NEUTRAL_PWM)
+        surge_target = NEUTRAL_PWM - MAX_PWM_OFFSET
+    surge_pwm = _ramp(surge_pwm, surge_target, dt)
+    set_rc(5, round(surge_pwm))
 
+    steer_target = NEUTRAL_PWM
     if right and not left:
-        set_rc(STEER_CHANNEL, FORWARD_PWM)
+        steer_target = NEUTRAL_PWM + MAX_PWM_OFFSET
     elif left and not right:
-        set_rc(STEER_CHANNEL, BACKWARD_PWM)
-    else:
-        set_rc(STEER_CHANNEL, NEUTRAL_PWM)
+        steer_target = NEUTRAL_PWM - MAX_PWM_OFFSET
+    steer_pwm = _ramp(steer_pwm, steer_target, dt)
+    set_rc(STEER_CHANNEL, round(steer_pwm))
 
-def update_depth():
+def update_depth(dt):
+    global depth_pwm
     ascend = held('q')
     descend = held('e')
 
+    depth_target = NEUTRAL_PWM
     if ascend and not descend:
-        set_rc(3, ASCEND_PWM)
+        depth_target = NEUTRAL_PWM + MAX_PWM_OFFSET
     elif descend and not ascend:
-        set_rc(3, DESCEND_PWM)
-    else:
-        set_rc(3, NEUTRAL_PWM)
+        depth_target = NEUTRAL_PWM - MAX_PWM_OFFSET
+    depth_pwm = _ramp(depth_pwm, depth_target, dt)
+    set_rc(3, round(depth_pwm))
 
 def on_press(key):
     try:
@@ -182,11 +205,9 @@ def on_press(key):
 
     if k:
         pressed_keys.add(k)
-        if k in ('w', 's', 'a', 'd'):
-            update_motion()
-        elif k in ('q', 'e'):
-            update_depth()
-        elif k == 'l':
+        # w/s/a/d/q/e just update held state — the main loop's periodic
+        # tick is what ramps the PWM toward the target every cycle.
+        if k == 'l':
             set_rc(LIGHT_CHANNEL, 1900)
             print("Light ON")
         elif k == 'k':
@@ -201,12 +222,8 @@ def on_release(key):
     except AttributeError:
         k = None
 
-    if k in pressed_keys:
+    if k:
         pressed_keys.discard(k)
-        if k in ('w', 's', 'a', 'd'):
-            update_motion()
-        elif k in ('q', 'e'):
-            update_depth()
 
 # --- PS4 gamepad support -----------------------------------------------
 # Same left-stick/right-stick/L1/Options mapping as the web app's
@@ -260,17 +277,14 @@ def poll_gamepad(gamepad, debug=False):
         want_ascend = right_y < -GAMEPAD_DEADZONE
         want_descend = right_y > GAMEPAD_DEADZONE
 
-        motion_changed = set_gamepad_key('w', want_forward)
-        motion_changed |= set_gamepad_key('s', want_back)
-        motion_changed |= set_gamepad_key('a', want_left)
-        motion_changed |= set_gamepad_key('d', want_right)
-        depth_changed = set_gamepad_key('q', want_ascend)
-        depth_changed |= set_gamepad_key('e', want_descend)
-
-        if motion_changed:
-            update_motion()
-        if depth_changed:
-            update_depth()
+        # Just update held state here — the main loop's periodic tick is
+        # what actually ramps the PWM toward the target every cycle.
+        set_gamepad_key('w', want_forward)
+        set_gamepad_key('s', want_back)
+        set_gamepad_key('a', want_left)
+        set_gamepad_key('d', want_right)
+        set_gamepad_key('q', want_ascend)
+        set_gamepad_key('e', want_descend)
 
         l1_down = bool(gamepad.get_button(pygame.CONTROLLER_BUTTON_LEFTSHOULDER))
         if l1_down and not gamepad_edge['l1']:
@@ -300,8 +314,7 @@ def poll_gamepad(gamepad, debug=False):
         gamepad_keys.clear()
         gamepad_edge['l1'] = False
         gamepad_edge['options'] = False
-        update_motion()
-        update_depth()
+        all_stop()  # immediate hard stop, not a graceful ramp-down — control input is gone
         return None
 
     return gamepad
@@ -350,9 +363,17 @@ if __name__ == "__main__":
             print("No input source available (no gamepad, no keyboard) — nothing to do. Exiting.")
             sys.exit(1)
 
+        last_tick = time.time()
         while listener.running if listener else True:
             if gamepad:
                 gamepad = poll_gamepad(gamepad, debug=gamepad_debug)
+
+            now = time.time()
+            dt = now - last_tick
+            last_tick = now
+            update_motion(dt)
+            update_depth(dt)
+
             time.sleep(0.05)
 
     except KeyboardInterrupt:
