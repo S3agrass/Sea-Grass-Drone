@@ -122,7 +122,14 @@ def set_rc(channel, pwm):
 def all_stop():
     if not master:
         return
-    rc = [NEUTRAL_PWM] * 4 + [65535] * 4
+    # ArduSub's manual-control mixer uses a fixed RC scheme: ch1=Pitch,
+    # ch2=Roll, ch3=Throttle/vertical, ch4=Yaw, ch5=Forward, ch6=Lateral.
+    # This 2-motor SimpleROV-3 frame only has authority over ch3/ch5/ch6
+    # (mirrors keyboard_control.py's all_stop).
+    rc = [65535] * 8
+    rc[2] = NEUTRAL_PWM  # channel 3 - throttle/vertical
+    rc[4] = NEUTRAL_PWM  # channel 5 - forward
+    rc[5] = NEUTRAL_PWM  # channel 6 - lateral
     master.mav.rc_channels_override_send(
         master.target_system, master.target_component, *rc
     )
@@ -163,21 +170,24 @@ pressed = set()
 
 
 def update_channels():
+    # Forward maps to ch5 and lateral to ch6 per ArduSub's fixed
+    # manual-control scheme — not ch1/ch2 (Pitch/Roll), which this frame
+    # has no authority over (mirrors keyboard_control.py's update_motion).
     fwd, back = "w" in pressed, "s" in pressed
     if fwd and not back:
-        set_rc(1, FORWARD_PWM)
+        set_rc(5, FORWARD_PWM)
     elif back and not fwd:
-        set_rc(1, BACKWARD_PWM)
+        set_rc(5, BACKWARD_PWM)
     else:
-        set_rc(1, NEUTRAL_PWM)
+        set_rc(5, NEUTRAL_PWM)
 
     right, left = "d" in pressed, "a" in pressed
     if right and not left:
-        set_rc(2, FORWARD_PWM)
+        set_rc(6, FORWARD_PWM)
     elif left and not right:
-        set_rc(2, BACKWARD_PWM)
+        set_rc(6, BACKWARD_PWM)
     else:
-        set_rc(2, NEUTRAL_PWM)
+        set_rc(6, NEUTRAL_PWM)
 
     rise, dive = "q" in pressed, "e" in pressed
     if rise and not dive:
