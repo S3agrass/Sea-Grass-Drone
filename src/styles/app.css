@@ -142,6 +142,7 @@
 }
 
 .login-submit { width: 100%; padding: 12px; font-size: 14px; }
+.login-local { width: 100%; font-size: 13px; color: var(--muted); margin-top: 4px; }
 .login-muted { color: var(--muted); line-height: 1.6; font-size: 13px; }
 .login-foot { font-size: 10px; letter-spacing: 0.2em; color: var(--faint); }
 
