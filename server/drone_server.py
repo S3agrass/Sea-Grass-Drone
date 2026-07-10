@@ -17,6 +17,9 @@ Safety:
   - Watchdog: if a client stops sending anything for WATCHDOG_S seconds while
     motion keys are held, all channels are forced to neutral.
   - On client disconnect: all-stop.
+  - "stop" (gamepad OPTIONS / keyboard SPACE / UI ALL STOP) is a hard kill:
+    all-stop + disarm + camera off + the server process exits. Restarting
+    the server is required before the vehicle can move again.
   - Only one client may hold the helm at a time (first come, first served).
 
 Run:
@@ -316,8 +319,18 @@ async def client_handler(ws):
                 await asyncio.to_thread(do_set_mode, msg.get("mode", "MANUAL"))
                 await state()
             elif mtype == "stop":
+                # Hard kill: every "all stop" control (gamepad OPTIONS, keyboard
+                # SPACE, the UI button) lands here. This isn't a pause — it
+                # disarms, kills the camera, and takes the whole server down so
+                # nothing can move again until someone deliberately restarts it.
                 pressed.clear()
                 all_stop()
+                if armed:
+                    await asyncio.to_thread(do_disarm)
+                stop_camera()
+                await state()
+                print("KILL SWITCH: all stop + disarm, shutting server down")
+                os._exit(0)
             elif mtype == "camera_on":
                 await asyncio.to_thread(start_camera)
                 await state()
