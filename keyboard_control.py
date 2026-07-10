@@ -1,6 +1,12 @@
 from pymavlink import mavutil
 import time
-from pynput import keyboard
+
+try:
+    from pynput import keyboard
+    HAS_PYNPUT = True
+except ImportError:
+    HAS_PYNPUT = False
+    keyboard = None
 
 try:
     import pygame
@@ -168,6 +174,7 @@ AXIS_MAX = 32767  # SDL controller axes are raw ints in [-32768, 32767]
 
 gamepad_edge = {'l1': False, 'options': False}
 gamepad_light_on = False
+quit_requested = False
 
 def set_gamepad_key(key, want_held):
     was_held = key in gamepad_keys
@@ -180,7 +187,7 @@ def set_gamepad_key(key, want_held):
     return True
 
 def poll_gamepad(gamepad, debug=False):
-    global gamepad_light_on
+    global gamepad_light_on, quit_requested
     pygame.event.pump()
 
     left_x = gamepad.get_axis(pygame.CONTROLLER_AXIS_LEFTX) / AXIS_MAX
@@ -215,8 +222,13 @@ def poll_gamepad(gamepad, debug=False):
 
     options_down = bool(gamepad.get_button(pygame.CONTROLLER_BUTTON_START))
     if options_down and not gamepad_edge['options']:
+        # Kill switch: same as pressing 'x' on the keyboard — stop everything
+        # and end the program, don't just zero the sticks out.
+        print("Gamepad kill switch (OPTIONS) — all stop + disarm + quitting")
         all_stop()
         gamepad_keys.clear()
+        pressed_keys.clear()
+        quit_requested = True
     gamepad_edge['options'] = options_down
 
     if debug:
@@ -253,16 +265,21 @@ if __name__ == "__main__":
         if gamepad:
             print("PS4 controller ready! Left stick/D-pad move, right stick Y depth, L1 light, Options all-stop")
 
-        listener = keyboard.Listener(on_press=on_press, on_release=on_release)
-        listener.start()
+        listener = None
+        if HAS_PYNPUT:
+            listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+            listener.start()
+        else:
+            print("pynput not available — keyboard control disabled, gamepad-only")
 
         try:
-            while listener.running:
+            while (listener.running if listener else True) and not quit_requested:
                 if gamepad:
                     poll_gamepad(gamepad, debug=gamepad_debug)
                 time.sleep(0.05)
         finally:
-            listener.stop()
+            if listener:
+                listener.stop()
 
     finally:
         all_stop()
