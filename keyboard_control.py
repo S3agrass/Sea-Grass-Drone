@@ -102,14 +102,14 @@ def set_rc(channel, pwm):
 def all_stop():
     # ArduSub's manual-control mixer uses a fixed RC scheme:
     # ch1=Pitch, ch2=Roll, ch3=Throttle/vertical, ch4=Yaw, ch5=Forward, ch6=Lateral.
-    # Our SimpleROV-3 (2-motor) frame only drives via ch3 (vertical) and
-    # ch5/ch6 (forward/lateral) — those are the channels that must be
-    # neutraled here, not ch1/ch2 (pitch/roll, which this frame can't do
-    # anything with anyway).
+    # Our SimpleROV-3 (2-motor) frame has no lateral thruster, so steering
+    # rides on Yaw (ch4) — ch3 (vertical), ch4 (steering), and ch5 (forward)
+    # are the channels that must be neutraled here. Light (LIGHT_CHANNEL) is
+    # deliberately left alone so an all-stop doesn't also kill the light.
     rc = [65535] * 8
     rc[2] = 1500  # channel 3 - throttle/vertical
+    rc[STEER_CHANNEL - 1] = 1500
     rc[4] = 1500  # channel 5 - forward
-    rc[5] = 1500  # channel 6 - lateral
     master.mav.rc_channels_override_send(
         master.target_system,
         master.target_component,
@@ -133,11 +133,17 @@ NEUTRAL_PWM = 1500
 ASCEND_PWM = 1650
 DESCEND_PWM = 1350
 
+# This 2-motor SimpleROV-3 frame has no lateral thruster, so left/right
+# steering has to ride on Yaw (ch4) — sending it on Lateral (ch6) is a
+# channel this frame has zero authority over, hence "stick moves, nothing
+# happens." Light rides on its own spare channel so it can't fight with
+# steering the way it did sharing ch4. Adjust LIGHT_CHANNEL below if your
+# light relay isn't wired to ch7 (check QGroundControl's SERVOx_FUNCTION
+# parameters).
+STEER_CHANNEL = 4
+LIGHT_CHANNEL = 7
+
 def update_motion():
-    # ArduSub's fixed manual-control RC scheme maps Forward to channel 5
-    # and Lateral (side-to-side) to channel 6 — not channels 1/2 (those
-    # are Pitch/Roll, which a 2-motor SimpleROV-3 frame has no authority
-    # over, so sending on 1/2 silently produced zero motor output).
     forward = held('w')
     backward = held('s')
     left = held('a')
@@ -151,11 +157,11 @@ def update_motion():
         set_rc(5, NEUTRAL_PWM)
 
     if right and not left:
-        set_rc(6, FORWARD_PWM)
+        set_rc(STEER_CHANNEL, FORWARD_PWM)
     elif left and not right:
-        set_rc(6, BACKWARD_PWM)
+        set_rc(STEER_CHANNEL, BACKWARD_PWM)
     else:
-        set_rc(6, NEUTRAL_PWM)
+        set_rc(STEER_CHANNEL, NEUTRAL_PWM)
 
 def update_depth():
     ascend = held('q')
@@ -181,10 +187,10 @@ def on_press(key):
         elif k in ('q', 'e'):
             update_depth()
         elif k == 'l':
-            set_rc(4, 1900)
+            set_rc(LIGHT_CHANNEL, 1900)
             print("Light ON")
         elif k == 'k':
-            set_rc(4, 1500)
+            set_rc(LIGHT_CHANNEL, 1500)
             print("Light OFF")
         elif k == 'x':
             return False
@@ -221,7 +227,6 @@ AXIS_MAX = 32767  # SDL controller axes are raw ints in [-32768, 32767]
 
 gamepad_edge = {'l1': False, 'options': False}
 gamepad_light_on = False
-quit_requested = False
 
 def set_gamepad_key(key, want_held):
     was_held = key in gamepad_keys
@@ -240,7 +245,7 @@ def poll_gamepad(gamepad, debug=False):
     if the controller has disconnected — the caller should drop it and fall
     back to keyboard-only (if available).
     """
-    global gamepad_light_on, quit_requested
+    global gamepad_light_on
     try:
         pygame.event.pump()
 
@@ -270,19 +275,19 @@ def poll_gamepad(gamepad, debug=False):
         l1_down = bool(gamepad.get_button(pygame.CONTROLLER_BUTTON_LEFTSHOULDER))
         if l1_down and not gamepad_edge['l1']:
             gamepad_light_on = not gamepad_light_on
-            set_rc(4, 1900 if gamepad_light_on else 1500)
+            set_rc(LIGHT_CHANNEL, 1900 if gamepad_light_on else 1500)
             print("Light ON" if gamepad_light_on else "Light OFF")
         gamepad_edge['l1'] = l1_down
 
         options_down = bool(gamepad.get_button(pygame.CONTROLLER_BUTTON_START))
         if options_down and not gamepad_edge['options']:
-            # Kill switch: same as pressing 'x' on the keyboard — stop everything
-            # and end the program, don't just zero the sticks out.
-            print("Gamepad kill switch (OPTIONS) — all stop + disarm + quitting")
+            # All-stop only — zero the sticks and keep the program (and the
+            # arm state) running, rather than quitting. Use 'x' on the
+            # keyboard or Ctrl+C to actually end the session.
+            print("Gamepad OPTIONS — all stop")
             all_stop()
             gamepad_keys.clear()
             pressed_keys.clear()
-            quit_requested = True
         gamepad_edge['options'] = options_down
 
         if debug:
@@ -345,7 +350,7 @@ if __name__ == "__main__":
             print("No input source available (no gamepad, no keyboard) — nothing to do. Exiting.")
             sys.exit(1)
 
-        while (listener.running if listener else True) and not quit_requested:
+        while listener.running if listener else True:
             if gamepad:
                 gamepad = poll_gamepad(gamepad, debug=gamepad_debug)
             time.sleep(0.05)
@@ -359,7 +364,7 @@ if __name__ == "__main__":
             listener.stop()
         try:
             all_stop()
-            set_rc(4, 1500)
+            set_rc(LIGHT_CHANNEL, 1500)
             disarm()
         except OSError as exc:
             print(f"Could not send stop/disarm commands — connection already lost: {exc}")
