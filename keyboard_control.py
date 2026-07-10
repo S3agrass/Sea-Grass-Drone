@@ -100,7 +100,16 @@ def set_rc(channel, pwm):
     print(f"  -> Sent: Channel {channel} = {pwm}")
 
 def all_stop():
-    rc = [1500, 1500, 1500, 1500, 65535, 65535, 65535, 65535]
+    # ArduSub's manual-control mixer uses a fixed RC scheme:
+    # ch1=Pitch, ch2=Roll, ch3=Throttle/vertical, ch4=Yaw, ch5=Forward, ch6=Lateral.
+    # Our SimpleROV-3 (2-motor) frame only drives via ch3 (vertical) and
+    # ch5/ch6 (forward/lateral) — those are the channels that must be
+    # neutraled here, not ch1/ch2 (pitch/roll, which this frame can't do
+    # anything with anyway).
+    rc = [65535] * 8
+    rc[2] = 1500  # channel 3 - throttle/vertical
+    rc[4] = 1500  # channel 5 - forward
+    rc[5] = 1500  # channel 6 - lateral
     master.mav.rc_channels_override_send(
         master.target_system,
         master.target_component,
@@ -125,24 +134,28 @@ ASCEND_PWM = 1650
 DESCEND_PWM = 1350
 
 def update_motion():
+    # ArduSub's fixed manual-control RC scheme maps Forward to channel 5
+    # and Lateral (side-to-side) to channel 6 — not channels 1/2 (those
+    # are Pitch/Roll, which a 2-motor SimpleROV-3 frame has no authority
+    # over, so sending on 1/2 silently produced zero motor output).
     forward = held('w')
     backward = held('s')
     left = held('a')
     right = held('d')
 
     if forward and not backward:
-        set_rc(1, FORWARD_PWM)
+        set_rc(5, FORWARD_PWM)
     elif backward and not forward:
-        set_rc(1, BACKWARD_PWM)
+        set_rc(5, BACKWARD_PWM)
     else:
-        set_rc(1, NEUTRAL_PWM)
+        set_rc(5, NEUTRAL_PWM)
 
     if right and not left:
-        set_rc(2, FORWARD_PWM)
+        set_rc(6, FORWARD_PWM)
     elif left and not right:
-        set_rc(2, BACKWARD_PWM)
+        set_rc(6, BACKWARD_PWM)
     else:
-        set_rc(2, NEUTRAL_PWM)
+        set_rc(6, NEUTRAL_PWM)
 
 def update_depth():
     ascend = held('q')
@@ -320,8 +333,11 @@ if __name__ == "__main__":
             print("PS4 controller ready! Left stick/D-pad move, right stick Y depth, L1 light, Options all-stop")
 
         if HAS_PYNPUT:
-            listener = keyboard.Listener(on_press=on_press, on_release=on_release)
-            listener.start()
+            try:
+                listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+                listener.start()
+            except Exception as e:
+                print(f"Keyboard input unavailable ({e}) — gamepad-only control")
         else:
             print("pynput not available — keyboard control disabled, gamepad-only")
 
