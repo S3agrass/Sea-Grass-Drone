@@ -200,11 +200,25 @@ def update_depth(dt):
     depth_pwm = _ramp(depth_pwm, depth_target, dt)
     set_rc(3, round(depth_pwm))
 
+# Arrow keys drive the same forward/steer channels as WASD: Up/Down = both
+# motors together (CW/CCW = forward/back), Left/Right = differential turn
+# (one motor slows while the other holds speed). ArduSub's mixer for this
+# 2-motor frame does that differential split on its own from the ch5
+# (forward) + STEER_CHANNEL (yaw) commands — same as W/A/S/D below.
+ARROW_KEY_MAP = {
+    keyboard.Key.up: 'w',
+    keyboard.Key.down: 's',
+    keyboard.Key.left: 'a',
+    keyboard.Key.right: 'd',
+} if HAS_PYNPUT else {}
+
 def on_press(key):
-    try:
-        k = key.char
-    except AttributeError:
-        k = None
+    k = ARROW_KEY_MAP.get(key)
+    if k is None:
+        try:
+            k = key.char
+        except AttributeError:
+            k = None
 
     if k:
         pressed_keys.add(k)
@@ -220,10 +234,12 @@ def on_press(key):
             return False
 
 def on_release(key):
-    try:
-        k = key.char
-    except AttributeError:
-        k = None
+    k = ARROW_KEY_MAP.get(key)
+    if k is None:
+        try:
+            k = key.char
+        except AttributeError:
+            k = None
 
     if k:
         pressed_keys.discard(k)
@@ -347,7 +363,7 @@ if __name__ == "__main__":
         master.set_mode('MANUAL')
         if not arm():
             sys.exit(1)
-        print("Ready! WASD to move, Q/E depth, L/K light, X to quit")
+        print("Ready! Arrow keys (or WASD) to move, Q/E depth, L/K light, X to quit")
 
         gamepad = init_gamepad()
         if gamepad:
