@@ -294,7 +294,7 @@ def on_release(key):
 # physical button name instead, so this works regardless of raw ordering
 # as long as SDL recognizes the pad (run with --gamepad-debug to confirm
 # what SDL sees).
-GAMEPAD_DEADZONE = 0.12
+GAMEPAD_DEADZONE = 0.45
 GAMEPAD_EXPO = 0.5  # 0 = linear, 1 = fully cubic; expo gives fine control near center
 AXIS_MAX = 32767  # SDL controller axes are raw ints in [-32768, 32767]
 
