@@ -134,17 +134,20 @@ def held(k):
 NEUTRAL_PWM = 1500
 MAX_PWM_OFFSET = 150    # safe limit — PWM never goes past NEUTRAL_PWM +/- this
 
-# Feel tuning. Attack = seconds to reach full authority from neutral while
-# held; release = seconds to settle back to neutral once let go. A short
-# release is what makes controls feel crisp instead of floaty, and steering
-# gets a much faster attack than surge so a turn bites the moment the key
-# or stick moves.
-SURGE_ATTACK_S = 1.5
-SURGE_RELEASE_S = 0.4
-STEER_ATTACK_S = 0.35
-STEER_RELEASE_S = 0.25
-DEPTH_ATTACK_S = 1.0
-DEPTH_RELEASE_S = 0.4
+# Feel tuning — ramp-up and decay are independent knobs per axis, all in
+# seconds. Just change the number:
+#   *_RAMP_UP_S = how long a held key/stick takes to go from stopped to
+#                 full power (bigger = gentler acceleration).
+#   *_DECAY_S   = how long it takes to fall back to stopped after you let
+#                 go (bigger = longer coast, smaller = crisper stop).
+# SURGE = forward/back (W/S), STEER = left/right turn (A/D),
+# DEPTH = ascend/descend (Q/E).
+SURGE_RAMP_UP_S = 1.5
+SURGE_DECAY_S = 0.4
+STEER_RAMP_UP_S = 0.35
+STEER_DECAY_S = 0.25
+DEPTH_RAMP_UP_S = 1.0
+DEPTH_DECAY_S = 0.4
 
 # During a turn, shed up to this fraction of forward power (scaled by how
 # hard the turn is) so the yaw differential dominates — the drone carves
@@ -185,14 +188,14 @@ def _axis_value(pos_key, neg_key, analog):
     digital = (1.0 if held(pos_key) else 0.0) - (1.0 if held(neg_key) else 0.0)
     return max(-1.0, min(1.0, digital + analog))
 
-def _ramp(current, target, dt, attack_s, release_s):
-    # Attack rate applies while pushing further from neutral in the same
+def _ramp(current, target, dt, ramp_up_s, decay_s):
+    # Ramp-up rate applies while pushing further from neutral in the same
     # direction; anything heading back toward (or through) neutral uses the
-    # faster release rate so letting go feels immediate, not floaty.
+    # decay rate so letting go can feel immediate, not floaty.
     cur_off = current - NEUTRAL_PWM
     tgt_off = target - NEUTRAL_PWM
     moving_away = abs(tgt_off) > abs(cur_off) and cur_off * tgt_off >= 0
-    secs = attack_s if moving_away else release_s
+    secs = ramp_up_s if moving_away else decay_s
     max_step = (MAX_PWM_OFFSET / secs) * dt
     if current < target:
         return min(current + max_step, target)
@@ -212,11 +215,11 @@ def update_flight(dt):
     surge_in *= 1.0 - TURN_ASSIST * abs(steer_in)
 
     surge_pwm = _ramp(surge_pwm, NEUTRAL_PWM + surge_in * MAX_PWM_OFFSET,
-                      dt, SURGE_ATTACK_S, SURGE_RELEASE_S)
+                      dt, SURGE_RAMP_UP_S, SURGE_DECAY_S)
     steer_pwm = _ramp(steer_pwm, NEUTRAL_PWM + steer_in * MAX_PWM_OFFSET,
-                      dt, STEER_ATTACK_S, STEER_RELEASE_S)
+                      dt, STEER_RAMP_UP_S, STEER_DECAY_S)
     depth_pwm = _ramp(depth_pwm, NEUTRAL_PWM + depth_in * MAX_PWM_OFFSET,
-                      dt, DEPTH_ATTACK_S, DEPTH_RELEASE_S)
+                      dt, DEPTH_RAMP_UP_S, DEPTH_DECAY_S)
 
     # One combined override per tick instead of three separate messages —
     # less serial traffic and the axes always arrive as a consistent frame.
