@@ -133,7 +133,7 @@ def held(k):
 
 NEUTRAL_PWM = 1500
 MAX_PWM_OFFSET = 150    # safe limit — PWM never goes past NEUTRAL_PWM +/- this
-RAMP_SECONDS = 0.9      # time to reach MAX_PWM_OFFSET from a standstill while held
+RAMP_SECONDS = 1.5      # time to reach MAX_PWM_OFFSET from a standstill while held
 
 # This 2-motor SimpleROV-3 frame has no lateral thruster, so left/right
 # steering has to ride on Yaw (ch4) — sending it on Lateral (ch6) is a
