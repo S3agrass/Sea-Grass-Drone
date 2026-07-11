@@ -143,7 +143,7 @@ MAX_PWM_OFFSET = 150    # safe limit — PWM never goes past NEUTRAL_PWM +/- thi
 # SURGE = forward/back (W/S), STEER = left/right turn (A/D),
 # DEPTH = ascend/descend (Q/E).
 SURGE_RAMP_UP_S = 1.5
-SURGE_DECAY_S = 1
+SURGE_DECAY_S = 0.1
 STEER_RAMP_UP_S = 0.35
 STEER_DECAY_S = 0.25
 DEPTH_RAMP_UP_S = 1.0
