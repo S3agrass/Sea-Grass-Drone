@@ -27,7 +27,10 @@ PIXHAWK_BAUD = int(os.environ.get("PIXHAWK_BAUD", "115200"))
 
 try:
     print(f"Connecting to Pixhawk on {PIXHAWK_PORT} @ {PIXHAWK_BAUD}...")
-    master = mavutil.mavlink_connection(PIXHAWK_PORT, baud=PIXHAWK_BAUD)
+    if PIXHAWK_PORT.startswith(("udp", "tcp")):
+        master = mavutil.mavlink_connection(PIXHAWK_PORT)
+    else:
+        master = mavutil.mavlink_connection(PIXHAWK_PORT, baud=PIXHAWK_BAUD)
     if master.wait_heartbeat(timeout=10) is None:
         print(f"No heartbeat from Pixhawk on {PIXHAWK_PORT} after 10s — is it powered and plugged in?")
         sys.exit(1)
@@ -130,7 +133,7 @@ def held(k):
 
 NEUTRAL_PWM = 1500
 MAX_PWM_OFFSET = 150    # safe limit — PWM never goes past NEUTRAL_PWM +/- this
-RAMP_SECONDS = 0.6      # time to reach MAX_PWM_OFFSET from a standstill while held
+RAMP_SECONDS = 0.9      # time to reach MAX_PWM_OFFSET from a standstill while held
 
 # This 2-motor SimpleROV-3 frame has no lateral thruster, so left/right
 # steering has to ride on Yaw (ch4) — sending it on Lateral (ch6) is a
