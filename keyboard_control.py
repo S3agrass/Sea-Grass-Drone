@@ -133,7 +133,25 @@ def held(k):
 
 NEUTRAL_PWM = 1500
 MAX_PWM_OFFSET = 150    # safe limit — PWM never goes past NEUTRAL_PWM +/- this
-RAMP_SECONDS = 1.5      # time to reach MAX_PWM_OFFSET from a standstill while held
+
+# Feel tuning. Attack = seconds to reach full authority from neutral while
+# held; release = seconds to settle back to neutral once let go. A short
+# release is what makes controls feel crisp instead of floaty, and steering
+# gets a much faster attack than surge so a turn bites the moment the key
+# or stick moves.
+SURGE_ATTACK_S = 1.5
+SURGE_RELEASE_S = 0.4
+STEER_ATTACK_S = 0.35
+STEER_RELEASE_S = 0.25
+DEPTH_ATTACK_S = 1.0
+DEPTH_RELEASE_S = 0.4
+
+# During a turn, shed up to this fraction of forward power (scaled by how
+# hard the turn is) so the yaw differential dominates — the drone carves
+# through the turn instead of plowing straight ahead with a slight drift.
+TURN_ASSIST = 0.45
+
+TICK_SECONDS = 0.02     # 50 Hz control loop — smooth ramps, low input latency
 
 # This 2-motor SimpleROV-3 frame has no lateral thruster, so left/right
 # steering has to ride on Yaw (ch4) — sending it on Lateral (ch6) is a
@@ -152,53 +170,71 @@ surge_pwm = NEUTRAL_PWM   # ch5 - forward/back
 steer_pwm = NEUTRAL_PWM   # STEER_CHANNEL - left/right
 depth_pwm = NEUTRAL_PWM   # ch3 - ascend/descend
 
+# Analog stick input in [-1, 1] per axis, written by poll_gamepad. Keyboard
+# keys contribute full-scale +/-1; the two sources are summed and clamped so
+# either one can drive, and opposing inputs cancel.
+gamepad_axes = {'surge': 0.0, 'steer': 0.0, 'depth': 0.0}
+
+_last_sent_frame = None
+
 def reset_motion_state():
     global surge_pwm, steer_pwm, depth_pwm
     surge_pwm = steer_pwm = depth_pwm = NEUTRAL_PWM
 
-def _ramp(current, target, dt):
-    max_step = (MAX_PWM_OFFSET / RAMP_SECONDS) * dt
+def _axis_value(pos_key, neg_key, analog):
+    digital = (1.0 if held(pos_key) else 0.0) - (1.0 if held(neg_key) else 0.0)
+    return max(-1.0, min(1.0, digital + analog))
+
+def _ramp(current, target, dt, attack_s, release_s):
+    # Attack rate applies while pushing further from neutral in the same
+    # direction; anything heading back toward (or through) neutral uses the
+    # faster release rate so letting go feels immediate, not floaty.
+    cur_off = current - NEUTRAL_PWM
+    tgt_off = target - NEUTRAL_PWM
+    moving_away = abs(tgt_off) > abs(cur_off) and cur_off * tgt_off >= 0
+    secs = attack_s if moving_away else release_s
+    max_step = (MAX_PWM_OFFSET / secs) * dt
     if current < target:
         return min(current + max_step, target)
     if current > target:
         return max(current - max_step, target)
     return current
 
-def update_motion(dt):
-    global surge_pwm, steer_pwm
-    forward = held('w')
-    backward = held('s')
-    left = held('a')
-    right = held('d')
+def update_flight(dt):
+    global surge_pwm, steer_pwm, depth_pwm, _last_sent_frame
+    surge_in = _axis_value('w', 's', gamepad_axes['surge'])
+    steer_in = _axis_value('d', 'a', gamepad_axes['steer'])
+    depth_in = _axis_value('q', 'e', gamepad_axes['depth'])
 
-    surge_target = NEUTRAL_PWM
-    if forward and not backward:
-        surge_target = NEUTRAL_PWM + MAX_PWM_OFFSET
-    elif backward and not forward:
-        surge_target = NEUTRAL_PWM - MAX_PWM_OFFSET
-    surge_pwm = _ramp(surge_pwm, surge_target, dt)
-    set_rc(5, round(surge_pwm))
+    # Turn assist: the harder the turn, the more forward power is shed, so
+    # the yaw differential between the two motors stays pronounced instead
+    # of both motors saturating forward.
+    surge_in *= 1.0 - TURN_ASSIST * abs(steer_in)
 
-    steer_target = NEUTRAL_PWM
-    if right and not left:
-        steer_target = NEUTRAL_PWM + MAX_PWM_OFFSET
-    elif left and not right:
-        steer_target = NEUTRAL_PWM - MAX_PWM_OFFSET
-    steer_pwm = _ramp(steer_pwm, steer_target, dt)
-    set_rc(STEER_CHANNEL, round(steer_pwm))
+    surge_pwm = _ramp(surge_pwm, NEUTRAL_PWM + surge_in * MAX_PWM_OFFSET,
+                      dt, SURGE_ATTACK_S, SURGE_RELEASE_S)
+    steer_pwm = _ramp(steer_pwm, NEUTRAL_PWM + steer_in * MAX_PWM_OFFSET,
+                      dt, STEER_ATTACK_S, STEER_RELEASE_S)
+    depth_pwm = _ramp(depth_pwm, NEUTRAL_PWM + depth_in * MAX_PWM_OFFSET,
+                      dt, DEPTH_ATTACK_S, DEPTH_RELEASE_S)
 
-def update_depth(dt):
-    global depth_pwm
-    ascend = held('q')
-    descend = held('e')
-
-    depth_target = NEUTRAL_PWM
-    if ascend and not descend:
-        depth_target = NEUTRAL_PWM + MAX_PWM_OFFSET
-    elif descend and not ascend:
-        depth_target = NEUTRAL_PWM - MAX_PWM_OFFSET
-    depth_pwm = _ramp(depth_pwm, depth_target, dt)
-    set_rc(3, round(depth_pwm))
+    # One combined override per tick instead of three separate messages —
+    # less serial traffic and the axes always arrive as a consistent frame.
+    # Sent every tick even when unchanged so ArduSub's RC-override timeout
+    # failsafe keeps seeing a live pilot.
+    rc = [65535] * 8
+    rc[2] = round(depth_pwm)
+    rc[STEER_CHANNEL - 1] = round(steer_pwm)
+    rc[4] = round(surge_pwm)
+    master.mav.rc_channels_override_send(
+        master.target_system,
+        master.target_component,
+        *rc
+    )
+    frame = (rc[4], rc[STEER_CHANNEL - 1], rc[2])
+    if frame != _last_sent_frame:
+        print(f"  -> surge={frame[0]} steer={frame[1]} depth={frame[2]}")
+        _last_sent_frame = frame
 
 # Arrow keys drive the same forward/steer channels as WASD: Up/Down = both
 # motors together (CW/CCW = forward/back), Left/Right = differential turn
@@ -258,11 +294,24 @@ def on_release(key):
 # physical button name instead, so this works regardless of raw ordering
 # as long as SDL recognizes the pad (run with --gamepad-debug to confirm
 # what SDL sees).
-GAMEPAD_DEADZONE = 0.35
+GAMEPAD_DEADZONE = 0.12
+GAMEPAD_EXPO = 0.5  # 0 = linear, 1 = fully cubic; expo gives fine control near center
 AXIS_MAX = 32767  # SDL controller axes are raw ints in [-32768, 32767]
 
 gamepad_edge = {'l1': False, 'options': False}
 gamepad_light_on = False
+
+def _stick_curve(raw):
+    """Deadzone-rescaled expo response: small deflections give fine, gentle
+    control, full deflection still reaches 100% — the standard game-feel
+    stick curve. Rescaling means output starts from 0 right at the deadzone
+    edge instead of jumping."""
+    mag = abs(raw)
+    if mag < GAMEPAD_DEADZONE:
+        return 0.0
+    mag = min(1.0, (mag - GAMEPAD_DEADZONE) / (1.0 - GAMEPAD_DEADZONE))
+    mag = (1.0 - GAMEPAD_EXPO) * mag + GAMEPAD_EXPO * mag ** 3
+    return mag if raw >= 0 else -mag
 
 def set_gamepad_key(key, want_held):
     was_held = key in gamepad_keys
@@ -289,21 +338,19 @@ def poll_gamepad(gamepad, debug=False):
         left_y = gamepad.get_axis(pygame.CONTROLLER_AXIS_LEFTY) / AXIS_MAX
         right_y = gamepad.get_axis(pygame.CONTROLLER_AXIS_RIGHTY) / AXIS_MAX
 
-        want_forward = left_y < -GAMEPAD_DEADZONE or gamepad.get_button(pygame.CONTROLLER_BUTTON_DPAD_UP)
-        want_back = left_y > GAMEPAD_DEADZONE or gamepad.get_button(pygame.CONTROLLER_BUTTON_DPAD_DOWN)
-        want_left = left_x < -GAMEPAD_DEADZONE or gamepad.get_button(pygame.CONTROLLER_BUTTON_DPAD_LEFT)
-        want_right = left_x > GAMEPAD_DEADZONE or gamepad.get_button(pygame.CONTROLLER_BUTTON_DPAD_RIGHT)
-        want_ascend = right_y < -GAMEPAD_DEADZONE
-        want_descend = right_y > GAMEPAD_DEADZONE
+        # Sticks are fully analog: half deflection = half authority, with an
+        # expo curve for fine control near center. Stick up is negative raw,
+        # so surge/depth flip sign. The main loop's periodic tick is what
+        # actually ramps the PWM toward these targets every cycle.
+        gamepad_axes['surge'] = -_stick_curve(left_y)
+        gamepad_axes['steer'] = _stick_curve(left_x)
+        gamepad_axes['depth'] = -_stick_curve(right_y)
 
-        # Just update held state here — the main loop's periodic tick is
-        # what actually ramps the PWM toward the target every cycle.
-        set_gamepad_key('w', want_forward)
-        set_gamepad_key('s', want_back)
-        set_gamepad_key('a', want_left)
-        set_gamepad_key('d', want_right)
-        set_gamepad_key('q', want_ascend)
-        set_gamepad_key('e', want_descend)
+        # D-pad stays digital: full authority in the pressed direction.
+        set_gamepad_key('w', bool(gamepad.get_button(pygame.CONTROLLER_BUTTON_DPAD_UP)))
+        set_gamepad_key('s', bool(gamepad.get_button(pygame.CONTROLLER_BUTTON_DPAD_DOWN)))
+        set_gamepad_key('a', bool(gamepad.get_button(pygame.CONTROLLER_BUTTON_DPAD_LEFT)))
+        set_gamepad_key('d', bool(gamepad.get_button(pygame.CONTROLLER_BUTTON_DPAD_RIGHT)))
 
         l1_down = bool(gamepad.get_button(pygame.CONTROLLER_BUTTON_LEFTSHOULDER))
         if l1_down and not gamepad_edge['l1']:
@@ -324,13 +371,15 @@ def poll_gamepad(gamepad, debug=False):
         gamepad_edge['options'] = options_down
 
         if debug:
-            axes = f"LX:{left_x:.2f} LY:{left_y:.2f} RY:{right_y:.2f}"
-            held = [k for k in ('w', 'a', 's', 'd', 'q', 'e') if k in gamepad_keys]
-            print(f"  [gamepad] {axes} held{held} l1={l1_down} options={options_down}")
+            axes = (f"surge:{gamepad_axes['surge']:+.2f} steer:{gamepad_axes['steer']:+.2f} "
+                    f"depth:{gamepad_axes['depth']:+.2f}")
+            held_dpad = [k for k in ('w', 'a', 's', 'd') if k in gamepad_keys]
+            print(f"  [gamepad] {axes} dpad{held_dpad} l1={l1_down} options={options_down}")
     except pygame.error as exc:
         fallback = "falling back to keyboard-only control" if HAS_PYNPUT else "no input source left — press Ctrl+C to quit"
         print(f"Controller lost ({exc}) — {fallback}")
         gamepad_keys.clear()
+        gamepad_axes['surge'] = gamepad_axes['steer'] = gamepad_axes['depth'] = 0.0
         gamepad_edge['l1'] = False
         gamepad_edge['options'] = False
         all_stop()  # immediate hard stop, not a graceful ramp-down — control input is gone
@@ -390,10 +439,9 @@ if __name__ == "__main__":
             now = time.time()
             dt = now - last_tick
             last_tick = now
-            update_motion(dt)
-            update_depth(dt)
+            update_flight(dt)
 
-            time.sleep(0.05)
+            time.sleep(TICK_SECONDS)
 
     except KeyboardInterrupt:
         print("\nInterrupted — shutting down")
