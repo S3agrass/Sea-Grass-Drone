@@ -52,36 +52,68 @@ VITE_SUPABASE_ANON_KEY=eyJ...
 
 ## 4. Raspberry Pi — drone server
 
+### One-time setup
+
 ```bash
 ssh pi@seagrass-pi.local
 pip install pymavlink websockets --break-system-packages
-cd ~/Sea-Grass-Drone/server
-SEAGRASS_TOKEN=pick-a-long-secret python3 drone_server.py
+mkdir -p ~/.local/bin
+ln -s ~/Sea-Grass-Drone/scripts/drone ~/.local/bin/drone
+drone   # first run creates the ~/.seagrass-env template, then exits
+nano ~/.seagrass-env   # paste the drone's "Access token" from the Fleet UI
 ```
 
-- Pixhawk connects over USB (`/dev/ttyACM0`). Override with `PIXHAWK_PORT=` env var.
-- `SEAGRASS_TOKEN` must match the "Access token" saved for the drone in the Fleet UI.
-- Without a token set the server will refuse to start — this is intentional.
+- `~/.local/bin` is on `PATH` by default on Raspberry Pi OS; if the directory
+  didn't exist before, log out and back in once so the shell picks it up.
+- `~/.seagrass-env` holds `SEAGRASS_TOKEN` (must match the token saved for the
+  drone in the Fleet UI) plus optional overrides (`PIXHAWK_PORT`,
+  `PIXHAWK_BAUD`, `SEAGRASS_PORT`). It is chmod 600 and never committed.
+- Without a token set the server refuses to start — this is intentional.
 
-**Autostart with systemd:**
-```ini
-# /etc/systemd/system/drone-server.service
-[Unit]
-Description=Seagrass drone server
-After=network.target
+### Daily use
 
-[Service]
-Environment=SEAGRASS_TOKEN=pick-a-long-secret
-ExecStart=/usr/bin/python3 /home/pi/Sea-Grass-Drone/server/drone_server.py
-Restart=always
-User=pi
-
-[Install]
-WantedBy=multi-user.target
-```
 ```bash
-sudo systemctl enable --now drone-server
+drone
 ```
+
+That's it — from any directory, right after SSH login. The script:
+
+1. loads `SEAGRASS_TOKEN` from `~/.seagrass-env`,
+2. kills any stale process still holding the Pixhawk serial port
+   (`/dev/ttyACM0` by default) so port contention never blocks a start,
+3. starts `server/drone_server.py` and waits for the MAVLink heartbeat,
+4. prints `✅ ready` only once the heartbeat **and** websocket are up. If the
+   Pixhawk doesn't answer (wrong port, cable out), it stops the server and
+   exits non-zero with a clear error instead of running half-alive.
+
+Ctrl-C stops the server. Note: the Pixhawk safety switch does not affect the
+heartbeat — it only blocks arming — so `drone` can report ready with the
+switch unpressed.
+
+### Optional — autostart with systemd
+
+If you want the server already running before you SSH in, install the unit
+shipped in the repo (it reads the same `~/.seagrass-env` via `EnvironmentFile`,
+so the token never lives in the unit file):
+
+```bash
+sudo cp ~/Sea-Grass-Drone/scripts/drone-server.service /etc/systemd/system/
+sudo systemctl enable --now drone-server
+journalctl -fu drone-server   # logs
+```
+
+**Tradeoffs vs. the manual `drone` command:**
+
+- `drone` (manual): logs stream in your terminal, Ctrl-C stops everything, and
+  nothing runs while you're away — but the server only lives as long as your
+  SSH session (use tmux to detach).
+- systemd: up at boot and auto-restarts on crash, no typing at all — but logs
+  live in `journalctl`, there's no interactive "ready" check (it silently
+  retries every 3 s), and the drone server is always listening unattended.
+
+They interoperate: running `drone` stops the systemd unit first so the two
+never fight over the serial port. Hand the port back afterwards with
+`sudo systemctl start drone-server`.
 
 ---
 

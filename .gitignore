@@ -23,6 +23,7 @@ dist-ssr
 *.sln
 *.sw?
 .env
+.seagrass-env
 
 # Local-only perception prototype (sonar dodge + camera/YOLO) — not yet
 # validated on hardware, intentionally kept out of git until it works.
