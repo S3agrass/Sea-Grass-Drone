@@ -33,3 +33,8 @@ __pycache__/
 *.pyc__pycache__/
 *.pyc
 server/vision/models/*.onnx
+
+# MAVLink session capture artifacts (runtime, not source)
+*.tlog
+*.tlog.raw
+*.parm

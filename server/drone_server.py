@@ -170,6 +170,32 @@ async def stop_detector():
     print("Detector stopped")
 
 
+HEARTBEAT_S = 1.0  # 1 Hz — well under ArduSub's GCS failsafe timeout (~5s)
+
+
+async def heartbeat_loop():
+    """Announce ourselves to ArduSub as a GCS at 1 Hz.
+
+    Without this the vehicle trips its GCS/manual-control failsafe within a few
+    seconds of arming and refuses to hold arm ("MYGCS: 255, heartbeat lost" /
+    "Lost manual control"), so nothing ever moves. Mirrors the heartbeat loops
+    in sonar_logger.py and keyboard_control.py. Runs on the single asyncio
+    thread that owns `master`, so no send lock is needed; it can't be starved
+    because all CPU-heavy work (camera, detector) runs in separate subprocesses.
+    """
+    while True:
+        if master:
+            try:
+                master.mav.heartbeat_send(
+                    mavutil.mavlink.MAV_TYPE_GCS,
+                    mavutil.mavlink.MAV_AUTOPILOT_INVALID,
+                    0, 0, 0,
+                )
+            except OSError:
+                pass  # link dropped; read_telemetry surfaces it on next read
+        await asyncio.sleep(HEARTBEAT_S)
+
+
 def connect_pixhawk():
     global master, pixhawk_ok
     try:
@@ -508,6 +534,10 @@ async def client_handler(ws):
 
 async def main():
     connect_pixhawk()
+    # Announce ourselves as a GCS at 1 Hz for the whole server lifetime (not
+    # gated on a client being connected) so ArduSub never trips its heartbeat
+    # failsafe.
+    asyncio.create_task(heartbeat_loop())
     async with websockets.serve(client_handler, WS_HOST, WS_PORT):
         print(f"Seagrass drone server listening on ws://{WS_HOST}:{WS_PORT}")
         await asyncio.Future()
