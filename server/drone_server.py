@@ -48,6 +48,15 @@ if not TOKEN:
     raise SystemExit("SEAGRASS_TOKEN must be set — export it before running this script.")
 WATCHDOG_S = 1.5
 
+# Stream the RC override frame to the Pixhawk at this rate, every tick even
+# when nothing changed, so ArduSub's manual-control (pilot-input) failsafe
+# always sees a live pilot. keyboard_control.py streams at 50 Hz for exactly
+# this reason; sending only on key change (what this server did before) left
+# multi-second gaps with no RC override whenever no motion key was held —
+# right after arming most of all — which is when "Lost manual control" fired.
+CONTROL_HZ = 50
+CONTROL_PERIOD_S = 1.0 / CONTROL_HZ
+
 NEUTRAL_PWM = 1500
 FORWARD_PWM = 1650
 BACKWARD_PWM = 1350
@@ -289,33 +298,38 @@ def do_set_mode(new_mode):
 pressed = set()
 
 
-def update_channels():
-    # Forward maps to ch5 and lateral to ch6 per ArduSub's fixed
-    # manual-control scheme — not ch1/ch2 (Pitch/Roll), which this frame
-    # has no authority over (mirrors keyboard_control.py's update_motion).
+def channel_frame():
+    """Build one combined RC_CHANNELS_OVERRIDE frame from the current key state.
+
+    Forward -> ch5, lateral -> ch6, vertical -> ch3 per ArduSub's fixed
+    manual-control scheme — not ch1/ch2 (Pitch/Roll), which this frame has no
+    authority over (mirrors keyboard_control.py's update_flight). Light (ch4)
+    and every unused channel are left at 65535 ("ignore this channel") so a
+    separate light override (set_rc(4, ...)) is never clobbered — the same
+    combined-frame approach keyboard_control.py uses.
+    """
+    rc = [65535] * 8
+
     fwd, back = "w" in pressed, "s" in pressed
-    if fwd and not back:
-        set_rc(5, FORWARD_PWM)
-    elif back and not fwd:
-        set_rc(5, BACKWARD_PWM)
-    else:
-        set_rc(5, NEUTRAL_PWM)
+    rc[4] = FORWARD_PWM if fwd and not back else BACKWARD_PWM if back and not fwd else NEUTRAL_PWM
 
     right, left = "d" in pressed, "a" in pressed
-    if right and not left:
-        set_rc(6, FORWARD_PWM)
-    elif left and not right:
-        set_rc(6, BACKWARD_PWM)
-    else:
-        set_rc(6, NEUTRAL_PWM)
+    rc[5] = FORWARD_PWM if right and not left else BACKWARD_PWM if left and not right else NEUTRAL_PWM
 
     rise, dive = "q" in pressed, "e" in pressed
-    if rise and not dive:
-        set_rc(3, FORWARD_PWM)
-    elif dive and not rise:
-        set_rc(3, BACKWARD_PWM)
-    else:
-        set_rc(3, NEUTRAL_PWM)
+    rc[2] = FORWARD_PWM if rise and not dive else BACKWARD_PWM if dive and not rise else NEUTRAL_PWM
+
+    return rc
+
+
+def send_control_frame():
+    """Push the current channel frame to the Pixhawk as a single RC override."""
+    if not master:
+        return
+    rc = channel_frame()
+    master.mav.rc_channels_override_send(
+        master.target_system, master.target_component, *rc
+    )
 
 
 def handle_key(key, is_pressed):
@@ -325,7 +339,9 @@ def handle_key(key, is_pressed):
             pressed.add(key)
         else:
             pressed.discard(key)
-        update_channels()
+        # Update held state and send immediately for zero-latency response; the
+        # control_loop keeps re-sending this frame at CONTROL_HZ regardless.
+        send_control_frame()
     elif key == "l" and is_pressed:
         set_rc(4, LIGHT_ON_PWM)
     elif key == "k" and is_pressed:
@@ -542,6 +558,25 @@ async def client_handler(ws):
         print(f"Client disconnected: {ws.remote_address}")
 
 
+async def control_loop():
+    """Stream the current RC override frame at CONTROL_HZ for the whole server
+    lifetime, independent of any client — the RC-override analogue of the 1 Hz
+    GCS heartbeat thread.
+
+    The heartbeat feeds ArduSub's GCS failsafe; this feeds its *separate*
+    manual-control / pilot-input failsafe, which only RC_CHANNELS_OVERRIDE (or
+    MANUAL_CONTROL) resets. Without this steady stream ArduSub trips "Lost
+    manual control" within a second or two of arming whenever no motion key
+    happens to be held — exactly what a well-behaved client with idle sticks
+    produces. Sent every tick even when unchanged (like keyboard_control.py),
+    and unconditionally rather than gated on `armed`, so there's no gap at the
+    instant of arming while the HEARTBEAT-driven `armed` flag catches up.
+    """
+    while True:
+        send_control_frame()
+        await asyncio.sleep(CONTROL_PERIOD_S)
+
+
 async def main():
     connect_pixhawk()
     # Announce ourselves as a GCS at 1 Hz on a dedicated daemon thread, for the
@@ -549,6 +584,10 @@ async def main():
     # heartbeat is never delayed by the asyncio loop and ArduSub never trips its
     # heartbeat failsafe.
     start_heartbeat_thread()
+    # Stream RC overrides continuously (see control_loop) so ArduSub's separate
+    # manual-control failsafe is fed just as steadily as the heartbeat feeds the
+    # GCS failsafe.
+    asyncio.create_task(control_loop())
     async with websockets.serve(client_handler, WS_HOST, WS_PORT):
         print(f"Seagrass drone server listening on ws://{WS_HOST}:{WS_PORT}")
         await asyncio.Future()
