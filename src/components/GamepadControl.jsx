@@ -8,6 +8,10 @@ import { useDrone } from "../context/DroneContext";
    real index off the live readout, and update AXIS/BUTTON below — nothing
    else needs to change. */
 const DEADZONE = 0.35;
+// Re-assert held controls at least this often. The server watchdog forces an
+// all-stop after 1.5s of silence mid-motion (server/drone_server.py WATCHDOG_S),
+// so we must keep sending while a stick is held even when nothing changed.
+const KEEPALIVE_MS = 120;
 const AXIS = { LEFT_X: 0, LEFT_Y: 1, RIGHT_X: 2, RIGHT_Y: 3 };
 const BUTTON = { L1: 4, OPTIONS: 9 };
 
@@ -42,6 +46,7 @@ export default function GamepadControl() {
   lightOnRef.current = lightOn;
   const edgeRef = useRef({ l1: false, options: false });
   const rafRef = useRef(null);
+  const lastSendTsRef = useRef(0);
   const lastDebugTsRef = useRef(0);
 
   const canDrive =
@@ -91,8 +96,14 @@ export default function GamepadControl() {
         return;
       }
 
+      const now = performance.now();
+      // Re-send held keys on a fixed cadence, not just on change, so the server
+      // watchdog keeps seeing input while a stick is held steady. handle_key on
+      // the server is idempotent, so re-asserting a held key is a safe keepalive.
+      const keepAlive = now - lastSendTsRef.current >= KEEPALIVE_MS;
       const next = new Set(pressedRef.current);
       let changed = false;
+      let sent = false;
       for (const { axis, negKey, posKey } of AXIS_KEYS) {
         const v = pad.axes[axis] ?? 0;
         const wantNeg = v < -DEADZONE;
@@ -102,14 +113,23 @@ export default function GamepadControl() {
           else next.delete(negKey);
           link.sendKey(negKey, wantNeg);
           changed = true;
+          sent = true;
+        } else if (wantNeg && keepAlive) {
+          link.sendKey(negKey, true);
+          sent = true;
         }
         if (wantPos !== next.has(posKey)) {
           if (wantPos) next.add(posKey);
           else next.delete(posKey);
           link.sendKey(posKey, wantPos);
           changed = true;
+          sent = true;
+        } else if (wantPos && keepAlive) {
+          link.sendKey(posKey, true);
+          sent = true;
         }
       }
+      if (sent) lastSendTsRef.current = now;
       if (changed) setPressed(next);
 
       const l1Down = Boolean(pad.buttons[BUTTON.L1]?.pressed);
@@ -129,7 +149,6 @@ export default function GamepadControl() {
       }
       edgeRef.current.options = optionsDown;
 
-      const now = performance.now();
       if (now - lastDebugTsRef.current > 100) {
         lastDebugTsRef.current = now;
         const axesStr = pad.axes.map((a, i) => `${i}:${a.toFixed(2)}`).join(" ");
