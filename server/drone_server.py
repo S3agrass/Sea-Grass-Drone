@@ -63,38 +63,43 @@ CONTROL_PERIOD_S = 1.0 / CONTROL_HZ
 NEUTRAL_PWM = 1500
 LIGHT_ON_PWM = 1900
 
-# ---------------- feel tuning (ported from keyboard_control.py) ----------------
-# Top-speed / motor-authority knob. PWM never goes past NEUTRAL_PWM +/- this, so
-# 250 -> 1250..1750. The full range the vehicle allows is +/-400 (RC*_MIN 1100 /
-# RC*_MAX 1900); 250 is noticeably stronger than the old fixed +/-150 while still
-# leaving headroom. This is the main live-tunable dial — restart with e.g.
-# SEAGRASS_MAX_OFFSET=350 to go faster without editing code.
-MAX_PWM_OFFSET = int(os.environ.get("SEAGRASS_MAX_OFFSET", "250"))
+# ============================================================================
+#  FEEL TUNING — edit these while testing. Bigger/smaller effects noted inline.
+#  Ported from keyboard_control.py, then rebalanced so forward and turning both
+#  read as a smooth analog "push more = faster" spectrum (turning no longer
+#  snaps in ~4x quicker than forward and no longer guts forward mid-turn).
+#  Each knob also reads an env var, so you can override live without editing:
+#    SEAGRASS_MAX_OFFSET=300 SEAGRASS_STEER_OFFSET=180 python3 server/drone_server.py
+#  Restart the server after editing for changes to take effect.
+# ============================================================================
 
-# Ramp-up and decay are independent per-axis knobs, in seconds:
-#   *_RAMP_UP_S = how long a held/full input takes to build from stopped to full
-#                 power (bigger = gentler acceleration).
-#   *_DECAY_S   = how long it takes to fall back to stopped after release
-#                 (bigger = longer coast, smaller = crisper stop).
-# SURGE = forward/back, STEER = left/right yaw, DEPTH = ascend/descend.
-SURGE_RAMP_UP_S = 1.5
-SURGE_DECAY_S = 0.1
-STEER_RAMP_UP_S = 0.35
-STEER_DECAY_S = 0.25
-DEPTH_RAMP_UP_S = 1.0
-DEPTH_DECAY_S = 0.4
+# -- Top speed (peak PWM offset from NEUTRAL_PWM; vehicle hard limit is +/-400,
+#    i.e. RC*_MIN 1100 / RC*_MAX 1900) ---------------------------------------
+MAX_PWM_OFFSET   = int(os.environ.get("SEAGRASS_MAX_OFFSET",   "250"))  # forward/back + depth. Bigger = faster.
+STEER_MAX_OFFSET = int(os.environ.get("SEAGRASS_STEER_OFFSET", "150"))  # turn only. Bigger = sharper/spinnier turn.
 
-# During a turn, shed up to this fraction of forward power (scaled by how hard
-# the turn is) so the yaw differential dominates and the drone actually carves
-# the turn instead of plowing straight ahead.
-TURN_ASSIST = 0.45
+# -- Ramp-up = seconds a held/full input takes to build from stopped to full
+#    power (bigger = gentler); Decay = seconds to fall back to stopped after
+#    release (bigger = longer coast, smaller = crisper stop) ------------------
+SURGE_RAMP_UP_S  = float(os.environ.get("SEAGRASS_SURGE_RAMP", "0.8"))  # forward. Bigger = gentler/chiller.
+SURGE_DECAY_S    = 0.1
+STEER_RAMP_UP_S  = float(os.environ.get("SEAGRASS_STEER_RAMP", "0.6"))  # turn. Bigger = smoother, less snappy.
+STEER_DECAY_S    = 0.25
+DEPTH_RAMP_UP_S  = 1.0
+DEPTH_DECAY_S    = 0.4
 
-# Steering response curve. 0 = linear (turn rate tracks stick position 1:1).
-# Higher = more progressive: near center the stick gives only a gentle heading
-# trim, and the turn sharpens the closer the stick gets to full lock, so it
-# carves harder the further you push. Blends linear and cubic, so full lock
-# still reaches 100% turn authority. Live-tunable: SEAGRASS_STEER_EXPO=0.8.
+# -- Turn behaviour ----------------------------------------------------------
+# TURN_ASSIST: fraction of forward power shed mid-turn (scaled by how hard the
+# turn is) so the yaw differential stays pronounced instead of both motors
+# saturating forward. 0 = none (forward untouched), 0.45 = the old, aggressive
+# value that made forward vanish in turns.
+TURN_ASSIST = float(os.environ.get("SEAGRASS_TURN_ASSIST", "0.25"))
+# STEER_EXPO: steering response curve. 0 = linear (turn rate tracks stick 1:1).
+# Higher = more progressive — near center the stick gives a gentle heading trim
+# and the turn sharpens toward full lock. Blends linear and cubic, so full lock
+# still reaches 100% turn authority.
 STEER_EXPO = float(os.environ.get("SEAGRASS_STEER_EXPO", "0.7"))
+# ============================================================================
 
 # This 2-motor SimpleROV-3 frame has no lateral thruster, so left/right
 # steering rides on Yaw (ch4) — sending it on Lateral (ch6) is a channel the
@@ -391,15 +396,17 @@ def _expo(x, k):
     return (1.0 - k) * x + k * x ** 3
 
 
-def _ramp(current, target, dt, ramp_up_s, decay_s):
+def _ramp(current, target, dt, ramp_up_s, decay_s, max_offset):
     """Ease `current` PWM toward `target`. Pushing further from neutral in the
     same direction uses the (slower) ramp-up rate; anything heading back toward
-    or through neutral uses the (faster) decay rate so letting go feels crisp."""
+    or through neutral uses the (faster) decay rate so letting go feels crisp.
+    `max_offset` is this axis's peak PWM offset, so `*_RAMP_UP_S` stays "seconds
+    to reach full" even when steer and surge have different caps."""
     cur_off = current - NEUTRAL_PWM
     tgt_off = target - NEUTRAL_PWM
     moving_away = abs(tgt_off) > abs(cur_off) and cur_off * tgt_off >= 0
     secs = ramp_up_s if moving_away else decay_s
-    max_step = (MAX_PWM_OFFSET / secs) * dt
+    max_step = (max_offset / secs) * dt
     if current < target:
         return min(current + max_step, target)
     if current > target:
@@ -436,11 +443,11 @@ def channel_frame(dt):
     surge_in *= 1.0 - TURN_ASSIST * abs(steer_in)
 
     surge_pwm = _ramp(surge_pwm, NEUTRAL_PWM + surge_in * MAX_PWM_OFFSET,
-                      dt, SURGE_RAMP_UP_S, SURGE_DECAY_S)
-    steer_pwm = _ramp(steer_pwm, NEUTRAL_PWM + steer_in * MAX_PWM_OFFSET,
-                      dt, STEER_RAMP_UP_S, STEER_DECAY_S)
+                      dt, SURGE_RAMP_UP_S, SURGE_DECAY_S, MAX_PWM_OFFSET)
+    steer_pwm = _ramp(steer_pwm, NEUTRAL_PWM + steer_in * STEER_MAX_OFFSET,
+                      dt, STEER_RAMP_UP_S, STEER_DECAY_S, STEER_MAX_OFFSET)
     depth_pwm = _ramp(depth_pwm, NEUTRAL_PWM + depth_in * MAX_PWM_OFFSET,
-                      dt, DEPTH_RAMP_UP_S, DEPTH_DECAY_S)
+                      dt, DEPTH_RAMP_UP_S, DEPTH_DECAY_S, MAX_PWM_OFFSET)
 
     rc = [65535] * 8
     rc[4] = round(surge_pwm)
