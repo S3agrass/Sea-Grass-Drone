@@ -32,6 +32,7 @@ import json
 import os
 import signal
 import subprocess
+import threading
 import time
 
 import websockets
@@ -173,15 +174,20 @@ async def stop_detector():
 HEARTBEAT_S = 1.0  # 1 Hz — well under ArduSub's GCS failsafe timeout (~5s)
 
 
-async def heartbeat_loop():
-    """Announce ourselves to ArduSub as a GCS at 1 Hz.
+def _heartbeat_loop():
+    """Announce ourselves to ArduSub as a GCS at 1 Hz, forever.
 
-    Without this the vehicle trips its GCS/manual-control failsafe within a few
-    seconds of arming and refuses to hold arm ("MYGCS: 255, heartbeat lost" /
-    "Lost manual control"), so nothing ever moves. Mirrors the heartbeat loops
-    in sonar_logger.py and keyboard_control.py. Runs on the single asyncio
-    thread that owns `master`, so no send lock is needed; it can't be starved
-    because all CPU-heavy work (camera, detector) runs in separate subprocesses.
+    Runs on its own daemon thread (mirrors sonar_logger.py / keyboard_control.py)
+    so the heartbeat can NEVER be delayed by anything on the asyncio event loop —
+    websocket handling, telemetry reads, camera/detector control. Without a
+    steady GCS heartbeat ArduSub trips its GCS/manual-control failsafe within
+    seconds of arming ("MYGCS: 255, heartbeat lost" / "Lost manual control") and
+    the vehicle stops responding to input.
+
+    The only other place we send on this link is the event-loop thread (RC
+    overrides / arm). Each mavlink send is a single write() of a complete frame,
+    so the two threads can't interleave a message mid-frame — the same
+    main-thread-sends + heartbeat-thread pattern keyboard_control.py already uses.
     """
     while True:
         if master:
@@ -193,7 +199,11 @@ async def heartbeat_loop():
                 )
             except OSError:
                 pass  # link dropped; read_telemetry surfaces it on next read
-        await asyncio.sleep(HEARTBEAT_S)
+        time.sleep(HEARTBEAT_S)
+
+
+def start_heartbeat_thread():
+    threading.Thread(target=_heartbeat_loop, daemon=True).start()
 
 
 def connect_pixhawk():
@@ -534,10 +544,11 @@ async def client_handler(ws):
 
 async def main():
     connect_pixhawk()
-    # Announce ourselves as a GCS at 1 Hz for the whole server lifetime (not
-    # gated on a client being connected) so ArduSub never trips its heartbeat
-    # failsafe.
-    asyncio.create_task(heartbeat_loop())
+    # Announce ourselves as a GCS at 1 Hz on a dedicated daemon thread, for the
+    # whole server lifetime (not gated on a client being connected), so the
+    # heartbeat is never delayed by the asyncio loop and ArduSub never trips its
+    # heartbeat failsafe.
+    start_heartbeat_thread()
     async with websockets.serve(client_handler, WS_HOST, WS_PORT):
         print(f"Seagrass drone server listening on ws://{WS_HOST}:{WS_PORT}")
         await asyncio.Future()
