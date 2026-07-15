@@ -12,6 +12,10 @@ const mockDrone = {
   cameraActive: false,
   cameraOn: vi.fn(),
   cameraOff: vi.fn(),
+  detectActive: false,
+  detections: [],
+  detectOn: vi.fn(),
+  detectOff: vi.fn(),
 };
 
 // Replace useDrone with our mock.
@@ -22,7 +26,13 @@ vi.mock('../context/DroneContext', () => ({
 let mockCtx;
 
 beforeEach(() => {
-  mockCtx = { ...mockDrone, cameraOn: vi.fn(), cameraOff: vi.fn() };
+  mockCtx = {
+    ...mockDrone,
+    cameraOn: vi.fn(),
+    cameraOff: vi.fn(),
+    detectOn: vi.fn(),
+    detectOff: vi.fn(),
+  };
   vi.clearAllMocks();
 });
 
@@ -87,6 +97,40 @@ describe('CameraView — placeholder states', () => {
   it('disables Expand when not live', () => {
     render(<CameraView />);
     expect(screen.getByRole('button', { name: /expand/i })).toBeDisabled();
+  });
+});
+
+describe('CameraView — detection toggle', () => {
+  it('disables the AI toggle when the camera is off', () => {
+    render(<CameraView />);
+    expect(screen.getByRole('button', { name: /^ai$/i })).toBeDisabled();
+  });
+
+  it('enables the AI toggle when connected and camera is on', () => {
+    mockCtx.cameraActive = true;
+    render(<CameraView />);
+    expect(screen.getByRole('button', { name: /^ai$/i })).not.toBeDisabled();
+  });
+
+  it('calls detectOn when the AI toggle is clicked while off', () => {
+    mockCtx.cameraActive = true;
+    render(<CameraView />);
+    fireEvent.click(screen.getByRole('button', { name: /^ai$/i }));
+    expect(mockCtx.detectOn).toHaveBeenCalledOnce();
+  });
+
+  it('calls detectOff when the AI toggle is clicked while on', () => {
+    mockCtx.cameraActive = true;
+    mockCtx.detectActive = true;
+    render(<CameraView />);
+    fireEvent.click(screen.getByRole('button', { name: /^ai$/i }));
+    expect(mockCtx.detectOff).toHaveBeenCalledOnce();
+  });
+
+  it('renders the detection overlay canvas for a WHEP stream', () => {
+    mockCtx.cameraActive = true;
+    const { container } = render(<CameraView />);
+    expect(container.querySelector('canvas.detection-overlay')).toBeInTheDocument();
   });
 });
 

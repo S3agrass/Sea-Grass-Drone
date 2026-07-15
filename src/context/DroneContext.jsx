@@ -57,8 +57,28 @@ export function DroneProvider({ children }) {
     depth: null,
   });
   const [cameraActive, setCameraActive] = useState(false);
+  const [detectActive, setDetectActive] = useState(false);
+  const [detections, setDetections] = useState([]); // latest bbox array
   const [demoMode, setDemoMode] = useState(
     () => localStorage.getItem("seagrass-demo") === "1",
+  );
+
+  /* ---------- operator toasts (arm rejections, link errors, etc.) ---------- */
+  const [toasts, setToasts] = useState([]); // [{ id, level, message }]
+  const toastId = useRef(0);
+  const pushToast = useCallback((level, message) => {
+    if (!message) return;
+    const id = ++toastId.current;
+    setToasts((list) => [...list.slice(-4), { id, level, message }]);
+    // auto-dismiss after a while; errors linger longer than warnings
+    setTimeout(
+      () => setToasts((list) => list.filter((t) => t.id !== id)),
+      level === "error" ? 8000 : 5000,
+    );
+  }, []);
+  const dismissToast = useCallback(
+    (id) => setToasts((list) => list.filter((t) => t.id !== id)),
+    [],
   );
 
   /* ---------- helm ownership (keyboard vs. gamepad) ---------- */
@@ -158,6 +178,8 @@ export function DroneProvider({ children }) {
           setArmed(false);
           setPixhawkOk(false);
           setCameraActive(false);
+          setDetectActive(false);
+          setDetections([]);
         }
       } else if (event.type === "message") {
         const m = event.data;
@@ -166,12 +188,20 @@ export function DroneProvider({ children }) {
           if (m.mode) setFlightMode(m.mode);
           setPixhawkOk(Boolean(m.pixhawk));
           setCameraActive(Boolean(m.camera));
+          setDetectActive(Boolean(m.detect));
         } else if (m.type === "telemetry") {
           setTelemetry((t) => ({ ...t, ...m }));
+        } else if (m.type === "detections") {
+          setDetections(m.boxes || []);
+        } else if (m.type === "notice") {
+          // Server-side operator alert (arm rejection, PreArm reason, …).
+          pushToast(m.level === "error" ? "error" : "warn", m.message);
+        } else if (m.type === "error") {
+          pushToast("error", m.message);
         }
       }
     });
-  }, [link]);
+  }, [link, pushToast]);
 
   /* ---------- demo mode simulation ---------- */
   useEffect(() => {
@@ -200,6 +230,8 @@ export function DroneProvider({ children }) {
 
   const cameraOn = useCallback(() => link.cameraOn(), [link]);
   const cameraOff = useCallback(() => link.cameraOff(), [link]);
+  const detectOn = useCallback(() => link.detectOn(), [link]);
+  const detectOff = useCallback(() => link.detectOff(), [link]);
 
   useEffect(() => () => link.disconnect(false), [link]);
 
@@ -217,6 +249,10 @@ export function DroneProvider({ children }) {
     cameraActive,
     cameraOn,
     cameraOff,
+    detectActive,
+    detections,
+    detectOn,
+    detectOff,
     linkStatus,
     linkDetail,
     armed,
@@ -228,6 +264,9 @@ export function DroneProvider({ children }) {
     activeInput,
     claimInput,
     releaseInput,
+    toasts,
+    pushToast,
+    dismissToast,
   };
 
   return <DroneContext.Provider value={value}>{children}</DroneContext.Provider>;

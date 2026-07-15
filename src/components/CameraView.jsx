@@ -71,6 +71,10 @@ export default function CameraView() {
     cameraActive,
     cameraOn,
     cameraOff,
+    detectActive,
+    detections,
+    detectOn,
+    detectOff,
   } = useDrone();
 
   const streamUrl = activeDrone?.camera_url || "";
@@ -87,6 +91,7 @@ export default function CameraView() {
   const [fullscreen, setFullscreen] = useState(false);
 
   const videoRef = useRef(null);
+  const canvasRef = useRef(null);
   const timerRef = useRef(null);
 
   // When the camera subprocess starts/stops on the Pi, or the stream URL
@@ -131,6 +136,61 @@ export default function CameraView() {
       if (videoRef.current) videoRef.current.srcObject = null;
     };
   }, [feedState, type, streamUrl]);
+
+  // Detection overlay — draw normalized bounding boxes onto a canvas sized to
+  // the displayed video. Boxes arrive as fractions (0-1) of the full source
+  // frame; the video is shown with object-fit: cover, so we replicate that
+  // scale/crop here to keep boxes aligned with what the operator sees.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const video = videoRef.current;
+    if (!canvas || !video) return;
+
+    const draw = () => {
+      const rect = video.getBoundingClientRect();
+      if (canvas.width !== rect.width || canvas.height !== rect.height) {
+        canvas.width = rect.width;
+        canvas.height = rect.height;
+      }
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return; // jsdom / no 2D context
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (!detectActive) return;
+
+      // Replicate object-fit: cover — scale to fill, centre, crop the overflow.
+      const vw = video.videoWidth || rect.width;
+      const vh = video.videoHeight || rect.height;
+      const scale = Math.max(rect.width / vw, rect.height / vh);
+      const dispW = vw * scale;
+      const dispH = vh * scale;
+      const offX = (rect.width - dispW) / 2;
+      const offY = (rect.height - dispH) / 2;
+
+      ctx.font = "12px monospace";
+      for (const box of detections) {
+        const x = offX + box.x * dispW;
+        const y = offY + box.y * dispH;
+        const w = box.w * dispW;
+        const h = box.h * dispH;
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "#00ffa0";
+        ctx.strokeRect(x, y, w, h);
+        const label = `${box.cls} ${Math.round(box.conf * 100)}%`;
+        const tw = ctx.measureText(label).width;
+        ctx.fillStyle = "rgba(0,0,0,0.6)";
+        ctx.fillRect(x, y - 15, tw + 6, 14);
+        ctx.fillStyle = "#00ffa0";
+        ctx.fillText(label, x + 3, y - 4);
+      }
+    };
+
+    draw();
+    // Re-fit and redraw when the video's displayed size changes (window resize,
+    // fullscreen toggle).
+    const ro = new ResizeObserver(draw);
+    ro.observe(video);
+    return () => ro.disconnect();
+  }, [detections, detectActive, fullscreen]);
 
   // Recording timer.
   useEffect(() => {
@@ -181,6 +241,11 @@ export default function CameraView() {
           muted
           style={{ opacity: feedState === "live" ? 1 : 0 }}
         />
+      )}
+
+      {/* Detection bounding-box overlay — drawn over the live video */}
+      {type === "webrtc" && (
+        <canvas ref={canvasRef} className="detection-overlay" />
       )}
 
       {/* Legacy MJPEG img element */}
@@ -271,6 +336,25 @@ export default function CameraView() {
           >
             <span className="toggle-knob" />
             {cameraActive ? "On" : "Off"}
+          </button>
+
+          {/* Object detection toggle — needs the camera running to have frames */}
+          <button
+            className={`toggle detect-power ${detectActive ? "on" : ""}`}
+            onClick={detectActive ? detectOff : detectOn}
+            disabled={!connected || !cameraActive}
+            title={
+              !connected
+                ? "Connect to drone first"
+                : !cameraActive
+                ? "Turn the camera on first"
+                : detectActive
+                ? "Turn object detection off"
+                : "Turn object detection on"
+            }
+          >
+            <span className="toggle-knob" />
+            AI
           </button>
 
           <button

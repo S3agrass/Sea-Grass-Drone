@@ -274,14 +274,17 @@ DroneLink.connect(url, token)
 | `{ type: "stop" }` | Space bar / E-STOP | Sends neutral PWM to all channels |
 | `{ type: "camera_on" }` | Camera power toggle (off → on) | Starts `camera_stream.py` subprocess |
 | `{ type: "camera_off" }` | Camera power toggle (on → off) | Terminates `camera_stream.py` subprocess |
+| `{ type: "detect_on" }` | AI toggle (off → on) | Starts `vision/detector.py` subprocess |
+| `{ type: "detect_off" }` | AI toggle (on → off) | Terminates the detector subprocess |
 
 **Pi → Browser**
 
 | Message | When sent |
 |---|---|
 | `{ type: "hello_ok" }` | After successful auth |
-| `{ type: "state", armed, mode, pixhawk, camera }` | After every command + every 0.5s |
+| `{ type: "state", armed, mode, pixhawk, camera, detect }` | After every command + every 0.5s |
 | `{ type: "telemetry", heading, groundspeed, battery, lat, lon, depth }` | Every 0.5s when data available |
+| `{ type: "detections", boxes: [{ cls, conf, x, y, w, h }], ts }` | ~5×/sec while the detector runs (coords are 0–1 fractions) |
 | `{ type: "error", message }` | Bad token, duplicate helm, etc. |
 
 ### RC channel mapping (matches `keyboard_control.py`)

@@ -14,3 +14,13 @@ function makeStorage() {
 
 Object.defineProperty(global, 'localStorage', { value: makeStorage(), writable: true });
 Object.defineProperty(global, 'sessionStorage', { value: makeStorage(), writable: true });
+
+// jsdom has no ResizeObserver — CameraView's detection overlay uses it to
+// re-fit the canvas. Provide a no-op stub so components mount in tests.
+if (typeof global.ResizeObserver === 'undefined') {
+  global.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+}

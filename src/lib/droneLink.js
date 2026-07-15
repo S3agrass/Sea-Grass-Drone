@@ -8,10 +8,14 @@
  *     { type: "arm" } / { type: "disarm" }
  *     { type: "mode", mode: "MANUAL" }
  *     { type: "stop" }                       all-stop (space bar / E-STOP)
+ *     { type: "camera_on" } / { type: "camera_off" }
+ *     { type: "detect_on" } / { type: "detect_off" }   toggle object detection
  *   server → client:
- *     { type: "state", armed, mode, pixhawk }
+ *     { type: "state", armed, mode, pixhawk, camera, detect }
  *     { type: "telemetry", heading, groundspeed, battery, lat, lon, depth }
+ *     { type: "detections", boxes: [{ cls, conf, x, y, w, h }], ts }
  *     { type: "error", message }
+ *     { type: "notice", level: "error"|"warn", message }   arm rejections, PreArm reasons
  *     { type: "hello_ok" }
  */
 export default class DroneLink {
@@ -124,4 +128,6 @@ export default class DroneLink {
   allStop() { return this.send({ type: "stop" }); }
   cameraOn() { return this.send({ type: "camera_on" }); }
   cameraOff() { return this.send({ type: "camera_off" }); }
+  detectOn() { return this.send({ type: "detect_on" }); }
+  detectOff() { return this.send({ type: "detect_off" }); }
 }

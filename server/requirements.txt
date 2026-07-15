@@ -1,0 +1,18 @@
+# Seagrass Pi-side Python dependencies.
+#
+# Install on the Raspberry Pi 5 (64-bit Pi OS):
+#   pip install -r requirements.txt --break-system-packages
+#
+# License note: every dependency here is permissive (Apache-2.0 / MIT / BSD),
+# so the surrounding source can later be closed without a copyleft obligation.
+# opencv is pinned >=4.5 because that is the release that moved from BSD-3 to
+# Apache-2.0.
+
+# --- drone control (existing) ---
+pymavlink        # MAVLink bridge to the Pixhawk
+websockets       # async WebSocket server
+
+# --- vision (object detection + underwater filter) ---
+onnxruntime               # MIT   — CPU inference engine for the YOLOX ONNX model
+opencv-python-headless>=4.5  # Apache-2.0 — underwater filter + image ops (headless: no GUI deps)
+numpy                     # BSD-3  — array glue for pre/post-processing

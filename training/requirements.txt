@@ -1,0 +1,7 @@
+# Fine-tuning deps — dev machine (ideally with a CUDA GPU), NOT the Pi.
+# Install YOLOX itself separately from its git repo (see README step 0).
+torch
+torchvision
+pycocotools
+onnx
+onnxruntime   # to sanity-check the exported model before shipping to the Pi

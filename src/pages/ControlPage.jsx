@@ -6,6 +6,7 @@ import CameraView from "../components/CameraView";
 import KeyboardControl from "../components/KeyboardControl";
 import GamepadControl from "../components/GamepadControl";
 import ConnectionPanel from "../components/ConnectionPanel";
+import Toasts from "../components/Toasts";
 import {
   Compass,
   DepthMeter,
@@ -52,6 +53,7 @@ export default function ControlPage() {
   return (
     <div className="app-shell">
       <TopBar />
+      <Toasts />
       <div className="deck">
         <aside className="deck-left">
           <ConnectionPanel />

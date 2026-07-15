@@ -60,6 +60,18 @@ describe('DroneLink — camera commands', () => {
     expect(link.cameraOn()).toBe(false);
   });
 
+  it('detectOn sends { type: "detect_on" }', () => {
+    currentWs._sent.length = 0;
+    link.detectOn();
+    expect(currentWs._sent.at(-1)).toEqual({ type: 'detect_on' });
+  });
+
+  it('detectOff sends { type: "detect_off" }', () => {
+    currentWs._sent.length = 0;
+    link.detectOff();
+    expect(currentWs._sent.at(-1)).toEqual({ type: 'detect_off' });
+  });
+
   it('allStop sends { type: "stop" }', () => {
     currentWs._sent.length = 0;
     link.allStop();
