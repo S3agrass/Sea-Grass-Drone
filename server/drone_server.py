@@ -61,9 +61,33 @@ CONTROL_HZ = 50
 CONTROL_PERIOD_S = 1.0 / CONTROL_HZ
 
 NEUTRAL_PWM = 1500
-FORWARD_PWM = 1650
-BACKWARD_PWM = 1350
 LIGHT_ON_PWM = 1900
+
+# ---------------- feel tuning (ported from keyboard_control.py) ----------------
+# Top-speed / motor-authority knob. PWM never goes past NEUTRAL_PWM +/- this, so
+# 250 -> 1250..1750. The full range the vehicle allows is +/-400 (RC*_MIN 1100 /
+# RC*_MAX 1900); 250 is noticeably stronger than the old fixed +/-150 while still
+# leaving headroom. This is the main live-tunable dial — restart with e.g.
+# SEAGRASS_MAX_OFFSET=350 to go faster without editing code.
+MAX_PWM_OFFSET = int(os.environ.get("SEAGRASS_MAX_OFFSET", "250"))
+
+# Ramp-up and decay are independent per-axis knobs, in seconds:
+#   *_RAMP_UP_S = how long a held/full input takes to build from stopped to full
+#                 power (bigger = gentler acceleration).
+#   *_DECAY_S   = how long it takes to fall back to stopped after release
+#                 (bigger = longer coast, smaller = crisper stop).
+# SURGE = forward/back, STEER = left/right yaw, DEPTH = ascend/descend.
+SURGE_RAMP_UP_S = 1.5
+SURGE_DECAY_S = 0.1
+STEER_RAMP_UP_S = 0.35
+STEER_DECAY_S = 0.25
+DEPTH_RAMP_UP_S = 1.0
+DEPTH_DECAY_S = 0.4
+
+# During a turn, shed up to this fraction of forward power (scaled by how hard
+# the turn is) so the yaw differential dominates and the drone actually carves
+# the turn instead of plowing straight ahead.
+TURN_ASSIST = 0.45
 
 # This 2-motor SimpleROV-3 frame has no lateral thruster, so left/right
 # steering rides on Yaw (ch4) — sending it on Lateral (ch6) is a channel the
@@ -252,6 +276,9 @@ def set_rc(channel, pwm):
 
 
 def all_stop():
+    # Zero every input source and the ramped PWM state first, so the control_loop
+    # doesn't immediately ramp back up from the pre-stop speed on its next tick.
+    reset_motion_state()
     if not master:
         return
     # ArduSub's manual-control mixer uses a fixed RC scheme: ch1=Pitch,
@@ -309,41 +336,104 @@ def do_set_mode(new_mode):
         print(f"set_mode failed: {exc}")
 
 
-# ---------------- key state -> RC channels ----------------
+# ---------------- key + analog state -> RC channels ----------------
+# Digital keys (web KeyboardControl.jsx / GamepadControl.jsx) contribute
+# full-scale +/-1 per axis; analog axis targets (terminal_control.py's shaped
+# PS4 sticks) contribute proportionally. The two are summed and clamped so
+# either source can drive and opposing inputs cancel — same union approach as
+# keyboard_control.py.
 pressed = set()
+axis_targets = {"surge": 0.0, "steer": 0.0, "depth": 0.0}
+
+# Current commanded PWM per axis, ramped a little each tick toward the target
+# instead of snapping, so pushing a stick further (or holding a key longer)
+# builds speed toward MAX_PWM_OFFSET rather than going 0-to-100 instantly.
+surge_pwm = NEUTRAL_PWM   # ch5 - forward/back
+steer_pwm = NEUTRAL_PWM   # STEER_CHANNEL - left/right yaw
+depth_pwm = NEUTRAL_PWM   # ch3 - ascend/descend
 
 
-def channel_frame():
-    """Build one combined RC_CHANNELS_OVERRIDE frame from the current key state.
+def motion_active():
+    """True while any input source is asking for motion — used by the watchdog
+    so it also trips on a silent client that left the analog sticks deflected,
+    not only one that left a digital key held."""
+    return bool(pressed) or any(abs(v) > 1e-3 for v in axis_targets.values())
 
-    Forward -> ch5, steering -> ch4 (Yaw), vertical -> ch3 per ArduSub's fixed
-    manual-control scheme. Steering rides on Yaw, not Lateral (ch6): this
-    2-motor frame has no lateral thruster, so ch6 has zero authority and ch4's
-    differential is what actually turns the vehicle (mirrors
-    keyboard_control.py's update_flight). ch1/ch2 (Pitch/Roll), the light
-    channel (ch7) and every unused channel are left at 65535 ("ignore this
-    channel") so a separate light override (set_rc(LIGHT_CHANNEL, ...)) is never
-    clobbered — the same combined-frame approach keyboard_control.py uses.
+
+def reset_motion_state():
+    """Zero every input source and the ramped PWM state, so an all-stop is a
+    real stop — the next tick can't resume ramping from the pre-stop speed."""
+    global surge_pwm, steer_pwm, depth_pwm
+    pressed.clear()
+    axis_targets["surge"] = axis_targets["steer"] = axis_targets["depth"] = 0.0
+    surge_pwm = steer_pwm = depth_pwm = NEUTRAL_PWM
+
+
+def _axis_value(pos_key, neg_key, analog):
+    """Union of a digital key contribution (+/-1) with the analog axis, clamped
+    to [-1, 1]."""
+    digital = (1.0 if pos_key in pressed else 0.0) - (1.0 if neg_key in pressed else 0.0)
+    return max(-1.0, min(1.0, digital + analog))
+
+
+def _ramp(current, target, dt, ramp_up_s, decay_s):
+    """Ease `current` PWM toward `target`. Pushing further from neutral in the
+    same direction uses the (slower) ramp-up rate; anything heading back toward
+    or through neutral uses the (faster) decay rate so letting go feels crisp."""
+    cur_off = current - NEUTRAL_PWM
+    tgt_off = target - NEUTRAL_PWM
+    moving_away = abs(tgt_off) > abs(cur_off) and cur_off * tgt_off >= 0
+    secs = ramp_up_s if moving_away else decay_s
+    max_step = (MAX_PWM_OFFSET / secs) * dt
+    if current < target:
+        return min(current + max_step, target)
+    if current > target:
+        return max(current - max_step, target)
+    return current
+
+
+def channel_frame(dt):
+    """Build one combined RC_CHANNELS_OVERRIDE frame, ramped by `dt` seconds.
+
+    Combines digital keys + analog axis targets, applies turn-assist, and ramps
+    each axis toward NEUTRAL_PWM + input*MAX_PWM_OFFSET. Forward -> ch5,
+    steering -> ch4 (Yaw), vertical -> ch3 per ArduSub's fixed manual-control
+    scheme. Steering rides on Yaw, not Lateral (ch6): this 2-motor frame has no
+    lateral thruster, so ch6 has zero authority and ch4's differential is what
+    actually turns the vehicle (mirrors keyboard_control.py's update_flight).
+    ch1/ch2 (Pitch/Roll), the light channel (ch7) and every unused channel are
+    left at 65535 ("ignore this channel") so a separate light override
+    (set_rc(LIGHT_CHANNEL, ...)) is never clobbered.
     """
+    global surge_pwm, steer_pwm, depth_pwm
+
+    surge_in = _axis_value("w", "s", axis_targets["surge"])
+    steer_in = _axis_value("d", "a", axis_targets["steer"])
+    depth_in = _axis_value("q", "e", axis_targets["depth"])
+
+    # The harder the turn, the more forward power is shed so the yaw differential
+    # between the two motors stays pronounced instead of both saturating forward.
+    surge_in *= 1.0 - TURN_ASSIST * abs(steer_in)
+
+    surge_pwm = _ramp(surge_pwm, NEUTRAL_PWM + surge_in * MAX_PWM_OFFSET,
+                      dt, SURGE_RAMP_UP_S, SURGE_DECAY_S)
+    steer_pwm = _ramp(steer_pwm, NEUTRAL_PWM + steer_in * MAX_PWM_OFFSET,
+                      dt, STEER_RAMP_UP_S, STEER_DECAY_S)
+    depth_pwm = _ramp(depth_pwm, NEUTRAL_PWM + depth_in * MAX_PWM_OFFSET,
+                      dt, DEPTH_RAMP_UP_S, DEPTH_DECAY_S)
+
     rc = [65535] * 8
-
-    fwd, back = "w" in pressed, "s" in pressed
-    rc[4] = FORWARD_PWM if fwd and not back else BACKWARD_PWM if back and not fwd else NEUTRAL_PWM
-
-    right, left = "d" in pressed, "a" in pressed
-    rc[STEER_CHANNEL - 1] = FORWARD_PWM if right and not left else BACKWARD_PWM if left and not right else NEUTRAL_PWM
-
-    rise, dive = "q" in pressed, "e" in pressed
-    rc[2] = FORWARD_PWM if rise and not dive else BACKWARD_PWM if dive and not rise else NEUTRAL_PWM
-
+    rc[4] = round(surge_pwm)
+    rc[STEER_CHANNEL - 1] = round(steer_pwm)
+    rc[2] = round(depth_pwm)
     return rc
 
 
-def send_control_frame():
-    """Push the current channel frame to the Pixhawk as a single RC override."""
+def send_control_frame(dt):
+    """Push the current ramped channel frame to the Pixhawk as one RC override."""
     if not master:
         return
-    rc = channel_frame()
+    rc = channel_frame(dt)
     master.mav.rc_channels_override_send(
         master.target_system, master.target_component, *rc
     )
@@ -352,17 +442,28 @@ def send_control_frame():
 def handle_key(key, is_pressed):
     key = key.lower()
     if key in ("w", "a", "s", "d", "q", "e"):
+        # Just update held state — control_loop ramps the PWM toward the target
+        # every tick at CONTROL_HZ, so there's no fixed-frame snap to send here.
         if is_pressed:
             pressed.add(key)
         else:
             pressed.discard(key)
-        # Update held state and send immediately for zero-latency response; the
-        # control_loop keeps re-sending this frame at CONTROL_HZ regardless.
-        send_control_frame()
     elif key == "l" and is_pressed:
         set_rc(LIGHT_CHANNEL, LIGHT_ON_PWM)
     elif key == "k" and is_pressed:
         set_rc(LIGHT_CHANNEL, NEUTRAL_PWM)
+
+
+def handle_axis(msg):
+    """Analog stick update from terminal_control.py: floats in [-1, 1] per axis,
+    already deadzone+expo shaped client-side. Stored as targets the control_loop
+    ramps toward."""
+    for name in ("surge", "steer", "depth"):
+        if name in msg:
+            try:
+                axis_targets[name] = max(-1.0, min(1.0, float(msg[name])))
+            except (TypeError, ValueError):
+                pass
 
 
 # ---------------- telemetry ----------------
@@ -467,9 +568,9 @@ async def client_handler(ws):
                 await send({"type": "notice", "level": level, "message": message})
             await state()
             # watchdog — force neutral if the client went silent mid-motion
-            if helm_holder is ws and pressed and time.time() - last_seen > WATCHDOG_S:
-                pressed.clear()
-                all_stop()
+            # (a held key OR a deflected analog stick both count as motion)
+            if helm_holder is ws and motion_active() and time.time() - last_seen > WATCHDOG_S:
+                all_stop()  # also clears keys + axes via reset_motion_state
                 print("Watchdog: all stop")
             await asyncio.sleep(0.5)
 
@@ -519,11 +620,13 @@ async def client_handler(ws):
 
             if mtype == "key":
                 handle_key(msg.get("key", ""), bool(msg.get("pressed")))
+            elif mtype == "axis":
+                handle_axis(msg)
             elif mtype == "arm":
                 do_arm()
                 await state()
             elif mtype == "disarm":
-                pressed.clear()
+                reset_motion_state()
                 do_disarm()
                 await state()
             elif mtype == "mode":
@@ -589,8 +692,12 @@ async def control_loop():
     and unconditionally rather than gated on `armed`, so there's no gap at the
     instant of arming while the HEARTBEAT-driven `armed` flag catches up.
     """
+    last_tick = time.time()
     while True:
-        send_control_frame()
+        now = time.time()
+        dt = now - last_tick
+        last_tick = now
+        send_control_frame(dt)
         await asyncio.sleep(CONTROL_PERIOD_S)
 
 
