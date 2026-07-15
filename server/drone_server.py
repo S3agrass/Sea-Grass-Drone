@@ -89,6 +89,13 @@ DEPTH_DECAY_S = 0.4
 # the turn instead of plowing straight ahead.
 TURN_ASSIST = 0.45
 
+# Steering response curve. 0 = linear (turn rate tracks stick position 1:1).
+# Higher = more progressive: near center the stick gives only a gentle heading
+# trim, and the turn sharpens the closer the stick gets to full lock, so it
+# carves harder the further you push. Blends linear and cubic, so full lock
+# still reaches 100% turn authority. Live-tunable: SEAGRASS_STEER_EXPO=0.8.
+STEER_EXPO = float(os.environ.get("SEAGRASS_STEER_EXPO", "0.7"))
+
 # This 2-motor SimpleROV-3 frame has no lateral thruster, so left/right
 # steering rides on Yaw (ch4) — sending it on Lateral (ch6) is a channel the
 # frame has zero authority over, which is why the stick moved but nothing did.
@@ -376,6 +383,14 @@ def _axis_value(pos_key, neg_key, analog):
     return max(-1.0, min(1.0, digital + analog))
 
 
+def _expo(x, k):
+    """Progressive response curve: blend linear and cubic by k in [0, 1],
+    keeping sign. k=0 is straight linear; k=1 is fully cubic, which bows the
+    middle down so small inputs stay gentle while +/-1 still maps to +/-1. Used
+    to make steering trim finely near center and carve harder toward full lock."""
+    return (1.0 - k) * x + k * x ** 3
+
+
 def _ramp(current, target, dt, ramp_up_s, decay_s):
     """Ease `current` PWM toward `target`. Pushing further from neutral in the
     same direction uses the (slower) ramp-up rate; anything heading back toward
@@ -410,6 +425,11 @@ def channel_frame(dt):
     surge_in = _axis_value("w", "s", axis_targets["surge"])
     steer_in = _axis_value("d", "a", axis_targets["steer"])
     depth_in = _axis_value("q", "e", axis_targets["depth"])
+
+    # Progressive steering: gentle heading trim near center, sharper carve toward
+    # full stick. Applied before turn-assist so the forward-power shed also grows
+    # progressively with how hard you're actually turning, not stick position.
+    steer_in = _expo(steer_in, STEER_EXPO)
 
     # The harder the turn, the more forward power is shed so the yaw differential
     # between the two motors stays pronounced instead of both saturating forward.
