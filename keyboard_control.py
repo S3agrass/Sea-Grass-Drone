@@ -244,12 +244,17 @@ def update_flight(dt):
 # (one motor slows while the other holds speed). ArduSub's mixer for this
 # 2-motor frame does that differential split on its own from the ch5
 # (forward) + STEER_CHANNEL (yaw) commands — same as W/A/S/D below.
+# Guard on hasattr(keyboard, 'Key') too, not just HAS_PYNPUT: over headless SSH
+# (no display) the pynput import succeeds but its backend can't initialize, so
+# keyboard.Key never gets attached and referencing keyboard.Key.* here would
+# crash at import. If it's missing we fall back to an empty map and gamepad-only
+# control (the pygame path works independently).
 ARROW_KEY_MAP = {
     keyboard.Key.up: 'w',
     keyboard.Key.down: 's',
     keyboard.Key.left: 'a',
     keyboard.Key.right: 'd',
-} if HAS_PYNPUT else {}
+} if HAS_PYNPUT and hasattr(keyboard, 'Key') else {}
 
 def on_press(key):
     k = ARROW_KEY_MAP.get(key)
