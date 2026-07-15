@@ -2,10 +2,13 @@
 Seagrass drone server — runs on the Raspberry Pi 5.
 
 Bridges the React GCS to the Pixhawk over MAVLink. Mirrors the channel
-mapping in keyboard_control.py so the UI and the CLI tool behave identically:
+mapping in keyboard_control.py so the UI and the CLI tool behave identically.
+Steering rides on Yaw (ch4), not Lateral (ch6): this 2-motor frame has no
+lateral thruster, so ch6 has no authority — ch4's differential is what turns
+the vehicle. Light is on ch7 so it never fights steering.
 
-    W/S -> ch1 propulsion    A/D -> ch2 steering
-    Q/E -> ch3 buoyancy      L/K -> ch4 light
+    W/S -> ch5 forward         A/D -> ch4 steering (yaw)
+    Q/E -> ch3 vertical        L/K -> ch7 light
 
 Security:
   - Set SEAGRASS_TOKEN in the environment; every client must send it in a
@@ -61,6 +64,16 @@ NEUTRAL_PWM = 1500
 FORWARD_PWM = 1650
 BACKWARD_PWM = 1350
 LIGHT_ON_PWM = 1900
+
+# This 2-motor SimpleROV-3 frame has no lateral thruster, so left/right
+# steering rides on Yaw (ch4) — sending it on Lateral (ch6) is a channel the
+# frame has zero authority over, which is why the stick moved but nothing did.
+# Light rides on its own spare channel (ch7) so it can't fight steering the way
+# it did when it shared ch4. Both mirror keyboard_control.py, which is the
+# known-good mapping that drives correctly on this hardware. Adjust LIGHT_CHANNEL
+# if the light relay isn't wired to ch7 (check QGroundControl SERVOx_FUNCTION).
+STEER_CHANNEL = 4
+LIGHT_CHANNEL = 7
 
 # ---------------- MAVLink layer ----------------
 master = None
@@ -243,12 +256,14 @@ def all_stop():
         return
     # ArduSub's manual-control mixer uses a fixed RC scheme: ch1=Pitch,
     # ch2=Roll, ch3=Throttle/vertical, ch4=Yaw, ch5=Forward, ch6=Lateral.
-    # This 2-motor SimpleROV-3 frame only has authority over ch3/ch5/ch6
-    # (mirrors keyboard_control.py's all_stop).
+    # This 2-motor SimpleROV-3 frame has authority over ch3 (vertical), ch4
+    # (steering/yaw) and ch5 (forward) — not ch6 (lateral), which has no
+    # thruster. Neutral those three and leave the light channel alone (mirrors
+    # keyboard_control.py's all_stop).
     rc = [65535] * 8
-    rc[2] = NEUTRAL_PWM  # channel 3 - throttle/vertical
-    rc[4] = NEUTRAL_PWM  # channel 5 - forward
-    rc[5] = NEUTRAL_PWM  # channel 6 - lateral
+    rc[2] = NEUTRAL_PWM               # channel 3 - throttle/vertical
+    rc[STEER_CHANNEL - 1] = NEUTRAL_PWM  # channel 4 - steering/yaw
+    rc[4] = NEUTRAL_PWM               # channel 5 - forward
     master.mav.rc_channels_override_send(
         master.target_system, master.target_component, *rc
     )
@@ -301,12 +316,14 @@ pressed = set()
 def channel_frame():
     """Build one combined RC_CHANNELS_OVERRIDE frame from the current key state.
 
-    Forward -> ch5, lateral -> ch6, vertical -> ch3 per ArduSub's fixed
-    manual-control scheme — not ch1/ch2 (Pitch/Roll), which this frame has no
-    authority over (mirrors keyboard_control.py's update_flight). Light (ch4)
-    and every unused channel are left at 65535 ("ignore this channel") so a
-    separate light override (set_rc(4, ...)) is never clobbered — the same
-    combined-frame approach keyboard_control.py uses.
+    Forward -> ch5, steering -> ch4 (Yaw), vertical -> ch3 per ArduSub's fixed
+    manual-control scheme. Steering rides on Yaw, not Lateral (ch6): this
+    2-motor frame has no lateral thruster, so ch6 has zero authority and ch4's
+    differential is what actually turns the vehicle (mirrors
+    keyboard_control.py's update_flight). ch1/ch2 (Pitch/Roll), the light
+    channel (ch7) and every unused channel are left at 65535 ("ignore this
+    channel") so a separate light override (set_rc(LIGHT_CHANNEL, ...)) is never
+    clobbered — the same combined-frame approach keyboard_control.py uses.
     """
     rc = [65535] * 8
 
@@ -314,7 +331,7 @@ def channel_frame():
     rc[4] = FORWARD_PWM if fwd and not back else BACKWARD_PWM if back and not fwd else NEUTRAL_PWM
 
     right, left = "d" in pressed, "a" in pressed
-    rc[5] = FORWARD_PWM if right and not left else BACKWARD_PWM if left and not right else NEUTRAL_PWM
+    rc[STEER_CHANNEL - 1] = FORWARD_PWM if right and not left else BACKWARD_PWM if left and not right else NEUTRAL_PWM
 
     rise, dive = "q" in pressed, "e" in pressed
     rc[2] = FORWARD_PWM if rise and not dive else BACKWARD_PWM if dive and not rise else NEUTRAL_PWM
@@ -343,9 +360,9 @@ def handle_key(key, is_pressed):
         # control_loop keeps re-sending this frame at CONTROL_HZ regardless.
         send_control_frame()
     elif key == "l" and is_pressed:
-        set_rc(4, LIGHT_ON_PWM)
+        set_rc(LIGHT_CHANNEL, LIGHT_ON_PWM)
     elif key == "k" and is_pressed:
-        set_rc(4, NEUTRAL_PWM)
+        set_rc(LIGHT_CHANNEL, NEUTRAL_PWM)
 
 
 # ---------------- telemetry ----------------

@@ -54,7 +54,7 @@ This document explains the full system: what every layer does, how data flows th
                                      │
                           ┌──────────▼──────────┐
                           │  Pixhawk / ArduSub  │
-                          │  RC channels 1–4    │
+                          │  RC ch 3/4/5/7      │
                           │  MAVLink telemetry  │
                           └─────────────────────┘
 ```
@@ -291,10 +291,15 @@ DroneLink.connect(url, token)
 
 | Key | Channel | PWM values |
 |---|---|---|
-| W (forward) / S (back) | 1 — Propulsion | 1650 / 1350 / 1500 neutral |
-| D (right) / A (left) | 2 — Steering | 1650 / 1350 / 1500 neutral |
-| Q (rise) / E (dive) | 3 — Buoyancy | 1650 / 1350 / 1500 neutral |
-| L (on) / K (off) | 4 — Light | 1900 / 1500 |
+| W (forward) / S (back) | 5 — Forward | 1650 / 1350 / 1500 neutral |
+| D (right) / A (left) | 4 — Steering (Yaw) | 1650 / 1350 / 1500 neutral |
+| Q (rise) / E (dive) | 3 — Vertical | 1650 / 1350 / 1500 neutral |
+| L (on) / K (off) | 7 — Light | 1900 / 1500 |
+
+Steering is on **Yaw (ch4)**, not Lateral (ch6): this 2-motor SimpleROV-3 frame
+has no lateral thruster, so ch6 has zero authority — the two motors turn the
+vehicle differentially via yaw. Light is on its own channel (ch7) so it never
+fights steering.
 
 ### Safety mechanisms
 - **Watchdog** — if the client stops sending messages for 1.5 seconds while motion keys are held, the server forces all-stop.
