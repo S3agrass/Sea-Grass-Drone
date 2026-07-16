@@ -80,11 +80,15 @@ MAX_PWM_OFFSET   = int(os.environ.get("SEAGRASS_MAX_OFFSET",   "250"))  # forwar
 STEER_MAX_OFFSET = int(os.environ.get("SEAGRASS_STEER_OFFSET", "150"))  # turn only. Bigger = sharper/spinnier turn.
 
 # -- Ramp-up = seconds a held/full input takes to build from stopped to full
-#    power (bigger = gentler); Decay = seconds to fall back to stopped after
-#    release (bigger = longer coast, smaller = crisper stop) ------------------
-SURGE_RAMP_UP_S  = float(os.environ.get("SEAGRASS_SURGE_RAMP", "0.8"))  # forward. Bigger = gentler/chiller.
+#    power (bigger = gentler spin-up); Decay = seconds to fall back to stopped
+#    after release (bigger = longer coast, smaller = crisper stop). The two
+#    RAMP_UP knobs below are THE dial for how gradual the spin-up feels: they're
+#    "seconds of held-full stick to reach top speed" and do NOT change top speed
+#    (that's MAX_PWM_OFFSET). The ramp is linear, so a sharper turn (bigger
+#    target) naturally takes proportionally longer to reach. ------------------
+SURGE_RAMP_UP_S  = float(os.environ.get("SEAGRASS_SURGE_RAMP", "3.5"))  # forward: seconds to full. Bigger = gentler/chiller.
 SURGE_DECAY_S    = 0.1
-STEER_RAMP_UP_S  = float(os.environ.get("SEAGRASS_STEER_RAMP", "0.6"))  # turn. Bigger = smoother, less snappy.
+STEER_RAMP_UP_S  = float(os.environ.get("SEAGRASS_STEER_RAMP", "3.5"))  # turn: seconds to full. Bigger = smoother, less snappy.
 STEER_DECAY_S    = 0.25
 DEPTH_RAMP_UP_S  = 1.0
 DEPTH_DECAY_S    = 0.4
