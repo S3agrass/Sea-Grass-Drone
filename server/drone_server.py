@@ -96,6 +96,12 @@ DEPTH_DECAY_S    = 0.4
 # quick server-only override. Toggle with SEAGRASS_SURGE_REVERSED=0 to undo.
 SURGE_REVERSED = os.environ.get("SEAGRASS_SURGE_REVERSED", "1") not in ("0", "false", "False", "")
 SURGE_SIGN = -1.0 if SURGE_REVERSED else 1.0
+# STEER_REVERSED: same idea for yaw (ch4). Turning is a two-motor differential
+# (ArduSub speeds one thruster up and slows the other) — if left/right come out
+# swapped, the differential is applied the wrong way; flip it here. Undo with
+# SEAGRASS_STEER_REVERSED=0.
+STEER_REVERSED = os.environ.get("SEAGRASS_STEER_REVERSED", "1") not in ("0", "false", "False", "")
+STEER_SIGN = -1.0 if STEER_REVERSED else 1.0
 
 # -- Turn behaviour ----------------------------------------------------------
 # TURN_ASSIST: fraction of forward power shed mid-turn (scaled by how hard the
@@ -453,7 +459,7 @@ def channel_frame(dt):
 
     surge_pwm = _ramp(surge_pwm, NEUTRAL_PWM + SURGE_SIGN * surge_in * MAX_PWM_OFFSET,
                       dt, SURGE_RAMP_UP_S, SURGE_DECAY_S, MAX_PWM_OFFSET)
-    steer_pwm = _ramp(steer_pwm, NEUTRAL_PWM + steer_in * STEER_MAX_OFFSET,
+    steer_pwm = _ramp(steer_pwm, NEUTRAL_PWM + STEER_SIGN * steer_in * STEER_MAX_OFFSET,
                       dt, STEER_RAMP_UP_S, STEER_DECAY_S, STEER_MAX_OFFSET)
     depth_pwm = _ramp(depth_pwm, NEUTRAL_PWM + depth_in * MAX_PWM_OFFSET,
                       dt, DEPTH_RAMP_UP_S, DEPTH_DECAY_S, MAX_PWM_OFFSET)
