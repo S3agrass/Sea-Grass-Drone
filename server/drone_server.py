@@ -103,6 +103,19 @@ SURGE_SIGN = -1.0 if SURGE_REVERSED else 1.0
 STEER_REVERSED = os.environ.get("SEAGRASS_STEER_REVERSED", "1") not in ("0", "false", "False", "")
 STEER_SIGN = -1.0 if STEER_REVERSED else 1.0
 
+# ARC_TURN ("turn follows throttle"): while the vehicle is translating, cap the
+# yaw so it never exceeds the surge — the inside motor keeps driving in the surge
+# direction instead of stalling at the differential balance point. Result is a
+# smooth arc (one side slower than the other) instead of a one-motor pivot, so
+# forward/back diagonals actually travel. Full yaw is still allowed when
+# essentially stopped, so you can still spin in place. Disable: SEAGRASS_ARC_TURN=0.
+ARC_TURN = os.environ.get("SEAGRASS_ARC_TURN", "1") not in ("0", "false", "False", "")
+# PWM the inside motor is kept above neutral by while arcing, so it stays past
+# ArduSub's MOT_SPIN_MIN deadband; also the surge level below which we count as
+# "stopped" and allow a full in-place pivot. Bigger = both motors drive harder
+# during a reverse/forward arc, but a tighter turn needs more throttle.
+ARC_SPIN_MARGIN = int(os.environ.get("SEAGRASS_ARC_MARGIN", "80"))
+
 # -- Turn behaviour ----------------------------------------------------------
 # TURN_ASSIST: fraction of forward power shed mid-turn (scaled by how hard the
 # turn is) so the yaw differential stays pronounced instead of both motors
@@ -457,9 +470,20 @@ def channel_frame(dt):
     # between the two motors stays pronounced instead of both saturating forward.
     surge_in *= 1.0 - TURN_ASSIST * abs(steer_in)
 
-    surge_pwm = _ramp(surge_pwm, NEUTRAL_PWM + SURGE_SIGN * surge_in * MAX_PWM_OFFSET,
+    surge_off = SURGE_SIGN * surge_in * MAX_PWM_OFFSET
+    steer_off = STEER_SIGN * steer_in * STEER_MAX_OFFSET
+
+    # Turn-follows-throttle: while translating, limit yaw to the surge available
+    # (minus the margin that keeps the inside motor spinning) so a diagonal
+    # curves instead of stalling one motor at the differential balance point.
+    # Near stopped, leave yaw untouched so an in-place pivot still works.
+    if ARC_TURN and abs(surge_off) > ARC_SPIN_MARGIN:
+        lim = abs(surge_off) - ARC_SPIN_MARGIN
+        steer_off = max(-lim, min(lim, steer_off))
+
+    surge_pwm = _ramp(surge_pwm, NEUTRAL_PWM + surge_off,
                       dt, SURGE_RAMP_UP_S, SURGE_DECAY_S, MAX_PWM_OFFSET)
-    steer_pwm = _ramp(steer_pwm, NEUTRAL_PWM + STEER_SIGN * steer_in * STEER_MAX_OFFSET,
+    steer_pwm = _ramp(steer_pwm, NEUTRAL_PWM + steer_off,
                       dt, STEER_RAMP_UP_S, STEER_DECAY_S, STEER_MAX_OFFSET)
     depth_pwm = _ramp(depth_pwm, NEUTRAL_PWM + depth_in * MAX_PWM_OFFSET,
                       dt, DEPTH_RAMP_UP_S, DEPTH_DECAY_S, MAX_PWM_OFFSET)
