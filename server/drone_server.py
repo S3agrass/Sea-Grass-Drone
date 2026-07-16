@@ -32,6 +32,7 @@ Run:
 
 import asyncio
 import json
+import math
 import os
 import signal
 import subprocess
@@ -116,6 +117,32 @@ VECTOR_DRIVE = os.environ.get("SEAGRASS_VECTOR_DRIVE", "0") not in ("0", "false"
 # Shared top-speed for both axes in vector mode (equal gain is what makes the
 # 45deg = one-motor geometry hold). Defaults to the forward top-speed knob.
 VECTOR_MAX_OFFSET = int(os.environ.get("SEAGRASS_VECTOR_OFFSET", str(MAX_PWM_OFFSET)))
+
+# ANGLE_TABLE_DRIVE: the most explicit mode. Instead of any fixed mix, you define
+# exactly what each motor does at each joystick angle in ANGLE_TABLE below, and the
+# code interpolates smoothly between entries and scales by how far the stick is
+# pushed. It still goes out on ch5/ch4 (we invert ArduSub's mixer:
+# ch5=forward=(L+R)/2, ch4=yaw=(L-R)/2), so ArduSub's motor safety/thrust-curve and
+# our watchdog/all-stop all keep working. Takes precedence over VECTOR_DRIVE when
+# both are set. Enable with SEAGRASS_ANGLE_TABLE_DRIVE=1.
+ANGLE_TABLE_DRIVE = os.environ.get("SEAGRASS_ANGLE_TABLE_DRIVE", "0") not in ("0", "false", "False", "")
+
+# Editable behaviour map: angle (degrees, 0=forward, 90=hard right, 180=reverse,
+# 270=hard left) -> (left_motor, right_motor), each in [-1.0, 1.0].
+#   sign     = direction (+ shows "CW" in the readout, - shows "CCW")
+#   magnitude= speed (1.0 = full = +/-MAX_PWM_OFFSET, 0.5 = half, 0.0 = stopped)
+# Edit any entry to change that direction; add more keys (e.g. 30, 60) for finer
+# control — interpolation and the live readout pick them up automatically.
+ANGLE_TABLE = {
+    0:   ( 1.0,  1.0),   # forward
+    45:  ( 1.0,  0.0),   # forward-right: left drives, right stops
+    90:  ( 1.0, -1.0),   # hard right: pivot in place
+    135: ( 0.0, -1.0),
+    180: (-1.0, -1.0),   # reverse
+    225: (-1.0,  0.0),
+    270: (-1.0,  1.0),   # hard left: pivot in place
+    315: ( 0.0,  1.0),
+}
 
 # ARC_TURN ("turn follows throttle"): while the vehicle is translating, cap the
 # yaw so it never exceeds the surge — the inside motor keeps driving in the surge
@@ -406,6 +433,15 @@ surge_pwm = NEUTRAL_PWM   # ch5 - forward/back
 steer_pwm = NEUTRAL_PWM   # STEER_CHANNEL - left/right yaw
 depth_pwm = NEUTRAL_PWM   # ch3 - ascend/descend
 
+# Latest per-motor command, recomputed every control tick from the channels we
+# actually send (mode-agnostic) and pushed to the client for the live readout.
+motor_readout = {"angle": 0.0, "mag": 0.0, "left": 0.0, "right": 0.0}
+
+# Latched soft-stop: while True, all motion input is ignored and every axis holds
+# neutral until the pilot toggles it off (OPTIONS). Unlike the "stop" kill switch
+# this keeps the server running and the vehicle armed — a recoverable full-stop.
+motion_latched = False
+
 
 def motion_active():
     """True while any input source is asking for motion — used by the watchdog
@@ -436,6 +472,43 @@ def _expo(x, k):
     middle down so small inputs stay gentle while +/-1 still maps to +/-1. Used
     to make steering trim finely near center and carve harder toward full lock."""
     return (1.0 - k) * x + k * x ** 3
+
+
+def _stick_to_angle_mag(x, y):
+    """Turn stick components into a compass-style angle + magnitude for ANGLE_TABLE.
+
+    x = steer (right +), y = surge (forward +). atan2(x, y) puts 0deg at pure
+    forward and 90deg at pure right (matching the table's convention), wrapped to
+    [0, 360). magnitude is the stick's distance from center, clamped to 1.0. At
+    dead center (0, 0) magnitude is 0, so the motors come out stopped."""
+    angle = math.degrees(math.atan2(x, y)) % 360.0
+    magnitude = min(1.0, math.hypot(x, y))
+    return angle, magnitude
+
+
+def _lookup_motors(angle, magnitude):
+    """Interpolate ANGLE_TABLE at `angle` and scale by `magnitude` -> (left, right).
+
+    Finds the two table entries that bracket `angle` (wrapping past the last key
+    back to the first at 360deg) and linearly blends each motor between them, so
+    the closer the stick is to one entry the closer the output is to that entry's
+    setting — a smooth spectrum, not stepped. Both motors are then scaled by
+    magnitude (how far the stick is pushed) and clamped to [-1, 1]."""
+    keys = sorted(ANGLE_TABLE)
+    # Find the bracketing pair (lo, hi); hi wraps to the first key + 360.
+    lo = keys[-1]
+    hi = keys[0] + 360.0
+    for i in range(len(keys)):
+        if keys[i] <= angle:
+            lo = keys[i]
+            hi = keys[i + 1] if i + 1 < len(keys) else keys[0] + 360.0
+    span = hi - lo
+    frac = 0.0 if span == 0 else (angle - lo) / span
+    l_lo, r_lo = ANGLE_TABLE[lo]
+    l_hi, r_hi = ANGLE_TABLE[hi % 360 if hi >= 360 else hi]
+    left = (l_lo + frac * (l_hi - l_lo)) * magnitude
+    right = (r_lo + frac * (r_hi - r_lo)) * magnitude
+    return max(-1.0, min(1.0, left)), max(-1.0, min(1.0, right))
 
 
 def _ramp(current, target, dt, ramp_up_s, decay_s, max_offset):
@@ -475,7 +548,23 @@ def channel_frame(dt):
     steer_in = _axis_value("d", "a", axis_targets["steer"])
     depth_in = _axis_value("q", "e", axis_targets["depth"])
 
-    if VECTOR_DRIVE:
+    if ANGLE_TABLE_DRIVE:
+        # Explicit per-motor control: the stick's angle+magnitude looks up
+        # (left, right) motor commands from ANGLE_TABLE (interpolated), then we
+        # invert ArduSub's mixer to the two channels it drives — ch5 forward =
+        # (L+R)/2, ch4 yaw = (L-R)/2 — so ArduSub still runs its motor library
+        # (safety, thrust curve) and every existing all-stop/watchdog path applies.
+        # Both axes ramp at the same rate so the heading is preserved during ramp.
+        angle, mag = _stick_to_angle_mag(steer_in, surge_in)
+        left, right = _lookup_motors(angle, mag)
+        fwd = (left + right) / 2.0
+        yaw = (left - right) / 2.0
+        surge_off = SURGE_SIGN * fwd * MAX_PWM_OFFSET
+        steer_off = STEER_SIGN * yaw * MAX_PWM_OFFSET
+        surge_max = steer_max = MAX_PWM_OFFSET
+        surge_up, surge_dec = SURGE_RAMP_UP_S, SURGE_DECAY_S
+        steer_up, steer_dec = SURGE_RAMP_UP_S, SURGE_DECAY_S
+    elif VECTOR_DRIVE:
         # Pure differential: equal gain, no expo/turn-assist/arc-cap, so the
         # stick's exact direction maps geometrically to the two motors (ArduSub
         # mixes left=ch5+ch4 / right=ch5-ch4). Both axes ramp at the same rate so
@@ -517,6 +606,17 @@ def channel_frame(dt):
     depth_pwm = _ramp(depth_pwm, NEUTRAL_PWM + depth_in * MAX_PWM_OFFSET,
                       dt, DEPTH_RAMP_UP_S, DEPTH_DECAY_S, MAX_PWM_OFFSET)
 
+    # Live readout: recover the per-motor command from the channels we're actually
+    # sending (invert ArduSub's mixer), so it reflects the real output in every
+    # mode — angle-table, vector, or arc — including the ramp and sign flips.
+    fwd_off = surge_pwm - NEUTRAL_PWM
+    yaw_off = steer_pwm - NEUTRAL_PWM
+    angle, mag = _stick_to_angle_mag(steer_in, surge_in)
+    motor_readout["angle"] = round(angle, 1)
+    motor_readout["mag"] = round(mag, 3)
+    motor_readout["left"] = round(max(-1.0, min(1.0, (fwd_off + yaw_off) / MAX_PWM_OFFSET)), 3)
+    motor_readout["right"] = round(max(-1.0, min(1.0, (fwd_off - yaw_off) / MAX_PWM_OFFSET)), 3)
+
     rc = [65535] * 8
     rc[4] = round(surge_pwm)
     rc[STEER_CHANNEL - 1] = round(steer_pwm)
@@ -534,7 +634,21 @@ def send_control_frame(dt):
     )
 
 
+def toggle_soft_stop():
+    """Flip the latched soft-stop (OPTIONS). Latching neutrals every motor via
+    all_stop() and freezes input until toggled off; the server stays up and armed."""
+    global motion_latched
+    motion_latched = not motion_latched
+    if motion_latched:
+        all_stop()  # neutral ch3/ch4/ch5 + reset ramp/inputs immediately
+        print("SOFT STOP: latched — motors neutral, input frozen (OPTIONS to resume)")
+    else:
+        print("SOFT STOP: released — driving resumed")
+
+
 def handle_key(key, is_pressed):
+    if motion_latched:
+        return  # frozen until soft-stop released; a held key can't re-command motion
     key = key.lower()
     if key in ("w", "a", "s", "d", "q", "e"):
         # Just update held state — control_loop ramps the PWM toward the target
@@ -553,6 +667,8 @@ def handle_axis(msg):
     """Analog stick update from terminal_control.py: floats in [-1, 1] per axis,
     already deadzone+expo shaped client-side. Stored as targets the control_loop
     ramps toward."""
+    if motion_latched:
+        return  # frozen until soft-stop released; a deflected stick can't re-command motion
     for name in ("surge", "steer", "depth"):
         if name in msg:
             try:
@@ -677,8 +793,18 @@ async def client_handler(ws):
                 await send({"type": "detections", **latest_detections})
             await asyncio.sleep(0.2)
 
+    async def motors_loop():
+        # Push the live per-motor readout (angle/mag/left/right) to the helm holder
+        # at ~10 Hz so terminal_control.py can print what each motor is doing as the
+        # stick moves. Only to the helm holder — it reflects the active command.
+        while True:
+            if helm_holder is ws:
+                await send({"type": "motors", **motor_readout})
+            await asyncio.sleep(0.1)
+
     tele_task = asyncio.create_task(telemetry_loop())
     detect_task = asyncio.create_task(detections_loop())
+    motors_task = asyncio.create_task(motors_loop())
     try:
         async for raw in ws:
             last_seen = time.time()
@@ -717,6 +843,11 @@ async def client_handler(ws):
                 handle_key(msg.get("key", ""), bool(msg.get("pressed")))
             elif mtype == "axis":
                 handle_axis(msg)
+            elif mtype == "soft_stop":
+                # Latched full-stop (gamepad OPTIONS): neutral all motors and hold,
+                # or resume. Recoverable — unlike "stop", it does NOT disarm/shutdown.
+                toggle_soft_stop()
+                await send({"type": "soft_stop", "latched": motion_latched})
             elif mtype == "arm":
                 do_arm()
                 await state()
@@ -766,6 +897,7 @@ async def client_handler(ws):
     finally:
         tele_task.cancel()
         detect_task.cancel()
+        motors_task.cancel()
         if helm_holder is ws:
             helm_holder = None
             pressed.clear()

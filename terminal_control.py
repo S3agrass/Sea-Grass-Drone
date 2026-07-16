@@ -46,6 +46,11 @@ GAMEPAD_EXPO = float(os.environ.get("SEAGRASS_EXPO", "0.6"))
 SEND_INTERVAL = 0.05   # 20 Hz analog updates
 REPEAT_INTERVAL = 0.2  # re-send even when unchanged — well under the 1.5s watchdog
 AXIS_EPSILON = 0.01    # only push a fresh frame when an axis moved this much
+# PS4 OPTIONS button -> latched soft-stop. The pygame button index for a DS4
+# varies by driver, so this is a best guess; every button press prints its index
+# below, so if OPTIONS doesn't stop, read the index off that line and set
+# SEAGRASS_OPTIONS_BUTTON to it.
+OPTIONS_BUTTON = int(os.environ.get("SEAGRASS_OPTIONS_BUTTON", "9"))
 
 
 def stick_curve(raw):
@@ -58,6 +63,25 @@ def stick_curve(raw):
     mag = min(1.0, (mag - GAMEPAD_DEADZONE) / (1.0 - GAMEPAD_DEADZONE))
     mag = (1.0 - GAMEPAD_EXPO) * mag + GAMEPAD_EXPO * mag ** 3
     return mag if raw >= 0 else -mag
+
+
+def _dir(v):
+    """Motor sign -> rotation label for the readout. Convention only: if a motor
+    is physically wired mirrored it's just a label (flip SEAGRASS_STEER_REVERSED /
+    SEAGRASS_SURGE_REVERSED on the server)."""
+    if v > 0.02:
+        return "CW "
+    if v < -0.02:
+        return "CCW"
+    return "-- "
+
+
+def fmt_motors(m):
+    """Format a server 'motors' message as a two-line live readout."""
+    left, right = m["left"], m["right"]
+    return (f"-> {m['angle']:5.1f}deg  mag {m['mag']:.2f}\n"
+            f"   L: {abs(left) * 100:3.0f}% {_dir(left)}   "
+            f"R: {abs(right) * 100:3.0f}% {_dir(right)}")
 
 
 async def main():
@@ -90,17 +114,27 @@ async def main():
         print("Arm sent. Left stick = move/steer, right stick Y = depth. "
               "Push more to go faster. Ctrl-C to quit and disarm.\n")
 
-        last_sent = {"surge": 0.0, "steer": 0.0, "depth": 0.0}
-        last_ping = asyncio.get_event_loop().time()
-        last_repeat = 0.0
-
         async def send_axes(axes):
             await ws.send(json.dumps({"type": "axis", **axes}))
 
-        try:
+        async def sender():
+            last_sent = {"surge": 0.0, "steer": 0.0, "depth": 0.0}
+            last_ping = asyncio.get_event_loop().time()
+            last_repeat = 0.0
+            prev_buttons = [0] * js.get_numbuttons()
             while True:
                 pygame.event.pump()
                 now = asyncio.get_event_loop().time()
+
+                # Button edges: OPTIONS toggles the latched soft-stop; every press
+                # also prints its index so the pilot can find the right OPTIONS one.
+                for i in range(js.get_numbuttons()):
+                    down = js.get_button(i)
+                    if down and not prev_buttons[i]:
+                        print(f"[button {i} pressed]")
+                        if i == OPTIONS_BUTTON:
+                            await ws.send(json.dumps({"type": "soft_stop"}))
+                    prev_buttons[i] = down
 
                 # Stick up is negative raw, so surge/depth flip sign.
                 surge = -stick_curve(js.get_axis(1))  # left stick Y  -> forward/back
@@ -114,9 +148,6 @@ async def main():
                 # watchdog never sees a gap while a stick is held deflected.
                 if moved or (now - last_repeat) > REPEAT_INTERVAL:
                     await send_axes(axes)
-                    if moved:
-                        print(f"  -> surge={axes['surge']:+.2f} steer={axes['steer']:+.2f} "
-                              f"depth={axes['depth']:+.2f}")
                     last_sent = axes
                     last_repeat = now
 
@@ -125,6 +156,30 @@ async def main():
                     last_ping = now
 
                 await asyncio.sleep(SEND_INTERVAL)
+
+        async def reader():
+            # Drain server messages and print the live per-motor readout. Draining
+            # also stops the receive buffer growing unbounded while we drive.
+            last_print = None
+            async for raw in ws:
+                try:
+                    m = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if m.get("type") == "soft_stop":
+                    print(">>> STOPPED (OPTIONS to resume)" if m.get("latched")
+                          else ">>> DRIVING")
+                    continue
+                if m.get("type") != "motors":
+                    continue
+                key = (m["angle"], m["left"], m["right"])
+                if key == last_print:
+                    continue  # print only on change, so a held/centered stick stays quiet
+                last_print = key
+                print(fmt_motors(m))
+
+        try:
+            await asyncio.gather(sender(), reader())
         except KeyboardInterrupt:
             print("\nStopping...")
         finally:
