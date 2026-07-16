@@ -134,14 +134,14 @@ ANGLE_TABLE_DRIVE = os.environ.get("SEAGRASS_ANGLE_TABLE_DRIVE", "0") not in ("0
 # Edit any entry to change that direction; add more keys (e.g. 30, 60) for finer
 # control — interpolation and the live readout pick them up automatically.
 ANGLE_TABLE = {
-    0:   ( 1.0,  1.0),   # forward
-    45:  ( 1.0,  0.0),   # forward-right: left drives, right stops
-    90:  ( 1.0, -1.0),   # hard right: pivot in place
-    135: ( 0.0, -1.0),
-    180: (-1.0, -1.0),   # reverse
-    225: (-1.0,  0.0),
-    270: (-1.0,  1.0),   # hard left: pivot in place
-    315: ( 0.0,  1.0),
+    0:   ( -1.0,  -1.0),   # forward
+    45:  ( -1.0,  0.0),   # forward-right: left drives, right stops
+    90:  ( -1.0, 1.0),   # hard right: pivot in place
+    135: ( 0.0, 1.0),
+    180: (1.0, 1.0),   # reverse
+    225: (1.0,  0.0),
+    270: (1.0,  -1.0),   # hard left: pivot in place
+    315: ( 0.0,  -1.0),
 }
 
 # ARC_TURN ("turn follows throttle"): while the vehicle is translating, cap the
