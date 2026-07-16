@@ -88,6 +88,15 @@ STEER_DECAY_S    = 0.25
 DEPTH_RAMP_UP_S  = 1.0
 DEPTH_DECAY_S    = 0.4
 
+# -- Direction ---------------------------------------------------------------
+# SURGE_REVERSED: flip forward/back polarity on ch5 in software. Set when a
+# "forward" command spins the thrusters the wrong way (this frame drove both
+# motors backward on forward). The canonical fix is on the Pixhawk
+# (MOT_1/2_DIRECTION or RC5_REVERSED) so every control path agrees; this is the
+# quick server-only override. Toggle with SEAGRASS_SURGE_REVERSED=0 to undo.
+SURGE_REVERSED = os.environ.get("SEAGRASS_SURGE_REVERSED", "1") not in ("0", "false", "False", "")
+SURGE_SIGN = -1.0 if SURGE_REVERSED else 1.0
+
 # -- Turn behaviour ----------------------------------------------------------
 # TURN_ASSIST: fraction of forward power shed mid-turn (scaled by how hard the
 # turn is) so the yaw differential stays pronounced instead of both motors
@@ -442,7 +451,7 @@ def channel_frame(dt):
     # between the two motors stays pronounced instead of both saturating forward.
     surge_in *= 1.0 - TURN_ASSIST * abs(steer_in)
 
-    surge_pwm = _ramp(surge_pwm, NEUTRAL_PWM + surge_in * MAX_PWM_OFFSET,
+    surge_pwm = _ramp(surge_pwm, NEUTRAL_PWM + SURGE_SIGN * surge_in * MAX_PWM_OFFSET,
                       dt, SURGE_RAMP_UP_S, SURGE_DECAY_S, MAX_PWM_OFFSET)
     steer_pwm = _ramp(steer_pwm, NEUTRAL_PWM + steer_in * STEER_MAX_OFFSET,
                       dt, STEER_RAMP_UP_S, STEER_DECAY_S, STEER_MAX_OFFSET)
