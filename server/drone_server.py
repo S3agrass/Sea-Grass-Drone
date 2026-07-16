@@ -103,6 +103,20 @@ SURGE_SIGN = -1.0 if SURGE_REVERSED else 1.0
 STEER_REVERSED = os.environ.get("SEAGRASS_STEER_REVERSED", "1") not in ("0", "false", "False", "")
 STEER_SIGN = -1.0 if STEER_REVERSED else 1.0
 
+# -- Drive mode --------------------------------------------------------------
+# VECTOR_DRIVE: pure differential (tank/arcade) mixing where the stick's exact
+# direction maps geometrically to the two motors — equal gain on both axes, no
+# expo / turn-assist / arc-cap. Stick right = spin in place (motors opposite,
+# equal speed); stick at 45deg = one motor only; stick forward = both together;
+# everything between is a smooth spectrum. ArduSub already mixes ch5+ch4 as
+# left=ch5+ch4 / right=ch5-ch4, so sending surge on ch5 and steer on ch4 at the
+# SAME scale reproduces that mapping. Enable with SEAGRASS_VECTOR_DRIVE=1.
+# When off, the game-feel path below (expo, turn-assist, ARC_TURN) is used.
+VECTOR_DRIVE = os.environ.get("SEAGRASS_VECTOR_DRIVE", "0") not in ("0", "false", "False", "")
+# Shared top-speed for both axes in vector mode (equal gain is what makes the
+# 45deg = one-motor geometry hold). Defaults to the forward top-speed knob.
+VECTOR_MAX_OFFSET = int(os.environ.get("SEAGRASS_VECTOR_OFFSET", str(MAX_PWM_OFFSET)))
+
 # ARC_TURN ("turn follows throttle"): while the vehicle is translating, cap the
 # yaw so it never exceeds the surge — the inside motor keeps driving in the surge
 # direction instead of stalling at the differential balance point. Result is a
@@ -461,30 +475,45 @@ def channel_frame(dt):
     steer_in = _axis_value("d", "a", axis_targets["steer"])
     depth_in = _axis_value("q", "e", axis_targets["depth"])
 
-    # Progressive steering: gentle heading trim near center, sharper carve toward
-    # full stick. Applied before turn-assist so the forward-power shed also grows
-    # progressively with how hard you're actually turning, not stick position.
-    steer_in = _expo(steer_in, STEER_EXPO)
+    if VECTOR_DRIVE:
+        # Pure differential: equal gain, no expo/turn-assist/arc-cap, so the
+        # stick's exact direction maps geometrically to the two motors (ArduSub
+        # mixes left=ch5+ch4 / right=ch5-ch4). Both axes ramp at the same rate so
+        # the commanded heading is preserved during the ramp, not skewed.
+        surge_off = SURGE_SIGN * surge_in * VECTOR_MAX_OFFSET
+        steer_off = STEER_SIGN * steer_in * VECTOR_MAX_OFFSET
+        surge_max = steer_max = VECTOR_MAX_OFFSET
+        surge_up, surge_dec = SURGE_RAMP_UP_S, SURGE_DECAY_S
+        steer_up, steer_dec = SURGE_RAMP_UP_S, SURGE_DECAY_S
+    else:
+        # Progressive steering: gentle heading trim near center, sharper carve
+        # toward full stick. Applied before turn-assist so the forward-power shed
+        # also grows progressively with how hard you're actually turning.
+        steer_in = _expo(steer_in, STEER_EXPO)
 
-    # The harder the turn, the more forward power is shed so the yaw differential
-    # between the two motors stays pronounced instead of both saturating forward.
-    surge_in *= 1.0 - TURN_ASSIST * abs(steer_in)
+        # The harder the turn, the more forward power is shed so the yaw
+        # differential stays pronounced instead of both motors saturating forward.
+        surge_in *= 1.0 - TURN_ASSIST * abs(steer_in)
 
-    surge_off = SURGE_SIGN * surge_in * MAX_PWM_OFFSET
-    steer_off = STEER_SIGN * steer_in * STEER_MAX_OFFSET
+        surge_off = SURGE_SIGN * surge_in * MAX_PWM_OFFSET
+        steer_off = STEER_SIGN * steer_in * STEER_MAX_OFFSET
 
-    # Turn-follows-throttle: while translating, limit yaw to the surge available
-    # (minus the margin that keeps the inside motor spinning) so a diagonal
-    # curves instead of stalling one motor at the differential balance point.
-    # Near stopped, leave yaw untouched so an in-place pivot still works.
-    if ARC_TURN and abs(surge_off) > ARC_SPIN_MARGIN:
-        lim = abs(surge_off) - ARC_SPIN_MARGIN
-        steer_off = max(-lim, min(lim, steer_off))
+        # Turn-follows-throttle: while translating, limit yaw to the surge
+        # available (minus the margin that keeps the inside motor spinning) so a
+        # diagonal curves instead of stalling one motor at the differential
+        # balance point. Near stopped, leave yaw untouched so a pivot still works.
+        if ARC_TURN and abs(surge_off) > ARC_SPIN_MARGIN:
+            lim = abs(surge_off) - ARC_SPIN_MARGIN
+            steer_off = max(-lim, min(lim, steer_off))
+
+        surge_max, steer_max = MAX_PWM_OFFSET, STEER_MAX_OFFSET
+        surge_up, surge_dec = SURGE_RAMP_UP_S, SURGE_DECAY_S
+        steer_up, steer_dec = STEER_RAMP_UP_S, STEER_DECAY_S
 
     surge_pwm = _ramp(surge_pwm, NEUTRAL_PWM + surge_off,
-                      dt, SURGE_RAMP_UP_S, SURGE_DECAY_S, MAX_PWM_OFFSET)
+                      dt, surge_up, surge_dec, surge_max)
     steer_pwm = _ramp(steer_pwm, NEUTRAL_PWM + steer_off,
-                      dt, STEER_RAMP_UP_S, STEER_DECAY_S, STEER_MAX_OFFSET)
+                      dt, steer_up, steer_dec, steer_max)
     depth_pwm = _ramp(depth_pwm, NEUTRAL_PWM + depth_in * MAX_PWM_OFFSET,
                       dt, DEPTH_RAMP_UP_S, DEPTH_DECAY_S, MAX_PWM_OFFSET)
 
