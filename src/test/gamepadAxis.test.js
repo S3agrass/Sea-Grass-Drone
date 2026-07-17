@@ -1,11 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import DroneLink from '../lib/droneLink';
-import {
-  stickCurve,
-  DEADZONE,
-  CREEP_ZONE_END,
-  CREEP_ZONE_OUTPUT,
-} from '../lib/stickCurve';
+import { stickCurve, DEADZONE } from '../lib/stickCurve';
 
 const WS_OPEN = 1;
 
@@ -81,35 +76,8 @@ describe('stickCurve — the sensitivity fix', () => {
   });
 
   it('starts from zero at the deadzone edge instead of jumping', () => {
-    // Rescaling is what makes the deadzone cost no resolution.
+    // Rescaling is what makes a 0.12 deadzone cost no resolution.
     expect(stickCurve(DEADZONE + 0.0001)).toBeCloseTo(0, 3);
-  });
-
-  // The gas-pedal shape: a gentle creep zone up to a knee, then a visibly
-  // steeper power zone. A single expo curve can't produce this distinction —
-  // these tests pin the two-zone structure itself.
-  it('outputs CREEP_ZONE_OUTPUT exactly at the knee', () => {
-    const kneeRaw = DEADZONE + CREEP_ZONE_END * (1 - DEADZONE);
-    expect(stickCurve(kneeRaw)).toBeCloseTo(CREEP_ZONE_OUTPUT, 6);
-  });
-
-  it('is continuous at the knee — no step in output', () => {
-    const kneeRaw = DEADZONE + CREEP_ZONE_END * (1 - DEADZONE);
-    const below = stickCurve(kneeRaw - 0.001);
-    const above = stickCurve(kneeRaw + 0.001);
-    expect(above - below).toBeLessThan(0.01);
-  });
-
-  it('climbs much faster per unit of travel in the power zone than the creep zone', () => {
-    const creepSlope = CREEP_ZONE_OUTPUT / CREEP_ZONE_END;
-    const powerSlope = (1 - CREEP_ZONE_OUTPUT) / (1 - CREEP_ZONE_END);
-    // Measured empirically off the curve, not just the constants:
-    const kneeRaw = DEADZONE + CREEP_ZONE_END * (1 - DEADZONE);
-    const dRaw = 0.05;
-    const measuredCreep = stickCurve(kneeRaw - 0.001) - stickCurve(kneeRaw - 0.001 - dRaw);
-    const measuredPower = stickCurve(kneeRaw + 0.001 + dRaw) - stickCurve(kneeRaw + 0.001);
-    expect(measuredPower).toBeGreaterThan(measuredCreep * 3);
-    expect(powerSlope).toBeGreaterThan(creepSlope * 3);
   });
 
   it('still reaches exactly full authority at full lock', () => {

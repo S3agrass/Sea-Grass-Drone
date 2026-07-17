@@ -321,24 +321,8 @@ def on_release(key):
 # physical button name instead, so this works regardless of raw ordering
 # as long as SDL recognizes the pad (run with --gamepad-debug to confirm
 # what SDL sees).
-# Fraction of stick travel near center that reads as zero, killing rest drift.
-# Not a gate — _stick_curve rescales the remaining travel so output starts from
-# 0 right at the deadzone edge, so this costs no resolution. Keep it just above
-# the pad's real drift (run --gamepad-debug with the sticks centred to read it).
-GAMEPAD_DEADZONE = 0.05
-# Gas-pedal response: two linear zones meeting at a knee, instead of one expo
-# curve. The creep zone (deadzone edge -> CREEP_ZONE_END of the remaining
-# travel) climbs gently to CREEP_ZONE_OUTPUT of full authority; past the knee
-# the power zone climbs ~5x steeper to exactly 1.0 at full lock. Easing around
-# the top of the stick moves output slowly; pushing past the knee gives clearly
-# more power per millimetre — a distinction a single expo curve can't make.
-# Keep these in step with src/lib/stickCurve.js and terminal_control.py.
-#
-# Retune CREEP_ZONE_OUTPUT first: it sets how fast "slow" is. Raise it if the
-# whole creep zone feels inert, lower it if inching is already too quick.
-# CREEP_ZONE_END trades fine-control travel against power-zone travel.
-CREEP_ZONE_END = 0.55     # fraction of post-deadzone travel in the creep zone
-CREEP_ZONE_OUTPUT = 0.2   # authority at the knee (1.0 = full)
+GAMEPAD_DEADZONE = 0.45
+GAMEPAD_EXPO = 0.5  # 0 = linear, 1 = fully cubic; expo gives fine control near center
 AXIS_MAX = 32767  # SDL controller axes are raw ints in [-32768, 32767]
 
 gamepad_edge = {'l1': False, 'r1': False, 'options': False}
@@ -353,19 +337,15 @@ speed_locked = False
 locked_targets = None
 
 def _stick_curve(raw):
-    """Deadzone-rescaled two-zone "gas pedal" response. Rescaling means the
-    output ramps from 0 at the deadzone edge instead of jumping to it; the two
-    zones are continuous at the knee and reach exactly 1.0 at full deflection.
-    Same shape as src/lib/stickCurve.js — keep them in step."""
+    """Deadzone-rescaled expo response: small deflections give fine, gentle
+    control, full deflection still reaches 100% — the standard game-feel
+    stick curve. Rescaling means output starts from 0 right at the deadzone
+    edge instead of jumping."""
     mag = abs(raw)
     if mag < GAMEPAD_DEADZONE:
         return 0.0
     mag = min(1.0, (mag - GAMEPAD_DEADZONE) / (1.0 - GAMEPAD_DEADZONE))
-    if mag <= CREEP_ZONE_END:
-        mag = CREEP_ZONE_OUTPUT * (mag / CREEP_ZONE_END)
-    else:
-        mag = CREEP_ZONE_OUTPUT + ((1.0 - CREEP_ZONE_OUTPUT)
-                                   * (mag - CREEP_ZONE_END) / (1.0 - CREEP_ZONE_END))
+    mag = (1.0 - GAMEPAD_EXPO) * mag + GAMEPAD_EXPO * mag ** 3
     return mag if raw >= 0 else -mag
 
 def set_gamepad_key(key, want_held):
