@@ -21,7 +21,7 @@ export const DEADZONE = 0.03;
 // gentle while full lock still reaches 100%. This is the "push more = go faster"
 // curve, and the ONLY expo in the chain: the server's STEER_EXPO defaults to 0
 // so the two don't compose and squash fine steering to nothing.
-export const EXPO = 0.6;
+export const EXPO = 0.85;
 
 /**
  * Deadzone-rescaled expo response. Rescaling means the output ramps from 0 at
