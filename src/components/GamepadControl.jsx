@@ -14,11 +14,7 @@ import { stickCurve } from "../lib/stickCurve";
    real index off the live readout, and update AXIS/BUTTON below — nothing
    else needs to change. Feel lives elsewhere: stick shaping in
    ../lib/stickCurve, ramp and top speed in server/drone_server.py's tuning
-   block.
-
-   R1 = speed lock: freezes the last-sent axes and ignores the sticks until
-   R1 again. Every stop path (OPTIONS, blur, hidden tab, panel disable) clears
-   it via sendZero — a lock never blocks or survives a stop. */
+   block. */
 const SEND_MS = 50; // 20Hz analog updates, mirroring terminal_control.py
 // Re-send an unchanged frame at least this often. The server watchdog forces an
 // all-stop after 1.5s of silence mid-motion (server/drone_server.py WATCHDOG_S),
@@ -28,7 +24,7 @@ const REPEAT_MS = 150;
 const AXIS_EPSILON = 0.01; // only push a fresh frame when an axis moved this much
 const DISPLAY_THRESHOLD = 0.15; // cosmetic only: when a direction pip lights up
 const AXIS = { LEFT_X: 0, LEFT_Y: 1, RIGHT_X: 2, RIGHT_Y: 3 };
-const BUTTON = { L1: 4, R1: 5, OPTIONS: 9 };
+const BUTTON = { L1: 4, OPTIONS: 9 };
 
 // Held keys and analog axes are unioned server-side (_axis_value), so a key left
 // stuck down would pin an axis at full regardless of the stick. We drive analog
@@ -52,7 +48,6 @@ export default function GamepadControl() {
   const [padInfo, setPadInfo] = useState(null);
   const [pressed, setPressed] = useState(new Set());
   const [lightOn, setLightOn] = useState(false);
-  const [speedLocked, setSpeedLocked] = useState(false);
   const [debugText, setDebugText] = useState("");
   const [motors, setMotors] = useState(null);
 
@@ -60,11 +55,7 @@ export default function GamepadControl() {
   pressedRef.current = pressed;
   const lightOnRef = useRef(lightOn);
   lightOnRef.current = lightOn;
-  // Written directly in the handlers (not just mirrored on render) because the
-  // 60Hz tick reads it to decide whether to freeze axes — a one-render lag
-  // would let a stick frame slip out after the lock press.
-  const speedLockedRef = useRef(false);
-  const edgeRef = useRef({ l1: false, r1: false, options: false });
+  const edgeRef = useRef({ l1: false, options: false });
   const rafRef = useRef(null);
   const lastSendTsRef = useRef(0);
   const lastDebugTsRef = useRef(0);
@@ -131,11 +122,6 @@ export default function GamepadControl() {
     function sendZero() {
       link.sendAxis({ surge: 0, steer: 0, depth: 0 });
       lastAxesRef.current = { surge: 0, steer: 0, depth: 0 };
-      // Every stop path runs through here (OPTIONS, blur, tab hidden, panel
-      // disable, controller yanked) — a speed lock must never survive any of
-      // them, or the panel would come back frozen and unresponsive to sticks.
-      speedLockedRef.current = false;
-      setSpeedLocked(false);
       setPressed(new Set());
     }
 
@@ -156,16 +142,11 @@ export default function GamepadControl() {
         // Stick up reads negative, so surge and depth flip sign. Mirrors
         // terminal_control.py and the digital mapping this replaces: left stick
         // Y = w/s surge, left stick X = d/a steer, right stick Y = q/e depth.
-        // While the R1 speed lock is held, the sticks are ignored: the frozen
-        // frame keeps re-sending via the stale/!centered repeat below, feeding
-        // the server watchdog at the locked speed.
-        const axes = speedLockedRef.current
-          ? lastAxesRef.current
-          : {
-              surge: -stickCurve(pad.axes[AXIS.LEFT_Y] ?? 0),
-              steer: stickCurve(pad.axes[AXIS.LEFT_X] ?? 0),
-              depth: -stickCurve(pad.axes[AXIS.RIGHT_Y] ?? 0),
-            };
+        const axes = {
+          surge: -stickCurve(pad.axes[AXIS.LEFT_Y] ?? 0),
+          steer: stickCurve(pad.axes[AXIS.LEFT_X] ?? 0),
+          depth: -stickCurve(pad.axes[AXIS.RIGHT_Y] ?? 0),
+        };
         const last = lastAxesRef.current;
         const moved = ["surge", "steer", "depth"].some(
           (k) => Math.abs(axes[k] - last[k]) > AXIS_EPSILON
@@ -192,16 +173,6 @@ export default function GamepadControl() {
         setTimeout(() => link.sendKey(k, false), 120);
       }
       edgeRef.current.l1 = l1Down;
-
-      // R1 toggles the speed lock (edge-detected like L1). Locking freezes
-      // lastAxesRef as-is; unlocking hands control straight back to the sticks.
-      const r1Down = Boolean(pad.buttons[BUTTON.R1]?.pressed);
-      if (r1Down && !edgeRef.current.r1) {
-        const locking = !speedLockedRef.current;
-        speedLockedRef.current = locking;
-        setSpeedLocked(locking);
-      }
-      edgeRef.current.r1 = r1Down;
 
       const optionsDown = Boolean(pad.buttons[BUTTON.OPTIONS]?.pressed);
       if (optionsDown && !edgeRef.current.options) {
@@ -233,8 +204,7 @@ export default function GamepadControl() {
           .filter((i) => i !== null)
           .join(",");
         setDebugText(
-          `surge ${surge.toFixed(2)} steer ${steer.toFixed(2)} depth ${depth.toFixed(2)}` +
-            `${speedLockedRef.current ? " [SPEED LOCK]" : ""}\n` +
+          `surge ${surge.toFixed(2)} steer ${steer.toFixed(2)} depth ${depth.toFixed(2)}\n` +
             `axes[${axesStr}] pressed btns[${btnsStr}]`
         );
       }
@@ -348,10 +318,6 @@ export default function GamepadControl() {
         <div className={`kbd-key wide ${lightOn ? "down" : ""}`}>
           <span className="kbd-key-label mono">L1</span>
           <span className="kbd-key-hint">Light toggle</span>
-        </div>
-        <div className={`kbd-key wide ${speedLocked ? "down" : ""}`}>
-          <span className="kbd-key-label mono">R1</span>
-          <span className="kbd-key-hint">Speed lock</span>
         </div>
         <div className="kbd-key wide">
           <span className="kbd-key-label mono">OPT</span>
