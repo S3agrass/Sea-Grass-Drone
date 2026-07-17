@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useDrone } from "../context/DroneContext";
 
 // Detect stream protocol from URL.
@@ -75,6 +75,11 @@ export default function CameraView() {
     detections,
     detectOn,
     detectOff,
+    recording,
+    recElapsed,
+    recordStart,
+    recordStop,
+    capturePhoto,
   } = useDrone();
 
   const streamUrl = activeDrone?.camera_url || "";
@@ -84,15 +89,12 @@ export default function CameraView() {
   // "feed" state: off | connecting | live | error
   const [feedState, setFeedState] = useState("off");
   const [retryKey, setRetryKey] = useState(0);
-  const [recording, setRecording] = useState(false);
-  const [recTime, setRecTime] = useState(0);
   const [flash, setFlash] = useState(false);
-  const [log, setLog] = useState([]);
+  const [clock, setClock] = useState(() => new Date());
   const [fullscreen, setFullscreen] = useState(false);
 
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
-  const timerRef = useRef(null);
 
   // When the camera subprocess starts/stops on the Pi, or the stream URL
   // changes, reset the feed state so the WHEP hook re-runs.
@@ -192,44 +194,38 @@ export default function CameraView() {
     return () => ro.disconnect();
   }, [detections, detectActive, fullscreen]);
 
-  // Recording timer.
+  // Wall clock — current time overlaid on the feed, ticking once a second.
   useEffect(() => {
-    if (recording) {
-      timerRef.current = setInterval(() => setRecTime((t) => t + 1), 1000);
-    } else {
-      clearInterval(timerRef.current);
-      setRecTime(0);
-    }
-    return () => clearInterval(timerRef.current);
-  }, [recording]);
+    const id = setInterval(() => setClock(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   const fmtTime = (s) =>
     `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 
-  function addLog(entry) {
-    setLog((prev) => [{ id: Date.now(), text: entry }, ...prev].slice(0, 6));
-  }
-
+  // Snapshot + record act on the Pi (capture/recording live on the drone), so
+  // they only need the camera running — not a live local view.
   function snapshot() {
     setFlash(true);
     setTimeout(() => setFlash(false), 180);
-    addLog(`Snapshot · ${new Date().toLocaleTimeString()}`);
+    capturePhoto();
   }
 
   function toggleRecord() {
-    if (recording) {
-      addLog(`Clip ${fmtTime(recTime)} · ${new Date().toLocaleTimeString()}`);
-      setRecording(false);
-    } else {
-      setRecording(true);
-    }
+    if (recording) recordStop();
+    else recordStart();
   }
 
-  const canCapture = feedState === "live";
+  const canCapture = feedState === "live"; // fullscreen/expand needs the video
+  const canControl = connected && cameraActive; // snapshot/record are Pi-side
   const noUrl = !streamUrl;
 
   const feed = (
-    <div className={`camera-feed ${fullscreen ? "fullscreen" : ""}`}>
+    <div
+      className={`camera-feed ${fullscreen ? "fullscreen" : ""} ${
+        recording ? "recording" : ""
+      }`}
+    >
       {flash && <div className="camera-flash" />}
 
       {/* WebRTC video element — always rendered so the ref is stable */}
@@ -297,9 +293,16 @@ export default function CameraView() {
         </div>
       )}
 
-      {recording && feedState === "live" && (
+      {/* Wall clock — current time, bottom-left of the feed */}
+      {feedState === "live" && (
+        <div className="camera-clock mono">{clock.toLocaleTimeString()}</div>
+      )}
+
+      {/* Recording indicator + elapsed time, bottom-right. Shown whenever the Pi
+          is recording (it keeps recording even if the local view drops). */}
+      {recording && (
         <div className="camera-rec mono">
-          <span className="rec-dot" /> REC {fmtTime(recTime)}
+          <span className="rec-dot" /> REC {fmtTime(recElapsed || 0)}
         </div>
       )}
 
@@ -371,25 +374,17 @@ export default function CameraView() {
       {fullscreen && <div className="camera-modal">{feed}</div>}
 
       <div className="camera-actions">
-        <button className="btn" onClick={snapshot} disabled={!canCapture}>
+        <button className="btn" onClick={snapshot} disabled={!canControl}>
           ⊙ Snapshot
         </button>
         <button
           className={`btn ${recording ? "btn-danger" : ""}`}
           onClick={toggleRecord}
-          disabled={!canCapture}
+          disabled={!canControl}
         >
           {recording ? "■ Stop" : "● Record"}
         </button>
       </div>
-
-      {log.length > 0 && (
-        <div className="camera-log mono">
-          {log.map((l) => (
-            <div key={l.id}>{l.text}</div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

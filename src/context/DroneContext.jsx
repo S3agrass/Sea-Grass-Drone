@@ -59,6 +59,12 @@ export function DroneProvider({ children }) {
   const [cameraActive, setCameraActive] = useState(false);
   const [detectActive, setDetectActive] = useState(false);
   const [detections, setDetections] = useState([]); // latest bbox array
+  // Recording lives on the Pi (see DroneLink protocol) — these mirror the Pi's
+  // reported state so the UI's REC indicator/timer are the drone's truth, even
+  // when recording was started server-side (auto-record on arm).
+  const [recording, setRecording] = useState(false);
+  const [recElapsed, setRecElapsed] = useState(0);
+  const [autoRecord, setAutoRecordFlag] = useState(false);
   const [demoMode, setDemoMode] = useState(
     () => localStorage.getItem("seagrass-demo") === "1",
   );
@@ -180,6 +186,8 @@ export function DroneProvider({ children }) {
           setCameraActive(false);
           setDetectActive(false);
           setDetections([]);
+          setRecording(false);
+          setRecElapsed(0);
         }
       } else if (event.type === "message") {
         const m = event.data;
@@ -189,10 +197,15 @@ export function DroneProvider({ children }) {
           setPixhawkOk(Boolean(m.pixhawk));
           setCameraActive(Boolean(m.camera));
           setDetectActive(Boolean(m.detect));
+          setRecording(Boolean(m.recording));
+          setRecElapsed(m.rec_elapsed_s || 0);
+          setAutoRecordFlag(Boolean(m.autorecord));
         } else if (m.type === "telemetry") {
           setTelemetry((t) => ({ ...t, ...m }));
         } else if (m.type === "detections") {
           setDetections(m.boxes || []);
+        } else if (m.type === "media_saved") {
+          pushToast("warn", `📸 ${m.kind === "photo" ? "Photo" : "Clip"} saved · ${m.name}`);
         } else if (m.type === "notice") {
           // Server-side operator alert (arm rejection, PreArm reason, …).
           pushToast(m.level === "error" ? "error" : "warn", m.message);
@@ -232,6 +245,38 @@ export function DroneProvider({ children }) {
   const cameraOff = useCallback(() => link.cameraOff(), [link]);
   const detectOn = useCallback(() => link.detectOn(), [link]);
   const detectOff = useCallback(() => link.detectOff(), [link]);
+  const recordStart = useCallback(() => link.recordStart(), [link]);
+  const recordStop = useCallback(() => link.recordStop(), [link]);
+  const capturePhoto = useCallback(() => link.photo(), [link]);
+  const setAutoRecord = useCallback((on) => link.setAutoRecord(on), [link]);
+
+  // Instant footage: power the camera on automatically once per connection when
+  // the active drone has a stream URL, so live video appears without the operator
+  // clicking On. Idempotent server-side; the manual On/Off toggle still works
+  // (the guard ref stops us re-toggling a camera the operator turned off).
+  const autoStartedRef = useRef(false);
+  useEffect(() => {
+    if (linkStatus !== "connected") {
+      autoStartedRef.current = false;
+      return;
+    }
+    if (!autoStartedRef.current && activeDrone?.camera_url) {
+      autoStartedRef.current = true;
+      link.cameraOn();
+    }
+  }, [linkStatus, activeDrone, link]);
+
+  // Base URL of the Pi's media server (photos/recordings live on the SD card and
+  // are fetched/deleted directly from it, not proxied through the control WS).
+  // Derived from the camera stream URL's origin — same host/port serves both.
+  const mediaBase = useMemo(() => {
+    if (!activeDrone?.camera_url) return null;
+    try {
+      return new URL(activeDrone.camera_url).origin;
+    } catch {
+      return null;
+    }
+  }, [activeDrone]);
 
   useEffect(() => () => link.disconnect(false), [link]);
 
@@ -253,6 +298,14 @@ export function DroneProvider({ children }) {
     detections,
     detectOn,
     detectOff,
+    recording,
+    recElapsed,
+    autoRecord,
+    recordStart,
+    recordStop,
+    capturePhoto,
+    setAutoRecord,
+    mediaBase,
     linkStatus,
     linkDetail,
     armed,

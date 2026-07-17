@@ -38,6 +38,8 @@ import signal
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 
 import websockets
 from pymavlink import mavutil
@@ -274,6 +276,11 @@ pixhawk_ok = False
 armed = False
 mode = "MANUAL"
 
+# Number of connected websocket clients. The mission recorder uses this to decide
+# whether it must drain MAVLink itself (no client) to keep `armed` fresh, or leave
+# that to the per-client telemetry loop (avoids two concurrent readers).
+client_count = 0
+
 # ---------------- camera subprocess ----------------
 # The repo-root camera_stream.py (Picamera2 -> MJPEG on :8000) is the camera
 # path that actually runs on this Pi. server/camera_stream.py is the WebRTC/
@@ -324,6 +331,96 @@ def stop_camera():
         camera_proc.wait()
     camera_proc = None
     print("Camera stream stopped")
+
+
+# ---------------- recording (SD-card capture) ----------------
+# The camera subprocess (camera_stream.py) owns recording: it writes an mp4 to
+# the SD card via a second encoder, independent of any streaming client. We drive
+# it over its local HTTP control endpoint, and mirror its state here so the "state"
+# message can report REC status to the UI even when recording was started
+# server-side (e.g. auto-record on arm during an unattended autonomous run).
+CAMERA_HTTP = os.environ.get("CAMERA_HTTP", "http://127.0.0.1:8000")
+
+# Auto-record: when enabled, arming (or entering an autonomous run) starts a
+# recording and disarming stops it — so a mission with no operator connected is
+# still captured. Persisted to a small state file so it survives disconnects and
+# restarts; the operator toggles it from the UI (set_autorecord) or via env.
+AUTORECORD_STATE = os.environ.get(
+    "AUTORECORD_STATE", "/tmp/seagrass-autorecord"
+)
+
+recording = False
+rec_started_at = 0.0
+
+
+def _load_autorecord() -> bool:
+    try:
+        with open(AUTORECORD_STATE) as fh:
+            return fh.read().strip() == "1"
+    except OSError:
+        return os.environ.get("AUTO_RECORD", "0") == "1"
+
+
+autorecord_enabled = _load_autorecord()
+
+
+def _persist_autorecord(on: bool):
+    try:
+        with open(AUTORECORD_STATE, "w") as fh:
+            fh.write("1" if on else "0")
+    except OSError as exc:
+        print(f"Could not persist auto-record flag: {exc}")
+
+
+def _camera_post(path: str) -> bool:
+    """POST to the camera's local control endpoint. Runs off the event loop via
+    asyncio.to_thread — urllib is blocking. Returns True on a 2xx response."""
+    req = urllib.request.Request(f"{CAMERA_HTTP}{path}", method="POST")
+    if TOKEN:
+        req.add_header("Authorization", f"Bearer {TOKEN}")
+    try:
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            return 200 <= resp.status < 300
+    except (urllib.error.URLError, OSError) as exc:
+        print(f"Camera control POST {path} failed: {exc}")
+        return False
+
+
+def _camera_photo():
+    """POST /photo to the camera and return the saved filename (or None)."""
+    req = urllib.request.Request(f"{CAMERA_HTTP}/photo", method="POST")
+    if TOKEN:
+        req.add_header("Authorization", f"Bearer {TOKEN}")
+    try:
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data.get("name")
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        print(f"Camera photo failed: {exc}")
+        return None
+
+
+async def record_start():
+    """Start an SD-card recording. Ensures the camera process is up first — the
+    recorder lives inside it — so auto-record works even if the camera was off."""
+    global recording, rec_started_at
+    if recording:
+        return
+    await asyncio.to_thread(start_camera)
+    ok = await asyncio.to_thread(_camera_post, "/record/start")
+    if ok:
+        recording = True
+        rec_started_at = time.time()
+        print("Recording started")
+
+
+async def record_stop():
+    global recording
+    if not recording:
+        return
+    await asyncio.to_thread(_camera_post, "/record/stop")
+    recording = False
+    print("Recording stopped")
 
 
 # ---------------- detector subprocess ----------------
@@ -937,9 +1034,10 @@ helm_holder = None  # only one client controls the drone at a time
 
 
 async def client_handler(ws):
-    global helm_holder
+    global helm_holder, client_count
     authed = not TOKEN
     last_seen = time.time()
+    client_count += 1
     print(f"Client connected: {ws.remote_address}")
 
     async def send(obj):
@@ -957,6 +1055,9 @@ async def client_handler(ws):
                 "pixhawk": pixhawk_ok,
                 "camera": camera_running(),
                 "detect": detector_running(),
+                "recording": recording,
+                "rec_elapsed_s": int(time.time() - rec_started_at) if recording else 0,
+                "autorecord": autorecord_enabled,
             }
         )
 
@@ -1066,8 +1167,36 @@ async def client_handler(ws):
                 await asyncio.to_thread(start_camera)
                 await state()
             elif mtype == "camera_off":
+                # Finalise any recording before the camera process dies, so the
+                # mp4 is flushed cleanly rather than truncated.
+                await record_stop()
                 await stop_detector()
                 await asyncio.to_thread(stop_camera)
+                await state()
+            elif mtype == "record_start":
+                await record_start()
+                await state()
+            elif mtype == "record_stop":
+                await record_stop()
+                await state()
+            elif mtype == "photo":
+                await asyncio.to_thread(start_camera)
+                name = await asyncio.to_thread(_camera_photo)
+                if name:
+                    await send({"type": "media_saved", "kind": "photo", "name": name})
+                else:
+                    await send({"type": "notice", "level": "warn",
+                                "message": "Photo failed — no camera frame yet"})
+            elif mtype == "set_autorecord":
+                global autorecord_enabled
+                autorecord_enabled = bool(msg.get("on"))
+                _persist_autorecord(autorecord_enabled)
+                # Apply immediately: if turning on while already armed, start now;
+                # if turning off mid-recording, stop.
+                if autorecord_enabled and armed and not recording:
+                    await record_start()
+                elif not autorecord_enabled and recording:
+                    await record_stop()
                 await state()
             elif mtype == "detect_on":
                 await start_detector()
@@ -1085,6 +1214,7 @@ async def client_handler(ws):
                     {"type": "error", "message": f"Unknown command: {mtype}"}
                 )
     finally:
+        client_count -= 1
         tele_task.cancel()
         detect_task.cancel()
         motors_task.cancel()
@@ -1118,6 +1248,30 @@ async def control_loop():
         await asyncio.sleep(CONTROL_PERIOD_S)
 
 
+async def mission_recorder_loop():
+    """Drive auto-record for the whole server lifetime, including unattended
+    autonomous runs with no operator connected — the underwater/no-signal case
+    the operator needs captured.
+
+    When a client is connected its telemetry loop already drains MAVLink (and so
+    keeps `armed` fresh); when none is, we read it here ourselves so arm/disarm
+    transitions are still seen. The client_count guard means there is never a
+    second concurrent reader stealing the other's messages.
+    """
+    prev_armed = armed
+    while True:
+        if client_count == 0 and master is not None:
+            # No client is draining the link — keep arm state current ourselves.
+            read_telemetry()
+        if autorecord_enabled:
+            if armed and not prev_armed:
+                await record_start()
+            elif not armed and prev_armed and recording:
+                await record_stop()
+        prev_armed = armed
+        await asyncio.sleep(0.5)
+
+
 async def main():
     connect_pixhawk()
     # Announce ourselves as a GCS at 1 Hz on a dedicated daemon thread, for the
@@ -1129,6 +1283,10 @@ async def main():
     # manual-control failsafe is fed just as steadily as the heartbeat feeds the
     # GCS failsafe.
     asyncio.create_task(control_loop())
+    # Auto-record missions (arm→record, disarm→stop), running with or without an
+    # operator connected. See mission_recorder_loop.
+    asyncio.create_task(mission_recorder_loop())
+    print(f"Auto-record: {'ON' if autorecord_enabled else 'off'}")
     async with websockets.serve(client_handler, WS_HOST, WS_PORT):
         print(f"Seagrass drone server listening on ws://{WS_HOST}:{WS_PORT}")
         await asyncio.Future()

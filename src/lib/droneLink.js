@@ -14,8 +14,13 @@
  *     { type: "ping" }                       keepalive
  *     { type: "camera_on" } / { type: "camera_off" }
  *     { type: "detect_on" } / { type: "detect_off" }   toggle object detection
+ *     { type: "record_start" } / { type: "record_stop" }  SD-card recording (Pi-side)
+ *     { type: "photo" }                      capture a still to the Pi's SD card
+ *     { type: "set_autorecord", on }         auto-record whole missions on arm
  *   server → client:
- *     { type: "state", armed, mode, pixhawk, camera, detect }
+ *     { type: "state", armed, mode, pixhawk, camera, detect,
+ *                      recording, rec_elapsed_s, autorecord }
+ *     { type: "media_saved", kind: "photo", name }   a capture landed on the Pi
  *     { type: "telemetry", heading, groundspeed, battery, lat, lon, depth }
  *     { type: "motors", angle, mag, left, right, left_pwm, right_pwm }  10Hz, helm only
  *     { type: "soft_stop", latched }         latched soft-stop state changed
@@ -151,4 +156,13 @@ export default class DroneLink {
   cameraOff() { return this.send({ type: "camera_off" }); }
   detectOn() { return this.send({ type: "detect_on" }); }
   detectOff() { return this.send({ type: "detect_off" }); }
+  /** Start/stop an SD-card recording on the Pi. Recording lives on the drone, so
+   *  it keeps running through an autonomous dive with no link to the browser. */
+  recordStart() { return this.send({ type: "record_start" }); }
+  recordStop() { return this.send({ type: "record_stop" }); }
+  /** Capture a still frame to the Pi's SD card. */
+  photo() { return this.send({ type: "photo" }); }
+  /** Toggle auto-record: when on, the Pi records whenever the vehicle is armed —
+   *  including unattended autonomous missions. Persisted server-side. */
+  setAutoRecord(on) { return this.send({ type: "set_autorecord", on: !!on }); }
 }

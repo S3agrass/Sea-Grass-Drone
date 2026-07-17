@@ -16,6 +16,11 @@ const mockDrone = {
   detections: [],
   detectOn: vi.fn(),
   detectOff: vi.fn(),
+  recording: false,
+  recElapsed: 0,
+  recordStart: vi.fn(),
+  recordStop: vi.fn(),
+  capturePhoto: vi.fn(),
 };
 
 // Replace useDrone with our mock.
@@ -32,6 +37,9 @@ beforeEach(() => {
     cameraOff: vi.fn(),
     detectOn: vi.fn(),
     detectOff: vi.fn(),
+    recordStart: vi.fn(),
+    recordStop: vi.fn(),
+    capturePhoto: vi.fn(),
   };
   vi.clearAllMocks();
 });
@@ -88,7 +96,7 @@ describe('CameraView — placeholder states', () => {
     expect(screen.getByText(/no stream url configured/i)).toBeInTheDocument();
   });
 
-  it('disables Snapshot and Record when not live', () => {
+  it('disables Snapshot and Record when the camera is off', () => {
     render(<CameraView />);
     expect(screen.getByRole('button', { name: /snapshot/i })).toBeDisabled();
     expect(screen.getByRole('button', { name: /record/i })).toBeDisabled();
@@ -97,6 +105,39 @@ describe('CameraView — placeholder states', () => {
   it('disables Expand when not live', () => {
     render(<CameraView />);
     expect(screen.getByRole('button', { name: /expand/i })).toBeDisabled();
+  });
+});
+
+describe('CameraView — capture + recording (Pi-side)', () => {
+  it('enables Snapshot and Record once the camera is on', () => {
+    mockCtx.cameraActive = true;
+    render(<CameraView />);
+    expect(screen.getByRole('button', { name: /snapshot/i })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: /record/i })).not.toBeDisabled();
+  });
+
+  it('calls capturePhoto when Snapshot is clicked', () => {
+    mockCtx.cameraActive = true;
+    render(<CameraView />);
+    fireEvent.click(screen.getByRole('button', { name: /snapshot/i }));
+    expect(mockCtx.capturePhoto).toHaveBeenCalledOnce();
+  });
+
+  it('calls recordStart when Record is clicked while idle', () => {
+    mockCtx.cameraActive = true;
+    render(<CameraView />);
+    fireEvent.click(screen.getByRole('button', { name: /record/i }));
+    expect(mockCtx.recordStart).toHaveBeenCalledOnce();
+  });
+
+  it('shows the REC badge and calls recordStop when recording', () => {
+    mockCtx.cameraActive = true;
+    mockCtx.recording = true;
+    mockCtx.recElapsed = 65;
+    render(<CameraView />);
+    expect(screen.getByText(/REC 01:05/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /stop/i }));
+    expect(mockCtx.recordStop).toHaveBeenCalledOnce();
   });
 });
 
