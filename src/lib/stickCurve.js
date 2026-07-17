@@ -15,7 +15,7 @@
 // sticks, and read the live axes[] line in the diagnostic readout. Drift matters
 // more than it used to — the server's CREEP_FLOOR turns a leaked axis into real
 // thrust rather than a harmless sub-spin buzz.
-export const DEADZONE = 0.05;
+export const DEADZONE = 0.03;
 
 // 0 = linear, 1 = fully cubic. Bows the middle down so small deflections stay
 // gentle while full lock still reaches 100%. This is the "push more = go faster"
