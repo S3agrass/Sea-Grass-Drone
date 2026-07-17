@@ -23,6 +23,35 @@ SEAGRASS_TOKEN=
 #PIXHAWK_PORT=/dev/ttyACM0
 #PIXHAWK_BAUD=115200
 #SEAGRASS_PORT=8765
+
+# ---- Feel tuning (restart the server to apply) -----------------------------
+# Full list and the reasoning behind each: server/drone_server.py, "FEEL TUNING".
+
+# CREEP_FLOOR — the smallest PWM offset that actually SPINS a thruster.
+# If the motors judder/buzz at low stick instead of turning, they're being
+# commanded below their minimum spin speed: set this and the ramp will cross
+# that dead band quickly instead of crawling through it.
+# CALIBRATE, don't guess: leave it at 0, ease the stick up while watching the
+# gamepad panel's Motor L/R readout, and note the PWM where the juddering stops
+# and it starts truly turning. Put that number here.
+# Check MOT_SPIN_MIN in QGroundControl first — if it's already doing this job,
+# leave this at 0. Stacking both makes the smallest nudge lurch.
+#SEAGRASS_CREEP_FLOOR=0
+
+# Seconds of held-full stick to reach top speed. Bigger = longer, gentler climb.
+# Does NOT change top speed (that's SEAGRASS_MAX_OFFSET).
+#SEAGRASS_SURGE_RAMP=5.0
+#SEAGRASS_STEER_RAMP=2.5
+#SEAGRASS_DEPTH_RAMP=2.0
+
+# How much faster the ramp climbs at full speed than at the moment thrust
+# starts. Bigger = more sluggish off the line, same time to top speed.
+# 1.0 = perfectly linear (the pre-ease behaviour, exact rollback).
+#SEAGRASS_RAMP_EASE=4.0
+
+# Top speed, as PWM offset from neutral. Vehicle hard limit is 400.
+#SEAGRASS_MAX_OFFSET=250
+#SEAGRASS_STEER_OFFSET=150
 EOF
   )
   fail "first run: created template $ENV_FILE
