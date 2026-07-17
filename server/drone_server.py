@@ -89,7 +89,7 @@ STEER_MAX_OFFSET = int(os.environ.get("SEAGRASS_STEER_OFFSET", "150"))  # turn o
 #    starts gentle and accelerates. Rate keys off current speed, not off how far
 #    away the target is, so a small stick nudge is still reached quickly -- it's
 #    just a short trip -- while a full-stick pull takes the whole ramp_up_s. ---
-SURGE_RAMP_UP_S  = float(os.environ.get("SEAGRASS_SURGE_RAMP", "4.0"))  # forward: seconds to full. Bigger = gentler/chiller.
+SURGE_RAMP_UP_S  = float(os.environ.get("SEAGRASS_SURGE_RAMP", "5"))  # forward: seconds to full. Bigger = gentler/chiller.
 SURGE_DECAY_S    = 0.1
 # Steer is a differential with far less inertia than surge and no lurch to
 # prevent, and 5s to full yaw is unsteerable while inching, so it ramps quicker.
