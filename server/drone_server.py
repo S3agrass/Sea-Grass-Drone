@@ -157,7 +157,7 @@ SURGE_SPRINT_UP_S = float(os.environ.get("SEAGRASS_SPRINT_RAMP", "1.2"))
 # live motors readout. If MOT_SPIN_MIN is already non-zero in QGroundControl,
 # ArduSub is doing this for you -- stacking a second floor turns the smallest
 # nudge into a lurch, so leave this at 0.
-CREEP_FLOOR = float(os.environ.get("SEAGRASS_CREEP_FLOOR", "6"))
+CREEP_FLOOR = float(os.environ.get("SEAGRASS_CREEP_FLOOR", "0"))
 # Above min(surge cap, steer cap) the scaling bound in _apply_creep_floor no
 # longer holds (a floored command could exceed an axis's own maximum).
 CREEP_FLOOR = max(0.0, min(CREEP_FLOOR, float(min(MAX_PWM_OFFSET, STEER_MAX_OFFSET))))
