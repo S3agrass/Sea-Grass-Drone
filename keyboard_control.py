@@ -181,8 +181,12 @@ gamepad_axes = {'surge': 0.0, 'steer': 0.0, 'depth': 0.0}
 _last_sent_frame = None
 
 def reset_motion_state():
-    global surge_pwm, steer_pwm, depth_pwm
+    global surge_pwm, steer_pwm, depth_pwm, speed_locked, locked_targets
     surge_pwm = steer_pwm = depth_pwm = NEUTRAL_PWM
+    # A speed lock must never survive a stop — otherwise the vehicle would sit
+    # locked at neutral, ignoring the sticks, with no visible reason why.
+    speed_locked = False
+    locked_targets = None
 
 def _axis_value(pos_key, neg_key, analog):
     digital = (1.0 if held(pos_key) else 0.0) - (1.0 if held(neg_key) else 0.0)
@@ -204,7 +208,7 @@ def _ramp(current, target, dt, ramp_up_s, decay_s):
     return current
 
 def update_flight(dt):
-    global surge_pwm, steer_pwm, depth_pwm, _last_sent_frame
+    global surge_pwm, steer_pwm, depth_pwm, _last_sent_frame, locked_targets
     surge_in = _axis_value('w', 's', gamepad_axes['surge'])
     steer_in = _axis_value('d', 'a', gamepad_axes['steer'])
     depth_in = _axis_value('q', 'e', gamepad_axes['depth'])
@@ -214,11 +218,25 @@ def update_flight(dt):
     # of both motors saturating forward.
     surge_in *= 1.0 - TURN_ASSIST * abs(steer_in)
 
-    surge_pwm = _ramp(surge_pwm, NEUTRAL_PWM + surge_in * MAX_PWM_OFFSET,
+    targets = (NEUTRAL_PWM + surge_in * MAX_PWM_OFFSET,
+               NEUTRAL_PWM + steer_in * MAX_PWM_OFFSET,
+               NEUTRAL_PWM + depth_in * MAX_PWM_OFFSET)
+    # R1 speed lock: latch the targets on the first tick after locking, then
+    # hold them — stick/key motion input is computed and discarded until
+    # unlock, while frames keep flowing below so the RC-override failsafe
+    # still sees a live pilot.
+    if speed_locked:
+        if locked_targets is None:
+            locked_targets = targets
+        targets = locked_targets
+    else:
+        locked_targets = None
+
+    surge_pwm = _ramp(surge_pwm, targets[0],
                       dt, SURGE_RAMP_UP_S, SURGE_DECAY_S)
-    steer_pwm = _ramp(steer_pwm, NEUTRAL_PWM + steer_in * MAX_PWM_OFFSET,
+    steer_pwm = _ramp(steer_pwm, targets[1],
                       dt, STEER_RAMP_UP_S, STEER_DECAY_S)
-    depth_pwm = _ramp(depth_pwm, NEUTRAL_PWM + depth_in * MAX_PWM_OFFSET,
+    depth_pwm = _ramp(depth_pwm, targets[2],
                       dt, DEPTH_RAMP_UP_S, DEPTH_DECAY_S)
 
     # One combined override per tick instead of three separate messages —
@@ -289,9 +307,10 @@ def on_release(key):
         pressed_keys.discard(k)
 
 # --- PS4 gamepad support -----------------------------------------------
-# Same left-stick/right-stick/L1/Options mapping as the web app's
+# Same left-stick/right-stick/L1/R1/Options mapping as the web app's
 # GamepadControl.jsx: left stick + D-pad = move/steer (w/a/s/d), right
-# stick Y = rise/dive (q/e), L1 = light toggle, Options = all-stop.
+# stick Y = rise/dive (q/e), L1 = light toggle, R1 = speed lock,
+# Options = all-stop.
 #
 # This uses pygame's SDL GameController API (named buttons: leftshoulder,
 # start, dpad_up, ...) instead of raw joystick button indices. Raw indices
@@ -302,23 +321,51 @@ def on_release(key):
 # physical button name instead, so this works regardless of raw ordering
 # as long as SDL recognizes the pad (run with --gamepad-debug to confirm
 # what SDL sees).
-GAMEPAD_DEADZONE = 0.45
-GAMEPAD_EXPO = 0.5  # 0 = linear, 1 = fully cubic; expo gives fine control near center
+# Fraction of stick travel near center that reads as zero, killing rest drift.
+# Not a gate — _stick_curve rescales the remaining travel so output starts from
+# 0 right at the deadzone edge, so this costs no resolution. Keep it just above
+# the pad's real drift (run --gamepad-debug with the sticks centred to read it).
+GAMEPAD_DEADZONE = 0.05
+# Gas-pedal response: two linear zones meeting at a knee, instead of one expo
+# curve. The creep zone (deadzone edge -> CREEP_ZONE_END of the remaining
+# travel) climbs gently to CREEP_ZONE_OUTPUT of full authority; past the knee
+# the power zone climbs ~5x steeper to exactly 1.0 at full lock. Easing around
+# the top of the stick moves output slowly; pushing past the knee gives clearly
+# more power per millimetre — a distinction a single expo curve can't make.
+# Keep these in step with src/lib/stickCurve.js and terminal_control.py.
+#
+# Retune CREEP_ZONE_OUTPUT first: it sets how fast "slow" is. Raise it if the
+# whole creep zone feels inert, lower it if inching is already too quick.
+# CREEP_ZONE_END trades fine-control travel against power-zone travel.
+CREEP_ZONE_END = 0.55     # fraction of post-deadzone travel in the creep zone
+CREEP_ZONE_OUTPUT = 0.2   # authority at the knee (1.0 = full)
 AXIS_MAX = 32767  # SDL controller axes are raw ints in [-32768, 32767]
 
-gamepad_edge = {'l1': False, 'options': False}
+gamepad_edge = {'l1': False, 'r1': False, 'options': False}
 gamepad_light_on = False
 
+# R1 speed lock: freeze the current motion targets and ignore stick/key input
+# for surge/steer/depth until R1 is pressed again. speed_locked is the toggle;
+# locked_targets is captured lazily by update_flight on the first tick after
+# locking (that's where the targets are computed), and cleared on unlock.
+# All-stop always wins: all_stop() drops the lock along with the motion state.
+speed_locked = False
+locked_targets = None
+
 def _stick_curve(raw):
-    """Deadzone-rescaled expo response: small deflections give fine, gentle
-    control, full deflection still reaches 100% — the standard game-feel
-    stick curve. Rescaling means output starts from 0 right at the deadzone
-    edge instead of jumping."""
+    """Deadzone-rescaled two-zone "gas pedal" response. Rescaling means the
+    output ramps from 0 at the deadzone edge instead of jumping to it; the two
+    zones are continuous at the knee and reach exactly 1.0 at full deflection.
+    Same shape as src/lib/stickCurve.js — keep them in step."""
     mag = abs(raw)
     if mag < GAMEPAD_DEADZONE:
         return 0.0
     mag = min(1.0, (mag - GAMEPAD_DEADZONE) / (1.0 - GAMEPAD_DEADZONE))
-    mag = (1.0 - GAMEPAD_EXPO) * mag + GAMEPAD_EXPO * mag ** 3
+    if mag <= CREEP_ZONE_END:
+        mag = CREEP_ZONE_OUTPUT * (mag / CREEP_ZONE_END)
+    else:
+        mag = CREEP_ZONE_OUTPUT + ((1.0 - CREEP_ZONE_OUTPUT)
+                                   * (mag - CREEP_ZONE_END) / (1.0 - CREEP_ZONE_END))
     return mag if raw >= 0 else -mag
 
 def set_gamepad_key(key, want_held):
@@ -338,7 +385,7 @@ def poll_gamepad(gamepad, debug=False):
     if the controller has disconnected — the caller should drop it and fall
     back to keyboard-only (if available).
     """
-    global gamepad_light_on
+    global gamepad_light_on, speed_locked
     try:
         pygame.event.pump()
 
@@ -367,6 +414,13 @@ def poll_gamepad(gamepad, debug=False):
             print("Light ON" if gamepad_light_on else "Light OFF")
         gamepad_edge['l1'] = l1_down
 
+        # R1 toggles the speed lock (edge-detected like L1). update_flight does
+        # the actual latching/holding; all_stop() below always clears the lock.
+        r1_down = bool(gamepad.get_button(pygame.CONTROLLER_BUTTON_RIGHTSHOULDER))
+        if r1_down and not gamepad_edge['r1']:
+            speed_locked = not speed_locked
+        gamepad_edge['r1'] = r1_down
+
         options_down = bool(gamepad.get_button(pygame.CONTROLLER_BUTTON_START))
         if options_down and not gamepad_edge['options']:
             # All-stop only — zero the sticks and keep the program (and the
@@ -382,15 +436,17 @@ def poll_gamepad(gamepad, debug=False):
             axes = (f"surge:{gamepad_axes['surge']:+.2f} steer:{gamepad_axes['steer']:+.2f} "
                     f"depth:{gamepad_axes['depth']:+.2f}")
             held_dpad = [k for k in ('w', 'a', 's', 'd') if k in gamepad_keys]
-            print(f"  [gamepad] {axes} dpad{held_dpad} l1={l1_down} options={options_down}")
+            print(f"  [gamepad] {axes} dpad{held_dpad} l1={l1_down} r1={r1_down} "
+                  f"lock={speed_locked} options={options_down}")
     except pygame.error as exc:
         fallback = "falling back to keyboard-only control" if HAS_PYNPUT else "no input source left — press Ctrl+C to quit"
         print(f"Controller lost ({exc}) — {fallback}")
         gamepad_keys.clear()
         gamepad_axes['surge'] = gamepad_axes['steer'] = gamepad_axes['depth'] = 0.0
         gamepad_edge['l1'] = False
+        gamepad_edge['r1'] = False
         gamepad_edge['options'] = False
-        all_stop()  # immediate hard stop, not a graceful ramp-down — control input is gone
+        all_stop()  # immediate hard stop, not a graceful ramp-down — control input is gone; also drops any speed lock
         return None
 
     return gamepad
@@ -424,7 +480,8 @@ if __name__ == "__main__":
 
         gamepad = init_gamepad()
         if gamepad:
-            print("PS4 controller ready! Left stick/D-pad move, right stick Y depth, L1 light, Options all-stop")
+            print("PS4 controller ready! Left stick/D-pad move, right stick Y depth, "
+                  "L1 light, R1 speed lock, Options all-stop")
 
         if HAS_PYNPUT:
             try:

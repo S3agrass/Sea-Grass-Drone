@@ -16,9 +16,9 @@ Optional: pass a different URL as the first arg, e.g.
 Controls: left stick = move/steer (analog — push more, go faster),
 right stick Y = rise/dive, Ctrl-C to quit (auto-disarms).
 
-Feel tuning: the two knobs below shape the stick response. Override live
+Feel tuning: the knobs below shape the stick response. Override live
 without editing the file, e.g.
-    SEAGRASS_DEADZONE=0.08 SEAGRASS_EXPO=0.7 python3 terminal_control.py
+    SEAGRASS_DEADZONE=0.08 SEAGRASS_CREEP_OUT=0.25 python3 terminal_control.py
 (Top speed is the server's SEAGRASS_MAX_OFFSET knob, not set here.)
 """
 import asyncio
@@ -38,11 +38,15 @@ if not TOKEN:
 
 # Deadzone: fraction of stick travel near center that reads as zero (kills
 # drift). Kept small so most of the travel is usable and progressive.
-# Expo: 0 = linear, 1 = fully cubic — higher gives finer control near center
-# while full deflection still reaches 100%. This is the "push more = faster"
-# curve.
-GAMEPAD_DEADZONE = float(os.environ.get("SEAGRASS_DEADZONE", "0.12"))
-GAMEPAD_EXPO = float(os.environ.get("SEAGRASS_EXPO", "0.6"))
+# Gas-pedal response: two linear zones meeting at a knee, instead of one expo
+# curve. The creep zone (deadzone edge -> CREEP_ZONE_END of the remaining
+# travel) climbs gently to CREEP_ZONE_OUTPUT of full authority; past the knee
+# the power zone climbs ~5x steeper to exactly 1.0 at full lock. Retune
+# CREEP_ZONE_OUTPUT first — it sets how fast "slow" is. Keep these in step
+# with keyboard_control.py and src/lib/stickCurve.js.
+GAMEPAD_DEADZONE = float(os.environ.get("SEAGRASS_DEADZONE", "0.05"))
+CREEP_ZONE_END = float(os.environ.get("SEAGRASS_CREEP_END", "0.55"))
+CREEP_ZONE_OUTPUT = float(os.environ.get("SEAGRASS_CREEP_OUT", "0.2"))
 SEND_INTERVAL = 0.05   # 20 Hz analog updates
 REPEAT_INTERVAL = 0.2  # re-send even when unchanged — well under the 1.5s watchdog
 AXIS_EPSILON = 0.01    # only push a fresh frame when an axis moved this much
@@ -54,14 +58,19 @@ OPTIONS_BUTTON = int(os.environ.get("SEAGRASS_OPTIONS_BUTTON", "9"))
 
 
 def stick_curve(raw):
-    """Deadzone-rescaled expo response: small deflections give fine, gentle
-    control, full deflection still reaches 100%. Rescaling means output starts
-    from 0 right at the deadzone edge instead of jumping."""
+    """Deadzone-rescaled two-zone "gas pedal" response. Rescaling means the
+    output ramps from 0 at the deadzone edge instead of jumping to it; the two
+    zones are continuous at the knee and reach exactly 1.0 at full deflection.
+    Same shape as keyboard_control.py and src/lib/stickCurve.js."""
     mag = abs(raw)
     if mag < GAMEPAD_DEADZONE:
         return 0.0
     mag = min(1.0, (mag - GAMEPAD_DEADZONE) / (1.0 - GAMEPAD_DEADZONE))
-    mag = (1.0 - GAMEPAD_EXPO) * mag + GAMEPAD_EXPO * mag ** 3
+    if mag <= CREEP_ZONE_END:
+        mag = CREEP_ZONE_OUTPUT * (mag / CREEP_ZONE_END)
+    else:
+        mag = CREEP_ZONE_OUTPUT + ((1.0 - CREEP_ZONE_OUTPUT)
+                                   * (mag - CREEP_ZONE_END) / (1.0 - CREEP_ZONE_END))
     return mag if raw >= 0 else -mag
 
 
