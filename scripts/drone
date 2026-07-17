@@ -40,9 +40,20 @@ SEAGRASS_TOKEN=
 
 # Seconds of held-full stick to reach top speed. Bigger = longer, gentler climb.
 # Does NOT change top speed (that's SEAGRASS_MAX_OFFSET).
+# NOTE: for SURGE this is "seconds from the sprint knee to top speed" — see
+# SEAGRASS_SPRINT_FRACTION below. Steer/depth have no knee: seconds to full.
 #SEAGRASS_SURGE_RAMP=5.0
 #SEAGRASS_STEER_RAMP=2.5
 #SEAGRASS_DEPTH_RAMP=2.0
+
+# Two-stage surge ramp. Full stick sprints to SPRINT_FRACTION of top speed in
+# SPRINT_RAMP seconds, then takes SEAGRASS_SURGE_RAMP to grind out the rest.
+# Top speed is unchanged — this only reshapes how you get there, so most of the
+# speed is there promptly and the last stretch has to be earned by holding.
+# 0.6 = "full stick gives 3/5 of top speed fast, the last 2/5 is the slow climb".
+# Set to 1.0 to remove the knee (single-stage, the pre-knee behaviour).
+#SEAGRASS_SPRINT_FRACTION=0.6
+#SEAGRASS_SPRINT_RAMP=1.2
 
 # How much faster the ramp climbs at full speed than at the moment thrust
 # starts. Bigger = more sluggish off the line, same time to top speed.

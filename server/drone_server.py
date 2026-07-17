@@ -79,17 +79,21 @@ LIGHT_ON_PWM = 1900
 MAX_PWM_OFFSET   = int(os.environ.get("SEAGRASS_MAX_OFFSET",   "250"))  # forward/back + depth. Bigger = faster.
 STEER_MAX_OFFSET = int(os.environ.get("SEAGRASS_STEER_OFFSET", "150"))  # turn only. Bigger = sharper/spinnier turn.
 
-# -- Ramp-up = seconds a held/full input takes to build from stopped to full
-#    power (bigger = gentler spin-up); Decay = seconds to fall back to stopped
-#    after release (bigger = longer coast, smaller = crisper stop). The two
-#    RAMP_UP knobs below are THE dial for how gradual the spin-up feels: they're
-#    "seconds from thrust onset to top speed" and do NOT change top speed
+# -- Ramp-up = seconds a held/full input takes to build to full power (bigger =
+#    gentler spin-up); Decay = seconds to fall back to stopped after release
+#    (bigger = longer coast, smaller = crisper stop). The two RAMP_UP knobs below
+#    are THE dial for how gradual the spin-up feels, and do NOT change top speed
 #    (that's MAX_PWM_OFFSET). The ramp is EASED, not linear (see RAMP_EASE_RATIO
 #    and _ramp): rate grows with how fast you're already going, so the spin-up
 #    starts gentle and accelerates. Rate keys off current speed, not off how far
 #    away the target is, so a small stick nudge is still reached quickly -- it's
-#    just a short trip -- while a full-stick pull takes the whole ramp_up_s. ---
-SURGE_RAMP_UP_S  = float(os.environ.get("SEAGRASS_SURGE_RAMP", "5"))  # forward: seconds to full. Bigger = gentler/chiller.
+#    just a short trip -- while a full-stick pull takes the whole ramp_up_s.
+#
+#    NOTE on surge: SPRINT_FRACTION below puts a knee in the surge ramp, so
+#    SURGE_RAMP_UP_S is "seconds from the knee to top speed", not from a
+#    standstill. Total time to top = SURGE_SPRINT_UP_S + SURGE_RAMP_UP_S. Steer
+#    and depth have no knee, so for them it stays "seconds to full". ---------
+SURGE_RAMP_UP_S  = float(os.environ.get("SEAGRASS_SURGE_RAMP", "5"))  # forward: seconds from knee to full. Bigger = gentler/chiller.
 SURGE_DECAY_S    = 0.1
 # Steer is a differential with far less inertia than surge and no lurch to
 # prevent, and 5s to full yaw is unsteerable while inching, so it ramps quicker.
@@ -118,6 +122,27 @@ _EASE_B = _EASE_A * (RAMP_EASE_RATIO - 1.0)
 # and nothing is felt. Easing through it would just be a delay before anything
 # happens, so we cross it fast and start the ease-in at the point thrust begins.
 RAMP_ENGAGE_S = float(os.environ.get("SEAGRASS_RAMP_ENGAGE", "0.3"))
+
+# -- Two-stage surge ramp ("sprint, then earn the rest") ---------------------
+# Splits the surge spin-up at a knee: a full-stick hold sprints to
+# SURGE_SPRINT_FRACTION of top speed in SURGE_SPRINT_UP_S, then grinds out the
+# remainder over SURGE_RAMP_UP_S. Top speed is untouched (still MAX_PWM_OFFSET) --
+# this only reshapes the trip there, so most of the usable speed arrives promptly
+# while the last stretch has to be earned by holding the stick.
+#
+# The fraction is of TOP SPEED, so 0.6 means the knee sits at 0.6*MAX_PWM_OFFSET
+# and reads "full stick gets you 3/5 of top speed quickly, the last 2/5 takes
+# SURGE_RAMP_UP_S". Clamped up to CREEP_FLOOR: a knee under the floor is a knee
+# inside the dead band, which the engage branch has already crossed. Set to 1.0
+# to remove the knee (single-stage; SPRINT_UP_S then has no effect and
+# SURGE_RAMP_UP_S goes back to meaning "seconds to full").
+# Surge only, by deliberate omission: steer's 2.5s ramp is already tuned to stay
+# steerable while inching, and depth fights buoyancy, so neither wants a knee.
+SURGE_SPRINT_FRACTION = float(os.environ.get("SEAGRASS_SPRINT_FRACTION", "0.6"))
+SURGE_SPRINT_FRACTION = max(0.0, min(1.0, SURGE_SPRINT_FRACTION))
+# Seconds for that first stage. Eased on the same curve as the second, so the
+# sprint still starts gently off the creep floor rather than lurching.
+SURGE_SPRINT_UP_S = float(os.environ.get("SEAGRASS_SPRINT_RAMP", "1.2"))
 
 # -- Creep floor -------------------------------------------------------------
 # CREEP_FLOOR: the smallest PWM offset that actually spins a thruster. Below
@@ -602,7 +627,8 @@ def _apply_creep_floor(surge_off, steer_off):
     return (left + right) / 2.0, (left - right) / 2.0
 
 
-def _ramp(current, target, dt, ramp_up_s, decay_s, max_offset):
+def _ramp(current, target, dt, ramp_up_s, decay_s, max_offset,
+          sprint_fraction=1.0, sprint_up_s=None):
     """Ease `current` PWM toward `target` in one of three regimes, chosen by
     where `current` already is -- never by how far `target` is.
 
@@ -619,6 +645,13 @@ def _ramp(current, target, dt, ramp_up_s, decay_s, max_offset):
     reached in a fraction of a second, while a full-stick pull still takes the
     whole ramp_up_s. `max_offset` is this axis's peak PWM offset, so ramp_up_s
     stays "seconds to reach full" even though steer and surge have different caps.
+
+    `sprint_fraction` < 1.0 splits that last regime at a knee sitting at that
+    fraction of `max_offset`: the band from the creep floor up to the knee is
+    crossed in `sprint_up_s`, the rest in `ramp_up_s`. Each stage re-runs the same
+    ease over its own sub-band, so the curve restarts gently at the knee instead
+    of stepping. Top speed is unchanged either way -- only the pacing differs.
+    Defaults to 1.0 (no knee).
     """
     cur_off = current - NEUTRAL_PWM
     tgt_off = target - NEUTRAL_PWM
@@ -633,9 +666,16 @@ def _ramp(current, target, dt, ramp_up_s, decay_s, max_offset):
         # would never engage from a standstill.
         rate = max(CREEP_FLOOR, 1.0) / RAMP_ENGAGE_S
     else:
-        band = max(1.0, max_offset - CREEP_FLOOR)
-        v = min(1.0, (abs(cur_off) - CREEP_FLOOR) / band)
-        rate = band * (_EASE_A + _EASE_B * v) / ramp_up_s
+        lo, hi, span_s = CREEP_FLOOR, float(max_offset), ramp_up_s
+        knee = max(CREEP_FLOOR, sprint_fraction * max_offset)
+        if sprint_fraction < 1.0 and knee < max_offset:
+            if abs(cur_off) < knee:
+                hi, span_s = knee, (sprint_up_s if sprint_up_s else ramp_up_s)
+            else:
+                lo = knee
+        band = max(1.0, hi - lo)
+        v = min(1.0, (abs(cur_off) - lo) / band)
+        rate = band * (_EASE_A + _EASE_B * v) / span_s
     max_step = rate * dt
     if current < target:
         return min(current + max_step, target)
@@ -739,7 +779,8 @@ def channel_frame(dt):
         depth_off = math.copysign(CREEP_FLOOR, depth_off)
 
     surge_pwm = _ramp(surge_pwm, NEUTRAL_PWM + surge_off,
-                      dt, surge_up, surge_dec, surge_max)
+                      dt, surge_up, surge_dec, surge_max,
+                      SURGE_SPRINT_FRACTION, SURGE_SPRINT_UP_S)
     steer_pwm = _ramp(steer_pwm, NEUTRAL_PWM + steer_off,
                       dt, steer_up, steer_dec, steer_max)
     depth_pwm = _ramp(depth_pwm, NEUTRAL_PWM + depth_off,
