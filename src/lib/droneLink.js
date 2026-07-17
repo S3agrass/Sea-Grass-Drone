@@ -5,18 +5,27 @@
  *   client → server:
  *     { type: "hello", token }               auth handshake
  *     { type: "key", key: "w", pressed }     mirrors keyboard_control.py mappings
+ *     { type: "axis", surge, steer, depth }  analog sticks, floats in [-1, 1];
+ *                                            server ramps toward these as targets
  *     { type: "arm" } / { type: "disarm" }
  *     { type: "mode", mode: "MANUAL" }
- *     { type: "stop" }                       all-stop (space bar / E-STOP)
+ *     { type: "stop" }                       hard kill — server process exits
+ *     { type: "soft_stop" }                  latched recoverable all-stop (toggle)
+ *     { type: "ping" }                       keepalive
  *     { type: "camera_on" } / { type: "camera_off" }
  *     { type: "detect_on" } / { type: "detect_off" }   toggle object detection
  *   server → client:
  *     { type: "state", armed, mode, pixhawk, camera, detect }
  *     { type: "telemetry", heading, groundspeed, battery, lat, lon, depth }
+ *     { type: "motors", angle, mag, left, right, left_pwm, right_pwm }  10Hz, helm only
+ *     { type: "soft_stop", latched }         latched soft-stop state changed
  *     { type: "detections", boxes: [{ cls, conf, x, y, w, h }], ts }
  *     { type: "error", message }
  *     { type: "notice", level: "error"|"warn", message }   arm rejections, PreArm reasons
  *     { type: "hello_ok" }
+ *
+ * Motion input: "key" and "axis" are unioned server-side (drone_server.py
+ * _axis_value), so a client driving analog must not leave stale keys held.
  */
 export default class DroneLink {
   constructor() {
@@ -122,10 +131,22 @@ export default class DroneLink {
   sendKey(key, pressed) {
     return this.send({ type: "key", key, pressed });
   }
+  /** Analog stick targets, each a float in [-1, 1]. The server ramps toward
+   *  these rather than applying them directly, and unions them with any held
+   *  keys — so an analog client should clear its keys first (see
+   *  GamepadControl's purge on enable). */
+  sendAxis({ surge = 0, steer = 0, depth = 0 } = {}) {
+    return this.send({ type: "axis", surge, steer, depth });
+  }
   arm() { return this.send({ type: "arm" }); }
   disarm() { return this.send({ type: "disarm" }); }
   setMode(mode) { return this.send({ type: "mode", mode }); }
+  /** Hard kill: the server process exits and needs a manual restart. */
   allStop() { return this.send({ type: "stop" }); }
+  /** Latched soft-stop toggle: freezes all motion but keeps the server up and
+   *  the vehicle armed, so it's recoverable by toggling again. While latched the
+   *  server ignores axis input entirely. */
+  softStop() { return this.send({ type: "soft_stop" }); }
   cameraOn() { return this.send({ type: "camera_on" }); }
   cameraOff() { return this.send({ type: "camera_off" }); }
   detectOn() { return this.send({ type: "detect_on" }); }

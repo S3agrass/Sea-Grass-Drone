@@ -83,15 +83,59 @@ STEER_MAX_OFFSET = int(os.environ.get("SEAGRASS_STEER_OFFSET", "150"))  # turn o
 #    power (bigger = gentler spin-up); Decay = seconds to fall back to stopped
 #    after release (bigger = longer coast, smaller = crisper stop). The two
 #    RAMP_UP knobs below are THE dial for how gradual the spin-up feels: they're
-#    "seconds of held-full stick to reach top speed" and do NOT change top speed
-#    (that's MAX_PWM_OFFSET). The ramp is linear, so a sharper turn (bigger
-#    target) naturally takes proportionally longer to reach. ------------------
-SURGE_RAMP_UP_S  = float(os.environ.get("SEAGRASS_SURGE_RAMP", "3.5"))  # forward: seconds to full. Bigger = gentler/chiller.
+#    "seconds from thrust onset to top speed" and do NOT change top speed
+#    (that's MAX_PWM_OFFSET). The ramp is EASED, not linear (see RAMP_EASE_RATIO
+#    and _ramp): rate grows with how fast you're already going, so the spin-up
+#    starts gentle and accelerates. Rate keys off current speed, not off how far
+#    away the target is, so a small stick nudge is still reached quickly -- it's
+#    just a short trip -- while a full-stick pull takes the whole ramp_up_s. ---
+SURGE_RAMP_UP_S  = float(os.environ.get("SEAGRASS_SURGE_RAMP", "5.0"))  # forward: seconds to full. Bigger = gentler/chiller.
 SURGE_DECAY_S    = 0.1
-STEER_RAMP_UP_S  = float(os.environ.get("SEAGRASS_STEER_RAMP", "3.5"))  # turn: seconds to full. Bigger = smoother, less snappy.
+# Steer is a differential with far less inertia than surge and no lurch to
+# prevent, and 5s to full yaw is unsteerable while inching, so it ramps quicker.
+# It still gets the same ease-in curve and creep floor -- only the duration differs.
+STEER_RAMP_UP_S  = float(os.environ.get("SEAGRASS_STEER_RAMP", "2.5"))  # turn: seconds to full. Bigger = smoother, less snappy.
 STEER_DECAY_S    = 0.25
-DEPTH_RAMP_UP_S  = 1.0
+# Depth fights buoyancy, so a full 5s risks sluggish depth capture.
+DEPTH_RAMP_UP_S  = float(os.environ.get("SEAGRASS_DEPTH_RAMP", "2.0"))
 DEPTH_DECAY_S    = 0.4
+
+# -- Spin-up shape -----------------------------------------------------------
+# RAMP_EASE_RATIO (r): how much faster the ramp climbs at full speed than at the
+# moment thrust starts. 1.0 = perfectly linear (the old behaviour, exact
+# rollback); 4.0 = tops out climbing 4x quicker than it starts, which reads as
+# "eases away gently, then builds". Drop toward 2 if fine trim feels mushy.
+#
+# Rate f(v) = a + b*v over v = progress across the useful band, with
+# b = a(r-1) so f(1)/f(0) = r, and total time
+#   T = integral(0..1) dv/(a + b*v) = ln(r) / (a(r-1))   =>   a = ln(r)/(T(r-1)).
+# _EASE_A/_EASE_B factor out T so the 50Hz control loop never calls log().
+RAMP_EASE_RATIO = float(os.environ.get("SEAGRASS_RAMP_EASE", "4.0"))
+_EASE_A = (math.log(RAMP_EASE_RATIO) / (RAMP_EASE_RATIO - 1.0)
+           if abs(RAMP_EASE_RATIO - 1.0) > 1e-9 else 1.0)   # r->1 limit is 1/T
+_EASE_B = _EASE_A * (RAMP_EASE_RATIO - 1.0)
+# Seconds to cross the sub-CREEP_FLOOR dead band, where the props aren't biting
+# and nothing is felt. Easing through it would just be a delay before anything
+# happens, so we cross it fast and start the ease-in at the point thrust begins.
+RAMP_ENGAGE_S = float(os.environ.get("SEAGRASS_RAMP_ENGAGE", "0.3"))
+
+# -- Creep floor -------------------------------------------------------------
+# CREEP_FLOOR: the smallest PWM offset that actually spins a thruster. Below
+# ArduSub's MOT_SPIN_MIN a motor buzzes without turning, so a small stick nudge
+# would command "motion" that never arrives; this lifts a stalled command up to
+# the point it bites, letting you inch. Applied in the MOTOR domain
+# (_apply_creep_floor) because MOT_SPIN_MIN is a per-motor deadband -- flooring
+# each channel separately would rotate the commanded heading.
+#
+# CALIBRATE, don't guess: set SEAGRASS_CREEP_FLOOR=0, put the vehicle in water,
+# ease the stick up until the props bite, and read left_pwm/right_pwm off the
+# live motors readout. If MOT_SPIN_MIN is already non-zero in QGroundControl,
+# ArduSub is doing this for you -- stacking a second floor turns the smallest
+# nudge into a lurch, so leave this at 0.
+CREEP_FLOOR = float(os.environ.get("SEAGRASS_CREEP_FLOOR", "0"))
+# Above min(surge cap, steer cap) the scaling bound in _apply_creep_floor no
+# longer holds (a floored command could exceed an axis's own maximum).
+CREEP_FLOOR = max(0.0, min(CREEP_FLOOR, float(min(MAX_PWM_OFFSET, STEER_MAX_OFFSET))))
 
 # -- Direction ---------------------------------------------------------------
 # SURGE_REVERSED: flip forward/back polarity on ch5 in software. Set when a
@@ -160,6 +204,13 @@ ARC_TURN = os.environ.get("SEAGRASS_ARC_TURN", "1") not in ("0", "false", "False
 # "stopped" and allow a full in-place pivot. Bigger = both motors drive harder
 # during a reverse/forward arc, but a tighter turn needs more throttle.
 ARC_SPIN_MARGIN = int(os.environ.get("SEAGRASS_ARC_MARGIN", "80"))
+# ARC_PIVOT_FADE: surge offset over which full-authority pivoting fades out as
+# the arc cap fades in. Without it the cap is a cliff -- at surge_off exactly
+# ARC_SPIN_MARGIN yaw has 100% authority and one PWM later it has ~0%. Digital
+# keys jump clean over that band (surge_off is only ever 0, 187.5 or 250), but an
+# analog stick parks in it, and 30-50% throttle is exactly where you inch. Bigger
+# = pivot authority bleeds off more gradually.
+ARC_PIVOT_FADE = int(os.environ.get("SEAGRASS_ARC_PIVOT_FADE", str(2 * ARC_SPIN_MARGIN)))
 
 # -- Turn behaviour ----------------------------------------------------------
 # TURN_ASSIST: fraction of forward power shed mid-turn (scaled by how hard the
@@ -171,7 +222,15 @@ TURN_ASSIST = float(os.environ.get("SEAGRASS_TURN_ASSIST", "0.25"))
 # Higher = more progressive — near center the stick gives a gentle heading trim
 # and the turn sharpens toward full lock. Blends linear and cubic, so full lock
 # still reaches 100% turn authority.
-STEER_EXPO = float(os.environ.get("SEAGRASS_STEER_EXPO", "0.7"))
+#
+# Defaults to 0 because every analog client (terminal_control.py, and now the
+# browser) already applies its own expo in stick_curve before sending. Composing
+# the two squashes fine steering to nothing: a 30% steer stick becomes 0.136
+# client-side, then 0.043 here -- 6.4 PWM, which does nothing. One expo, applied
+# client-side, keeps steering's curve identical to surge's and browser matched to
+# terminal. (This knob was always a no-op for digital keys: _expo(±1, k) = ±1.)
+# Raise to ~0.3 only if analog steering feels twitchy.
+STEER_EXPO = float(os.environ.get("SEAGRASS_STEER_EXPO", "0.0"))
 # ============================================================================
 
 # This 2-motor SimpleROV-3 frame has no lateral thruster, so left/right
@@ -439,7 +498,8 @@ depth_pwm = NEUTRAL_PWM   # ch3 - ascend/descend
 
 # Latest per-motor command, recomputed every control tick from the channels we
 # actually send (mode-agnostic) and pushed to the client for the live readout.
-motor_readout = {"angle": 0.0, "mag": 0.0, "left": 0.0, "right": 0.0}
+motor_readout = {"angle": 0.0, "mag": 0.0, "left": 0.0, "right": 0.0,
+                 "left_pwm": 0, "right_pwm": 0}
 
 # Latched soft-stop: while True, all motion input is ignored and every axis holds
 # neutral until the pilot toggles it off (OPTIONS). Unlike the "stop" kill switch
@@ -515,17 +575,68 @@ def _lookup_motors(angle, magnitude):
     return max(-1.0, min(1.0, left)), max(-1.0, min(1.0, right))
 
 
+def _apply_creep_floor(surge_off, steer_off):
+    """Lift a stalled command up to the minimum offset that actually spins a
+    motor, preserving the commanded direction exactly.
+
+    Works in the motor domain -- ArduSub mixes left = ch5 + ch4 and
+    right = ch5 - ch4 -- because MOT_SPIN_MIN is a per-motor deadband, not a
+    per-channel one. Scaling both motors by the same factor scales surge_off and
+    steer_off by that factor too, so atan2(steer, surge) is unchanged and only
+    the magnitude rises: a commanded 18deg nudge still comes out at 18deg.
+    (Flooring each channel independently would rotate that same nudge to 45deg.)
+
+    No-op once any motor is already past the floor, so a fine yaw trim at full
+    forward -- where both motors are long past MOT_SPIN_MIN and need no help --
+    stays a fine trim instead of being slammed to a minimum turn rate.
+    """
+    if CREEP_FLOOR <= 0:
+        return surge_off, steer_off
+    left = surge_off + steer_off
+    right = surge_off - steer_off
+    mag = max(abs(left), abs(right))
+    if 0.0 < mag < CREEP_FLOOR:
+        k = CREEP_FLOOR / mag
+        left *= k
+        right *= k
+    return (left + right) / 2.0, (left - right) / 2.0
+
+
 def _ramp(current, target, dt, ramp_up_s, decay_s, max_offset):
-    """Ease `current` PWM toward `target`. Pushing further from neutral in the
-    same direction uses the (slower) ramp-up rate; anything heading back toward
-    or through neutral uses the (faster) decay rate so letting go feels crisp.
-    `max_offset` is this axis's peak PWM offset, so `*_RAMP_UP_S` stays "seconds
-    to reach full" even when steer and surge have different caps."""
+    """Ease `current` PWM toward `target` in one of three regimes, chosen by
+    where `current` already is -- never by how far `target` is.
+
+      * heading back toward/through neutral -> constant, fast decay rate, so
+        releasing the stick and reversing direction both stay crisp;
+      * below CREEP_FLOOR -> the props aren't biting and nothing is felt yet, so
+        cross the dead band at a fixed fast rate and start making thrust promptly;
+      * above CREEP_FLOOR -> ease in: the rate grows linearly with speed,
+        reaching RAMP_EASE_RATIO x the onset rate at full and taking ramp_up_s to
+        cross the whole band.
+
+    Keying the rate off current speed rather than off the distance to the target
+    is what lets one curve serve both goals: a small nudge is a short trip and is
+    reached in a fraction of a second, while a full-stick pull still takes the
+    whole ramp_up_s. `max_offset` is this axis's peak PWM offset, so ramp_up_s
+    stays "seconds to reach full" even though steer and surge have different caps.
+    """
     cur_off = current - NEUTRAL_PWM
     tgt_off = target - NEUTRAL_PWM
     moving_away = abs(tgt_off) > abs(cur_off) and cur_off * tgt_off >= 0
-    secs = ramp_up_s if moving_away else decay_s
-    max_step = (max_offset / secs) * dt
+    if not moving_away:
+        # Gated behind moving_away on purpose: easing the decay too would make
+        # v -> 0 near neutral, and the last stretch of stopping would crawl.
+        rate = max_offset / decay_s
+    elif abs(cur_off) < CREEP_FLOOR:
+        # Explicit branch, not a formula: below the floor the ease's progress
+        # term goes negative and the rate collapses toward zero, so a formula
+        # would never engage from a standstill.
+        rate = max(CREEP_FLOOR, 1.0) / RAMP_ENGAGE_S
+    else:
+        band = max(1.0, max_offset - CREEP_FLOOR)
+        v = min(1.0, (abs(cur_off) - CREEP_FLOOR) / band)
+        rate = band * (_EASE_A + _EASE_B * v) / ramp_up_s
+    max_step = rate * dt
     if current < target:
         return min(current + max_step, target)
     if current > target:
@@ -551,6 +662,11 @@ def channel_frame(dt):
     surge_in = _axis_value("w", "s", axis_targets["surge"])
     steer_in = _axis_value("d", "a", axis_targets["steer"])
     depth_in = _axis_value("q", "e", axis_targets["depth"])
+
+    # Stick as the pilot actually moved it, kept for the readout: the default
+    # branch below mutates steer_in/surge_in with expo and turn-assist, which
+    # would make the reported angle/mag describe the mix rather than the stick.
+    raw_steer_in, raw_surge_in = steer_in, surge_in
 
     if ANGLE_TABLE_DRIVE:
         # Explicit per-motor control: the stick's angle+magnitude looks up
@@ -595,31 +711,60 @@ def channel_frame(dt):
         # available (minus the margin that keeps the inside motor spinning) so a
         # diagonal curves instead of stalling one motor at the differential
         # balance point. Near stopped, leave yaw untouched so a pivot still works.
-        if ARC_TURN and abs(surge_off) > ARC_SPIN_MARGIN:
-            lim = abs(surge_off) - ARC_SPIN_MARGIN
+        #
+        # The two allowances are blended with max() rather than switched between,
+        # so authority slides continuously from "full pivot" to "arc-capped"
+        # instead of falling off a cliff the moment surge passes ARC_SPIN_MARGIN.
+        # Both endpoints are unchanged: at surge_off 0 pivot_allow is the full
+        # STEER_MAX_OFFSET, and once surge_off clears ARC_PIVOT_FADE arc_allow
+        # takes over exactly as before.
+        if ARC_TURN:
+            pivot_allow = STEER_MAX_OFFSET * max(0.0, 1.0 - abs(surge_off) / max(1.0, ARC_PIVOT_FADE))
+            arc_allow = max(0.0, abs(surge_off) - ARC_SPIN_MARGIN)
+            lim = max(pivot_allow, arc_allow)
             steer_off = max(-lim, min(lim, steer_off))
 
         surge_max, steer_max = MAX_PWM_OFFSET, STEER_MAX_OFFSET
         surge_up, surge_dec = SURGE_RAMP_UP_S, SURGE_DECAY_S
         steer_up, steer_dec = STEER_RAMP_UP_S, STEER_DECAY_S
 
+    # Lift a stalled command past the thrusters' minimum spin PWM so the smallest
+    # nudge inches instead of buzzing. After the arc cap, so the cap stays a hard
+    # limit the floor can never violate; outside the mode branch, so all three
+    # drive modes share it. Depth is its own thruster on ch3, so it takes a plain
+    # per-channel floor rather than the two-motor mix.
+    surge_off, steer_off = _apply_creep_floor(surge_off, steer_off)
+    depth_off = depth_in * MAX_PWM_OFFSET
+    if CREEP_FLOOR > 0 and 0.0 < abs(depth_off) < CREEP_FLOOR:
+        depth_off = math.copysign(CREEP_FLOOR, depth_off)
+
     surge_pwm = _ramp(surge_pwm, NEUTRAL_PWM + surge_off,
                       dt, surge_up, surge_dec, surge_max)
     steer_pwm = _ramp(steer_pwm, NEUTRAL_PWM + steer_off,
                       dt, steer_up, steer_dec, steer_max)
-    depth_pwm = _ramp(depth_pwm, NEUTRAL_PWM + depth_in * MAX_PWM_OFFSET,
+    depth_pwm = _ramp(depth_pwm, NEUTRAL_PWM + depth_off,
                       dt, DEPTH_RAMP_UP_S, DEPTH_DECAY_S, MAX_PWM_OFFSET)
 
     # Live readout: recover the per-motor command from the channels we're actually
     # sending (invert ArduSub's mixer), so it reflects the real output in every
     # mode — angle-table, vector, or arc — including the ramp and sign flips.
+    # Normalised by the combined cap because a motor sees surge + yaw stacked:
+    # that sum spans +/-400, which is also the vehicle's hard limit (RC*_MIN 1100
+    # / RC*_MAX 1900). Dividing by MAX_PWM_OFFSET alone reported a hard arc as
+    # 100/40 when the truth was 4:1. left_pwm/right_pwm are the raw offsets --
+    # those are what you read to calibrate CREEP_FLOOR.
     fwd_off = surge_pwm - NEUTRAL_PWM
     yaw_off = steer_pwm - NEUTRAL_PWM
-    angle, mag = _stick_to_angle_mag(steer_in, surge_in)
+    motor_scale = float(MAX_PWM_OFFSET + STEER_MAX_OFFSET)
+    left_pwm = fwd_off + yaw_off
+    right_pwm = fwd_off - yaw_off
+    angle, mag = _stick_to_angle_mag(raw_steer_in, raw_surge_in)
     motor_readout["angle"] = round(angle, 1)
     motor_readout["mag"] = round(mag, 3)
-    motor_readout["left"] = round(max(-1.0, min(1.0, (fwd_off + yaw_off) / MAX_PWM_OFFSET)), 3)
-    motor_readout["right"] = round(max(-1.0, min(1.0, (fwd_off - yaw_off) / MAX_PWM_OFFSET)), 3)
+    motor_readout["left"] = round(max(-1.0, min(1.0, left_pwm / motor_scale)), 3)
+    motor_readout["right"] = round(max(-1.0, min(1.0, right_pwm / motor_scale)), 3)
+    motor_readout["left_pwm"] = round(left_pwm)
+    motor_readout["right_pwm"] = round(right_pwm)
 
     rc = [65535] * 8
     rc[4] = round(surge_pwm)
