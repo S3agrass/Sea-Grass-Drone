@@ -175,6 +175,44 @@ describe('CameraView — detection toggle', () => {
   });
 });
 
+describe('CameraView — standalone viewing (no drone link)', () => {
+  it('renders the MJPEG feed from the URL when NOT connected to the drone', () => {
+    mockCtx.linkStatus = 'disconnected';
+    mockCtx.cameraActive = false;
+    mockCtx.activeDrone = { camera_url: 'http://pi.local:8000/stream.mjpg' };
+    const { container } = render(<CameraView />);
+    const img = container.querySelector('img');
+    expect(img).toBeInTheDocument();
+    expect(img).toHaveAttribute('src', 'http://pi.local:8000/stream.mjpg');
+    // no "Camera is off" placeholder in standalone mode
+    expect(screen.queryByText(/camera is off/i)).not.toBeInTheDocument();
+  });
+
+  it('renders the WebRTC video element when NOT connected', () => {
+    mockCtx.linkStatus = 'disconnected';
+    mockCtx.cameraActive = false;
+    const { container } = render(<CameraView />);
+    expect(container.querySelector('video')).toBeInTheDocument();
+  });
+
+  it('keeps Snapshot/Record disabled in standalone view (they need the server)', () => {
+    mockCtx.linkStatus = 'disconnected';
+    mockCtx.activeDrone = { camera_url: 'http://pi.local:8000/stream.mjpg' };
+    render(<CameraView />);
+    expect(screen.getByRole('button', { name: /snapshot/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /record/i })).toBeDisabled();
+  });
+
+  it('still shows "Camera is off" when connected but the server camera is off', () => {
+    mockCtx.linkStatus = 'connected';
+    mockCtx.cameraActive = false;
+    mockCtx.activeDrone = { camera_url: 'http://pi.local:8000/stream.mjpg' };
+    const { container } = render(<CameraView />);
+    expect(screen.getByText(/camera is off/i)).toBeInTheDocument();
+    expect(container.querySelector('img')).not.toBeInTheDocument();
+  });
+});
+
 describe('CameraView — stream type detection', () => {
   it('renders <video> for a WHEP URL', () => {
     mockCtx.cameraActive = true;

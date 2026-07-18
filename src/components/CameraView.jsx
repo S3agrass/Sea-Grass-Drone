@@ -86,6 +86,12 @@ export default function CameraView() {
   const type = streamType(streamUrl);
   const connected = linkStatus === "connected";
 
+  // Show the feed when the server says the camera is on, OR when there's no drone
+  // link connected to ask (standalone viewing straight from the stream URL). This
+  // decouples *watching* from the control server: you can see the camera with just
+  // a URL, while On/Off, recording and snapshots still require the drone link.
+  const wantFeed = !!streamUrl && (cameraActive || !connected);
+
   // "feed" state: off | connecting | live | error
   const [feedState, setFeedState] = useState("off");
   const [retryKey, setRetryKey] = useState(0);
@@ -99,13 +105,13 @@ export default function CameraView() {
   // When the camera subprocess starts/stops on the Pi, or the stream URL
   // changes, reset the feed state so the WHEP hook re-runs.
   useEffect(() => {
-    if (!cameraActive || !streamUrl) {
+    if (!wantFeed) {
       setFeedState("off");
       return;
     }
     if (type === "webrtc") setFeedState("connecting");
     // mjpeg state is driven by img onLoad/onError below
-  }, [cameraActive, streamUrl, type, retryKey]);
+  }, [wantFeed, type, retryKey]);
 
   // WebRTC WHEP connection — only runs when camera is active and type is webrtc.
   useEffect(() => {
@@ -245,9 +251,9 @@ export default function CameraView() {
       )}
 
       {/* Legacy MJPEG img element */}
-      {type === "mjpeg" && cameraActive && (
+      {type === "mjpeg" && wantFeed && (
         <img
-          key={retryKey}
+          key={`${retryKey}-${wantFeed}`}
           src={streamUrl}
           alt="Live camera feed"
           onLoad={() => setFeedState("live")}
@@ -265,7 +271,7 @@ export default function CameraView() {
           <div className="camera-placeholder-title">
             {noUrl
               ? "No stream URL configured"
-              : !cameraActive
+              : !wantFeed
               ? "Camera is off"
               : feedState === "connecting"
               ? "Connecting to camera…"

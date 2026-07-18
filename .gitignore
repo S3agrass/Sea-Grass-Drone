@@ -38,3 +38,7 @@ server/vision/models/*.onnx
 *.tlog
 *.tlog.raw
 *.parm
+
+# local camera simulation artifacts
+sim/media/
+sim/*.log
