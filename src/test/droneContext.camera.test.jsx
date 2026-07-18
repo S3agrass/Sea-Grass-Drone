@@ -117,6 +117,59 @@ describe('DroneContext — debounced camera lifecycle', () => {
     expect(mockLink.cameraOff).not.toHaveBeenCalled();
   });
 
+  it('does NOT re-send camera_on when re-renders/state updates leave the logical state unchanged', () => {
+    // Regression for the command storm: state messages (recording toggles,
+    // telemetry) re-rendered the provider and re-ran the effect, which re-sent
+    // camera_on every time. Sends must be transition-gated.
+    const getCtx = renderContext();
+    connectAndView(getCtx);
+    expect(mockLink.cameraOn).toHaveBeenCalledTimes(1);
+
+    // One act() per message so every state update commits its own render, like
+    // real server messages arriving 0.5s apart (a single act() would batch them
+    // all into one commit and mask the per-render re-fire).
+    for (let i = 0; i < 10; i++) {
+      act(() => {
+        emitToLink({
+          type: 'message',
+          data: {
+            type: 'state', armed: true, mode: 'MANUAL', pixhawk: true,
+            camera: true, recording: i % 2 === 0, rec_elapsed_s: i,
+          },
+        });
+      });
+      act(() => {
+        emitToLink({
+          type: 'message',
+          data: { type: 'telemetry', heading: i * 10, groundspeed: 1.5, battery: 80 },
+        });
+      });
+    }
+    act(() => { vi.advanceTimersByTime(2000); });
+
+    expect(mockLink.cameraOn).toHaveBeenCalledTimes(1); // still exactly once
+    expect(mockLink.cameraOff).not.toHaveBeenCalled();
+  });
+
+  it('a telemetry flood causes no reconnects and no extra camera sends', () => {
+    const getCtx = renderContext();
+    connectAndView(getCtx);
+
+    for (let i = 0; i < 20; i++) {
+      act(() => {
+        emitToLink({
+          type: 'message',
+          data: { type: 'telemetry', heading: i, groundspeed: 2, battery: 79, lat: 43.6 + i * 1e-5, lon: -79.3 },
+        });
+      });
+    }
+    act(() => { vi.advanceTimersByTime(2000); });
+
+    expect(mockLink.connect).not.toHaveBeenCalled(); // no WS teardown/reconnect
+    expect(mockLink.cameraOn).toHaveBeenCalledTimes(1);
+    expect(mockLink.cameraOff).not.toHaveBeenCalled();
+  });
+
   it('does NOT turn the camera off on a rapid off→on (StrictMode/fast-nav)', () => {
     const getCtx = renderContext();
     connectAndView(getCtx);
@@ -152,6 +205,21 @@ describe('DroneContext — debounced camera lifecycle', () => {
     expect(mockLink.cameraOff).not.toHaveBeenCalled();
   });
 
+  it('turns the camera off once a recording ends after the operator has left', () => {
+    const getCtx = renderContext();
+    connectAndView(getCtx);
+    act(() => { emitToLink({ type: 'message', data: { type: 'state', camera: true, recording: true } }); });
+
+    act(() => { getCtx().setCameraViewing(false); });
+    act(() => { vi.advanceTimersByTime(2000); }); // deferred while recording
+    expect(mockLink.cameraOff).not.toHaveBeenCalled();
+
+    // Recording finishes (e.g. auto-record disarm) — next re-check shuts the camera.
+    act(() => { emitToLink({ type: 'message', data: { type: 'state', camera: true, recording: false } }); });
+    act(() => { vi.advanceTimersByTime(1500); });
+    expect(mockLink.cameraOff).toHaveBeenCalledTimes(1);
+  });
+
   // Faithful repro of the reported bug: StrictMode double-invokes the viewer's
   // mount effect (mount→cleanup→mount), which must NOT churn camera on/off.
   it('does not flap camera on/off under real React StrictMode', () => {
@@ -164,12 +232,9 @@ describe('DroneContext — debounced camera lifecycle', () => {
       }, [setCameraViewing]);
       return null;
     }
-    let ctx;
-    function Capture() { ctx = useDrone(); return null; }
     render(
       <StrictMode>
         <DroneProvider>
-          <Capture />
           <Viewer />
         </DroneProvider>
       </StrictMode>,
@@ -177,7 +242,7 @@ describe('DroneContext — debounced camera lifecycle', () => {
     act(() => { emitToLink({ type: 'status', status: 'connected' }); });
     act(() => { vi.advanceTimersByTime(1000); });
 
-    expect(mockLink.cameraOn).toHaveBeenCalled();   // camera came on
-    expect(mockLink.cameraOff).not.toHaveBeenCalled(); // and never flapped off
+    expect(mockLink.cameraOn).toHaveBeenCalledTimes(1); // exactly once — no storm
+    expect(mockLink.cameraOff).not.toHaveBeenCalled();  // and never flapped off
   });
 });

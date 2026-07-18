@@ -263,28 +263,54 @@ export function DroneProvider({ children }) {
   // the operator is viewing it (CameraView mounted) on a connected drone that has a
   // stream URL — giving instant footage — and off shortly after they leave.
   //
-  // The OFF is debounced (and the timer lives here, in the persistent provider, not
-  // in CameraView) so React StrictMode's dev-only mount→cleanup→mount and a quick
-  // navigate-away-and-back both cancel a pending shutdown instead of churning the Pi
-  // camera subprocess. The OFF also never fires mid-recording, since camera_off kills
-  // camera_stream.py and would abort the recording.
+  // Commands are TRANSITION-GATED: camera_on is sent only when the desired state
+  // genuinely flips off→on (appliedRef), never merely because the effect re-ran.
+  // An earlier version called link.cameraOn() unconditionally per effect run with
+  // `recording` in the deps, so every server recording toggle / StrictMode remount
+  // re-sent camera_on and stormed the Pi with start requests. `recording` is now
+  // read through a ref at off-fire time only — it must not re-fire this effect.
+  //
+  // The OFF is debounced (timer lives here in the persistent provider, not in
+  // CameraView) so StrictMode's dev-only mount→cleanup→mount and a quick
+  // navigate-away-and-back cancel a pending shutdown instead of churning the Pi
+  // camera subprocess. The OFF never fires mid-recording — camera_off kills
+  // camera_stream.py and would abort the recording — and re-checks every second so
+  // the camera still shuts down once the recording ends.
   const offTimerRef = useRef(null);
+  const appliedRef = useRef(null); // last applied state: null | "on" | "off"
+  const recordingRef = useRef(false);
+  useEffect(() => {
+    recordingRef.current = recording;
+  }, [recording]);
+
   const shouldCameraBeOn =
     linkStatus === "connected" && !!activeDrone?.camera_url && cameraViewing;
   useEffect(() => {
     if (shouldCameraBeOn) {
       clearTimeout(offTimerRef.current); // cancel any pending shutdown
       offTimerRef.current = null;
-      link.cameraOn(); // instant, idempotent server-side
+      if (appliedRef.current !== "on") {
+        appliedRef.current = "on";
+        link.cameraOn();
+      }
       return undefined;
     }
+    // Never turned it on → nothing to turn off (don't send camera_off at app boot).
+    if (appliedRef.current !== "on") return undefined;
     clearTimeout(offTimerRef.current);
-    offTimerRef.current = setTimeout(() => {
+    const fireOff = () => {
       offTimerRef.current = null;
-      if (!recording) link.cameraOff();
-    }, CAMERA_OFF_DEBOUNCE_MS);
+      if (recordingRef.current) {
+        // Recording in progress — keep the camera alive, re-check shortly.
+        offTimerRef.current = setTimeout(fireOff, 1000);
+        return;
+      }
+      appliedRef.current = "off";
+      link.cameraOff();
+    };
+    offTimerRef.current = setTimeout(fireOff, CAMERA_OFF_DEBOUNCE_MS);
     return () => clearTimeout(offTimerRef.current);
-  }, [shouldCameraBeOn, recording, link]);
+  }, [shouldCameraBeOn, link]);
 
   // Base URL of the Pi's media server (photos/recordings live on the SD card and
   // are fetched/deleted directly from it, not proxied through the control WS).
