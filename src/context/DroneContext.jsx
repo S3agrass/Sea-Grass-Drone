@@ -13,6 +13,12 @@ import { useAuth } from "./AuthContext";
 
 const DroneContext = createContext(null);
 
+// How long to wait before turning the camera off after the viewer goes away.
+// Long enough to absorb React StrictMode's synchronous mount→cleanup→mount (and a
+// quick navigation away-and-back), short enough that a genuine exit stops the Pi
+// camera promptly. Only the OFF side is debounced; ON is always immediate.
+const CAMERA_OFF_DEBOUNCE_MS = 400;
+
 const LOCAL_DRONE = {
   id: "local",
   name: "Seagrass One",
@@ -65,6 +71,9 @@ export function DroneProvider({ children }) {
   const [recording, setRecording] = useState(false);
   const [recElapsed, setRecElapsed] = useState(0);
   const [autoRecord, setAutoRecordFlag] = useState(false);
+  // Set true while the Control screen's CameraView is mounted — drives the
+  // debounced auto on/off lifecycle below.
+  const [cameraViewing, setCameraViewing] = useState(false);
   const [demoMode, setDemoMode] = useState(
     () => localStorage.getItem("seagrass-demo") === "1",
   );
@@ -250,21 +259,32 @@ export function DroneProvider({ children }) {
   const capturePhoto = useCallback(() => link.photo(), [link]);
   const setAutoRecord = useCallback((on) => link.setAutoRecord(on), [link]);
 
-  // Instant footage: power the camera on automatically once per connection when
-  // the active drone has a stream URL, so live video appears without the operator
-  // clicking On. Idempotent server-side; the manual On/Off toggle still works
-  // (the guard ref stops us re-toggling a camera the operator turned off).
-  const autoStartedRef = useRef(false);
+  // Debounced, recording-safe camera lifecycle. The camera should be on whenever
+  // the operator is viewing it (CameraView mounted) on a connected drone that has a
+  // stream URL — giving instant footage — and off shortly after they leave.
+  //
+  // The OFF is debounced (and the timer lives here, in the persistent provider, not
+  // in CameraView) so React StrictMode's dev-only mount→cleanup→mount and a quick
+  // navigate-away-and-back both cancel a pending shutdown instead of churning the Pi
+  // camera subprocess. The OFF also never fires mid-recording, since camera_off kills
+  // camera_stream.py and would abort the recording.
+  const offTimerRef = useRef(null);
+  const shouldCameraBeOn =
+    linkStatus === "connected" && !!activeDrone?.camera_url && cameraViewing;
   useEffect(() => {
-    if (linkStatus !== "connected") {
-      autoStartedRef.current = false;
-      return;
+    if (shouldCameraBeOn) {
+      clearTimeout(offTimerRef.current); // cancel any pending shutdown
+      offTimerRef.current = null;
+      link.cameraOn(); // instant, idempotent server-side
+      return undefined;
     }
-    if (!autoStartedRef.current && activeDrone?.camera_url) {
-      autoStartedRef.current = true;
-      link.cameraOn();
-    }
-  }, [linkStatus, activeDrone, link]);
+    clearTimeout(offTimerRef.current);
+    offTimerRef.current = setTimeout(() => {
+      offTimerRef.current = null;
+      if (!recording) link.cameraOff();
+    }, CAMERA_OFF_DEBOUNCE_MS);
+    return () => clearTimeout(offTimerRef.current);
+  }, [shouldCameraBeOn, recording, link]);
 
   // Base URL of the Pi's media server (photos/recordings live on the SD card and
   // are fetched/deleted directly from it, not proxied through the control WS).
@@ -305,6 +325,7 @@ export function DroneProvider({ children }) {
     recordStop,
     capturePhoto,
     setAutoRecord,
+    setCameraViewing,
     mediaBase,
     linkStatus,
     linkDetail,

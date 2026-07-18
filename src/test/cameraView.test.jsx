@@ -21,6 +21,7 @@ const mockDrone = {
   recordStart: vi.fn(),
   recordStop: vi.fn(),
   capturePhoto: vi.fn(),
+  setCameraViewing: vi.fn(),
 };
 
 // Replace useDrone with our mock.
@@ -40,6 +41,7 @@ beforeEach(() => {
     recordStart: vi.fn(),
     recordStop: vi.fn(),
     capturePhoto: vi.fn(),
+    setCameraViewing: vi.fn(),
   };
   vi.clearAllMocks();
 });

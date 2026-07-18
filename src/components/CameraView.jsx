@@ -80,7 +80,16 @@ export default function CameraView() {
     recordStart,
     recordStop,
     capturePhoto,
+    setCameraViewing,
   } = useDrone();
+
+  // Tell the context this screen is viewing the camera so it can run the
+  // debounced auto on/off lifecycle. CameraView only renders on the Control page,
+  // so mount == "on the Control screen".
+  useEffect(() => {
+    setCameraViewing(true);
+    return () => setCameraViewing(false);
+  }, [setCameraViewing]);
 
   const streamUrl = activeDrone?.camera_url || "";
   const type = streamType(streamUrl);
