@@ -23,3 +23,22 @@ dist-ssr
 *.sln
 *.sw?
 .env
+.seagrass-env
+
+# Local-only perception prototype (sonar dodge + camera/YOLO) — not yet
+# validated on hardware, intentionally kept out of git until it works.
+perception/
+
+__pycache__/
+*.pyc__pycache__/
+*.pyc
+server/vision/models/*.onnx
+
+# MAVLink session capture artifacts (runtime, not source)
+*.tlog
+*.tlog.raw
+*.parm
+
+# local camera simulation artifacts
+sim/media/
+sim/*.log

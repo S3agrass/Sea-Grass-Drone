@@ -16,14 +16,20 @@ const KEYS = [
 const CONTROL_KEYS = new Set(["w", "a", "s", "d", "q", "e", "l", "k"]);
 
 export default function KeyboardControl() {
-  const { link, linkStatus, armed, demoMode } = useDrone();
+  const { link, linkStatus, armed, demoMode, activeInput, claimInput, releaseInput } =
+    useDrone();
   const [enabled, setEnabled] = useState(false);
   const [pressed, setPressed] = useState(new Set());
   const [lightOn, setLightOn] = useState(false);
   const pressedRef = useRef(pressed);
   pressedRef.current = pressed;
 
-  const canDrive = enabled && (linkStatus === "connected" || demoMode);
+  const canDrive =
+    enabled &&
+    (linkStatus === "connected" || demoMode) &&
+    (activeInput === null || activeInput === "keyboard");
+
+  useEffect(() => () => releaseInput("keyboard"), [releaseInput]);
 
   useEffect(() => {
     if (!canDrive) return;
@@ -98,7 +104,12 @@ export default function KeyboardControl() {
         <span className="eyebrow">Helm · keyboard</span>
         <button
           className={`toggle ${enabled ? "on" : ""}`}
-          onClick={() => setEnabled((v) => !v)}
+          onClick={() => {
+            const next = !enabled;
+            setEnabled(next);
+            if (next) claimInput("keyboard");
+            else releaseInput("keyboard");
+          }}
           aria-pressed={enabled}
         >
           <span className="toggle-knob" />
@@ -106,6 +117,11 @@ export default function KeyboardControl() {
         </button>
       </div>
 
+      {enabled && activeInput === "gamepad" && (
+        <div className="kbd-warning">
+          Gamepad has the helm — disable it to steer with keyboard.
+        </div>
+      )}
       {enabled && linkStatus !== "connected" && !demoMode && (
         <div className="kbd-warning">Connect to the drone to take the helm.</div>
       )}

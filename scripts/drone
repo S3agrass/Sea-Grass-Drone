@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+# drone — one-word launcher for the Seagrass drone server.
+#
+# Loads SEAGRASS_TOKEN from ~/.seagrass-env, frees the Pixhawk serial port,
+# starts server/drone_server.py, and prints "ready" only once the Pixhawk
+# heartbeat is confirmed. See SETUP.md section 4.
+set -euo pipefail
+
+SCRIPT_PATH=$(readlink -f "$0")
+REPO_DIR=$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)
+ENV_FILE="${SEAGRASS_ENV_FILE:-$HOME/.seagrass-env}"
+
+fail() { printf '\n❌ %s\n' "$*" >&2; exit 1; }
+
+if [[ ! -f "$ENV_FILE" ]]; then
+  (umask 077; cat > "$ENV_FILE" <<'EOF'
+# Seagrass drone server secrets — sourced by the `drone` command and by
+# drone-server.service (systemd). Keep this file out of git (mode 600).
+# Paste the access token saved for this drone in the Fleet UI:
+SEAGRASS_TOKEN=
+
+# Optional overrides (defaults shown):
+#PIXHAWK_PORT=/dev/ttyACM0
+#PIXHAWK_BAUD=115200
+#SEAGRASS_PORT=8765
+
+# ---- Feel tuning (restart the server to apply) -----------------------------
+# Full list and the reasoning behind each: server/drone_server.py, "FEEL TUNING".
+
+# CREEP_FLOOR — the smallest PWM offset that actually SPINS a thruster.
+# If the motors judder/buzz at low stick instead of turning, they're being
+# commanded below their minimum spin speed: set this and the ramp will cross
+# that dead band quickly instead of crawling through it.
+# CALIBRATE, don't guess: leave it at 0, ease the stick up while watching the
+# gamepad panel's Motor L/R readout, and note the PWM where the juddering stops
+# and it starts truly turning. Put that number here.
+# Check MOT_SPIN_MIN in QGroundControl first — if it's already doing this job,
+# leave this at 0. Stacking both makes the smallest nudge lurch.
+#SEAGRASS_CREEP_FLOOR=0
+
+# Seconds of held-full stick to reach top speed. Bigger = longer, gentler climb.
+# Does NOT change top speed (that's SEAGRASS_MAX_OFFSET).
+# NOTE: for SURGE this is "seconds from the sprint knee to top speed" — see
+# SEAGRASS_SPRINT_FRACTION below. Steer/depth have no knee: seconds to full.
+#SEAGRASS_SURGE_RAMP=5.0
+#SEAGRASS_STEER_RAMP=2.5
+#SEAGRASS_DEPTH_RAMP=2.0
+
+# Two-stage surge ramp. Full stick sprints to SPRINT_FRACTION of top speed in
+# SPRINT_RAMP seconds, then takes SEAGRASS_SURGE_RAMP to grind out the rest.
+# Top speed is unchanged — this only reshapes how you get there, so most of the
+# speed is there promptly and the last stretch has to be earned by holding.
+# 0.6 = "full stick gives 3/5 of top speed fast, the last 2/5 is the slow climb".
+# Set to 1.0 to remove the knee (single-stage, the pre-knee behaviour).
+#SEAGRASS_SPRINT_FRACTION=0.6
+#SEAGRASS_SPRINT_RAMP=1.2
+
+# How much faster the ramp climbs at full speed than at the moment thrust
+# starts. Bigger = more sluggish off the line, same time to top speed.
+# 1.0 = perfectly linear (the pre-ease behaviour, exact rollback).
+#SEAGRASS_RAMP_EASE=4.0
+
+# Top speed, as PWM offset from neutral. Vehicle hard limit is 400.
+#SEAGRASS_MAX_OFFSET=250
+#SEAGRASS_STEER_OFFSET=150
+EOF
+  )
+  fail "first run: created template $ENV_FILE
+   One-time setup: edit it and paste the drone's access token from the Fleet UI
+   into SEAGRASS_TOKEN=..., then run \`drone\` again."
+fi
+
+set -a
+# shellcheck source=/dev/null
+source "$ENV_FILE"
+set +a
+
+[[ -n "${SEAGRASS_TOKEN:-}" ]] || fail "SEAGRASS_TOKEN is empty in $ENV_FILE — paste the token from the Fleet UI."
+
+PIXHAWK_PORT="${PIXHAWK_PORT:-/dev/ttyACM0}"
+SEAGRASS_PORT="${SEAGRASS_PORT:-8765}"
+
+# If the systemd service is running, Restart=always would respawn whatever we
+# kill on the serial port — stop the unit before claiming it.
+if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet drone-server 2>/dev/null; then
+  echo "Stopping drone-server.service (it would fight for $PIXHAWK_PORT)…"
+  sudo systemctl stop drone-server
+fi
+
+# Kill anything still holding the Pixhawk serial port (stale drone_server.py,
+# keyboard_control.py, sonar_logger.py, …). Nothing found is the happy path.
+stale_pids=$(lsof -t "$PIXHAWK_PORT" 2>/dev/null || true)
+if [[ -n "$stale_pids" ]]; then
+  echo "Killing stale process(es) holding $PIXHAWK_PORT: $stale_pids"
+  # shellcheck disable=SC2086  # intentional word splitting over PIDs
+  kill -9 $stale_pids 2>/dev/null || true
+  sleep 1
+fi
+
+LOG=$(mktemp -t drone-server-log.XXXXXX)
+python3 -u "$REPO_DIR/server/drone_server.py" >"$LOG" 2>&1 &
+SERVER_PID=$!
+trap 'kill "$SERVER_PID" 2>/dev/null || true' INT TERM
+
+echo "Starting drone server (log: $LOG)…"
+
+# drone_server.py keeps running even when the Pixhawk connect fails, so gate
+# "ready" on the heartbeat line, not just the websocket "listening" line.
+for _ in $(seq 1 40); do  # ~20 s budget; the server's heartbeat timeout is 10 s
+  if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+    cat "$LOG" >&2
+    fail "drone server exited during startup — see output above."
+  fi
+  if grep -q "Pixhawk not available" "$LOG"; then
+    grep "Pixhawk not available" "$LOG" >&2
+    kill "$SERVER_PID" 2>/dev/null || true
+    fail "no Pixhawk heartbeat — server stopped.
+   Check: USB cable seated, Pixhawk powered, correct port ($PIXHAWK_PORT —
+   override PIXHAWK_PORT in $ENV_FILE). Note: the safety switch does NOT block
+   the heartbeat, only arming — a switch issue would not fail here."
+  fi
+  if grep -q "Pixhawk heartbeat OK" "$LOG" && grep -q "listening on ws://" "$LOG"; then
+    cat "$LOG"
+    echo "✅ ready — ws://$(hostname).local:$SEAGRASS_PORT (Ctrl-C to stop)"
+    tail -f -n 0 "$LOG" &
+    TAIL_PID=$!
+    trap 'kill "$SERVER_PID" "$TAIL_PID" 2>/dev/null || true' INT TERM
+    rc=0; wait "$SERVER_PID" || rc=$?
+    kill "$TAIL_PID" 2>/dev/null || true
+    exit "$rc"
+  fi
+  sleep 0.5
+done
+
+kill "$SERVER_PID" 2>/dev/null || true
+cat "$LOG" >&2
+fail "timed out waiting for Pixhawk heartbeat / server startup — see output above."

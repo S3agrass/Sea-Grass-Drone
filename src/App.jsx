@@ -4,6 +4,7 @@ import { DroneProvider } from "./context/DroneContext";
 import LoginPage from "./pages/LoginPage";
 import FleetPage from "./pages/FleetPage";
 import ControlPage from "./pages/ControlPage";
+import MediaPage from "./pages/MediaPage";
 import SettingsPage from "./pages/SettingsPage";
 import "./styles/theme.css";
 import "./styles/app.css";
@@ -41,6 +42,14 @@ export default function App() {
               element={
                 <Protected>
                   <ControlPage />
+                </Protected>
+              }
+            />
+            <Route
+              path="/media"
+              element={
+                <Protected>
+                  <MediaPage />
                 </Protected>
               }
             />

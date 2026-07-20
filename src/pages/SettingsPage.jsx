@@ -6,8 +6,17 @@ import { useDrone } from "../context/DroneContext";
 
 export default function SettingsPage() {
   const { user, localMode, signOut, supabaseConfigured } = useAuth();
-  const { activeDrone, saveDrone, demoMode, setDemoMode, disconnect } =
-    useDrone();
+  const {
+    activeDrone,
+    saveDrone,
+    demoMode,
+    setDemoMode,
+    disconnect,
+    autoRecord,
+    setAutoRecord,
+    linkStatus,
+  } = useDrone();
+  const connected = linkStatus === "connected";
   const navigate = useNavigate();
   const [form, setForm] = useState(null);
   const [saved, setSaved] = useState(false);
@@ -104,6 +113,31 @@ export default function SettingsPage() {
             >
               <span className="toggle-knob" />
               {demoMode ? "On" : "Off"}
+            </button>
+          </div>
+        </section>
+
+        <section className="settings-card">
+          <div className="eyebrow">Recording</div>
+          <div className="settings-toggle-row">
+            <div>
+              <div className="settings-toggle-title">Auto-record missions</div>
+              <div className="settings-muted">
+                When on, the drone records to its SD card whenever it is armed and
+                stops when disarmed — so unattended autonomous runs are captured
+                even with no link to this computer. Recordings appear on the{" "}
+                <span className="mono">Media</span> page.
+              </div>
+            </div>
+            <button
+              className={`toggle ${autoRecord ? "on" : ""}`}
+              onClick={() => setAutoRecord(!autoRecord)}
+              aria-pressed={autoRecord}
+              disabled={!connected}
+              title={connected ? "" : "Connect to the drone to change this"}
+            >
+              <span className="toggle-knob" />
+              {autoRecord ? "On" : "Off"}
             </button>
           </div>
         </section>

@@ -1,0 +1,8 @@
+# One class name per line — order defines the class index used by the model,
+# the detector, and the overlay. Replace these placeholders with your real
+# underwater classes, then set num_classes in configs/yolox_nano_seagrass.py to
+# match the count. Delete these comment lines before training.
+seagrass
+debris
+fish
+diver

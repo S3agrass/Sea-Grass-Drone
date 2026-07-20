@@ -18,9 +18,19 @@ export default function ConnectionPanel() {
     flightMode,
     pixhawkOk,
     link,
+    pushToast,
   } = useDrone();
 
   const connected = linkStatus === "connected";
+
+  // link.arm()/disarm() return false if the socket isn't open — never let that
+  // fail silently. The server's own arm/reject feedback arrives as a toast too.
+  const requestArm = () => {
+    if (!link.arm()) pushToast("error", "Not connected — can't send arm command");
+  };
+  const requestDisarm = () => {
+    if (!link.disarm()) pushToast("error", "Not connected — can't send disarm command");
+  };
 
   return (
     <div className="conn-panel">
@@ -68,13 +78,13 @@ export default function ConnectionPanel() {
         )}
         {connected &&
           (armed ? (
-            <button className="btn btn-danger" onClick={() => link.disarm()}>
+            <button className="btn btn-danger" onClick={requestDisarm}>
               Disarm
             </button>
           ) : (
             <button
               className="btn"
-              onClick={() => link.arm()}
+              onClick={requestArm}
               disabled={!pixhawkOk}
               title={pixhawkOk ? "" : "Waiting for Pixhawk heartbeat"}
             >

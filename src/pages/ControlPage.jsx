@@ -4,7 +4,9 @@ import TopBar from "../components/TopBar";
 import DroneMap from "../components/DroneMap";
 import CameraView from "../components/CameraView";
 import KeyboardControl from "../components/KeyboardControl";
+import GamepadControl from "../components/GamepadControl";
 import ConnectionPanel from "../components/ConnectionPanel";
+import Toasts from "../components/Toasts";
 import {
   Compass,
   DepthMeter,
@@ -51,6 +53,7 @@ export default function ControlPage() {
   return (
     <div className="app-shell">
       <TopBar />
+      <Toasts />
       <div className="deck">
         <aside className="deck-left">
           <ConnectionPanel />
@@ -74,8 +77,9 @@ export default function ControlPage() {
         </main>
 
         <aside className="deck-right">
-          <CameraView streamUrl={activeDrone.camera_url} />
+          <CameraView />
           <KeyboardControl />
+          <GamepadControl />
         </aside>
       </div>
     </div>

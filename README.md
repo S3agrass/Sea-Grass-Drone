@@ -1,16 +1,38 @@
-# React + Vite
+# Seagrass GCS
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+A ground control station for an underwater/surface drone (ROV/USV) built on a Raspberry Pi 5 + Pixhawk/ArduSub stack. Provides remote piloting, live telemetry, WebRTC camera streaming, and fleet management from a browser or Electron desktop app.
 
-Currently, two official plugins are available:
+## Quick start
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```bash
+npm install
+cp .env.example .env   # fill in Firebase credentials
+npm run dev            # browser at http://localhost:5173
+```
 
-## React Compiler
+## Documentation
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- **[ARCHITECTURE.md](./ARCHITECTURE.md)** — Full developer reference: system design, data flow, file structure, WebSocket protocol, WebRTC camera stack, how to extend
+- **[SETUP.md](./SETUP.md)** — Infrastructure setup: Pi configuration, MediaMTX, Tailscale, Firebase, systemd services, deployment
 
-## Expanding the Oxlint configuration
+## Commands
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+| Command | What it does |
+|---|---|
+| `npm run dev` | Start Vite dev server |
+| `npm run build` | Production build → `dist/` |
+| `npm test` | Run test suite (Vitest) |
+| `npm run test:watch` | Tests in watch mode |
+| `npm run electron:dev` | Desktop app with hot reload |
+| `npm run electron:build` | Package as distributable |
+| `npm run lint` | Lint with Oxlint |
+
+## Control mapping
+
+| Key | Action |
+|---|---|
+| W / S | Propulsion forward / back |
+| A / D | Steer right / left |
+| Q / E | Buoyancy rise / dive |
+| L / K | Light on / off |
+| Space | Emergency all-stop |

@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { firebaseConfigured } from "../firebase/config";
 
 export default function LoginPage() {
-	const { signIn, signUp, authed } = useAuth();
+	const { signIn, signUp, authed, enterLocalMode } = useAuth();
 	const navigate = useNavigate();
 
 	const [tab, setTab] = useState("signin"); // signin | signup
@@ -141,13 +142,18 @@ export default function LoginPage() {
 						/>
 					</label>
 
+					{!firebaseConfigured && (
+						<div className="login-notice">
+							Firebase is not configured — use "Continue without account" below to test locally.
+						</div>
+					)}
 					{error && <div className="login-error">{error}</div>}
 					{notice && <div className="login-notice">{notice}</div>}
 
 					<button
 						className="btn btn-primary login-submit"
 						onClick={handleSubmit}
-						disabled={busy}
+						disabled={busy || !firebaseConfigured}
 					>
 						{busy
 							? "Working…"
@@ -156,6 +162,16 @@ export default function LoginPage() {
 								: "Create account"}
 					</button>
 				</div>
+
+				<button
+					className="btn btn-ghost login-local"
+					onClick={() => {
+						enterLocalMode();
+						navigate("/fleet", { replace: true });
+					}}
+				>
+					Continue without account
+				</button>
 
 				<div className="login-foot mono">SEAGRASS GCS · v2.0</div>
 			</div>

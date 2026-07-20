@@ -35,6 +35,9 @@ export default function TopBar() {
         <Link className={pathname === "/control" ? "active" : ""} to="/control">
           Control
         </Link>
+        <Link className={pathname === "/media" ? "active" : ""} to="/media">
+          Media
+        </Link>
         <Link className={pathname === "/fleet" ? "active" : ""} to="/fleet">
           Fleet
         </Link>

@@ -7,7 +7,7 @@ const EMPTY = {
   id: "new",
   name: "",
   host: "ws://seagrass-pi.local:8765",
-  camera_url: "http://seagrass-pi.local:8000/stream.mjpg",
+  camera_url: "",
   token: "",
 };
 
@@ -124,7 +124,7 @@ export default function FleetPage() {
               <input
                 className="mono"
                 value={editing.camera_url || ""}
-                placeholder="http://seagrass-pi.local:8000/stream.mjpg"
+                placeholder="http://100.x.x.x:8889/cam/whep"
                 onChange={(e) =>
                   setEditing({ ...editing, camera_url: e.target.value })
                 }
