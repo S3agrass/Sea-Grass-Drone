@@ -45,8 +45,7 @@ const KEY_HINTS = {
 };
 
 export default function GamepadControl() {
-  const { link, linkStatus, armed, demoMode, activeInput, claimInput, releaseInput } =
-    useDrone();
+  const { link, linkStatus, armed, demoMode } = useDrone();
   const [enabled, setEnabled] = useState(false);
   const [gamepadIndex, setGamepadIndex] = useState(null);
   const [padInfo, setPadInfo] = useState(null);
@@ -74,12 +73,7 @@ export default function GamepadControl() {
   const lastFrameTsRef = useRef(0);
 
   const canDrive =
-    enabled &&
-    (linkStatus === "connected" || demoMode) &&
-    (activeInput === null || activeInput === "gamepad") &&
-    gamepadIndex !== null;
-
-  useEffect(() => () => releaseInput("gamepad"), [releaseInput]);
+    enabled && (linkStatus === "connected" || demoMode) && gamepadIndex !== null;
 
   // Live per-motor readout. The server has always broadcast this at 10Hz to
   // whoever holds the helm; nothing consumed it. Subscribed here rather than in
@@ -267,12 +261,7 @@ export default function GamepadControl() {
         <span className="eyebrow">Helm · gamepad</span>
         <button
           className={`toggle ${enabled ? "on" : ""}`}
-          onClick={() => {
-            const next = !enabled;
-            setEnabled(next);
-            if (next) claimInput("gamepad");
-            else releaseInput("gamepad");
-          }}
+          onClick={() => setEnabled((v) => !v)}
           aria-pressed={enabled}
         >
           <span className="toggle-knob" />
@@ -280,11 +269,6 @@ export default function GamepadControl() {
         </button>
       </div>
 
-      {enabled && activeInput === "keyboard" && (
-        <div className="kbd-warning">
-          Keyboard has the helm — disable it to steer with the gamepad.
-        </div>
-      )}
       {enabled && gamepadIndex === null && (
         <div className="kbd-warning">
           No gamepad detected — connect a controller and press any button.

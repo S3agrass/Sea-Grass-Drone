@@ -3,7 +3,6 @@ import { Navigate } from "react-router-dom";
 import TopBar from "../components/TopBar";
 import DroneMap from "../components/DroneMap";
 import CameraView from "../components/CameraView";
-import KeyboardControl from "../components/KeyboardControl";
 import GamepadControl from "../components/GamepadControl";
 import ConnectionPanel from "../components/ConnectionPanel";
 import Toasts from "../components/Toasts";
@@ -78,7 +77,6 @@ export default function ControlPage() {
 
         <aside className="deck-right">
           <CameraView />
-          <KeyboardControl />
           <GamepadControl />
         </aside>
       </div>
