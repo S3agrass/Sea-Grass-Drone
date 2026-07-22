@@ -7,7 +7,9 @@ import {
 import { auth, firebaseConfigured } from "./config";
 
 const notConfigured = () =>
-	Promise.reject(new Error("Firebase is not configured — contact your administrator."));
+	Promise.reject(
+		new Error("Firebase is not configured — contact your administrator."),
+	);
 
 export const login = (email, password) =>
 	firebaseConfigured
