@@ -77,29 +77,36 @@ export function BatteryMeter({ level }) {
   );
 }
 
-// Confidence colour: the Ping2 reports how much it trusts each echo. In air it
-// sits near 0% (noise), so low confidence self-documents as untrustworthy.
-function confTone(conf) {
-  if (conf == null) return "var(--faint)";
-  if (conf >= 50) return "var(--teal)";
-  if (conf >= 20) return "var(--amber)";
-  return "var(--red)";
-}
+// Lock quality drives the whole gauge: the server only publishes distance_m when
+// echoes pass its confidence gate, so "NO LOCK" (in air / too close / reverb)
+// shows a calm "—" instead of a confident-looking noise reading.
+const SONAR_QUALITY = {
+  good: { label: "LOCK", tone: "var(--teal)" },
+  weak: { label: "WEAK", tone: "var(--amber)" },
+  none: { label: "NO LOCK", tone: "var(--red)" },
+};
 
-export function SonarGauge({ distance, confidence, ok = false, maxRange = 30 }) {
-  const live = ok && distance != null;
-  // Range bar: how far the echo is across the sonar's usable window.
-  const rangePct = live ? Math.min(100, (distance / maxRange) * 100) : 0;
+export function SonarGauge({ distance, raw, confidence, quality = "none", ok = false, maxRange = 30 }) {
+  const q = SONAR_QUALITY[ok ? quality : "none"] || SONAR_QUALITY.none;
+  const locked = ok && distance != null && quality !== "none";
+  const rangePct = locked ? Math.min(100, (distance / maxRange) * 100) : 0;
   const confPct = confidence == null ? 0 : Math.max(0, Math.min(100, confidence));
-  const tone = confTone(live ? confidence : null);
 
   return (
     <div className="inst">
-      <div className="eyebrow">Sonar</div>
+      <div className="eyebrow">
+        Sonar
+        <span
+          className="sonar-quality mono"
+          style={{ color: ok ? q.tone : "var(--faint)", borderColor: ok ? q.tone : "var(--faint)" }}
+        >
+          {ok ? q.label : "OFF"}
+        </span>
+      </div>
       <div className="sonar">
         <div className="sonar-readout">
-          <span className="inst-value mono" style={{ color: live ? tone : undefined }}>
-            {live ? fmt(distance, 2) : "—"}
+          <span className="inst-value mono" style={{ color: locked ? q.tone : undefined }}>
+            {locked ? fmt(distance, 2) : "—"}
           </span>
           <span className="inst-unit mono">m</span>
         </div>
@@ -111,13 +118,18 @@ export function SonarGauge({ distance, confidence, ok = false, maxRange = 30 }) 
           <div className="sonar-conf-track">
             <div
               className="sonar-conf-fill"
-              style={{ width: `${confPct}%`, background: tone }}
+              style={{ width: `${confPct}%`, background: q.tone }}
             />
           </div>
-          <span className="sonar-conf-value mono" style={{ color: tone }}>
-            {live && confidence != null ? `${Math.round(confPct)}%` : "—"}
+          <span className="sonar-conf-value mono" style={{ color: q.tone }}>
+            {ok && confidence != null ? `${Math.round(confPct)}%` : "—"}
           </span>
         </div>
+        {ok && raw != null && (
+          <div className="sonar-raw mono">
+            raw {fmt(raw, 1)} m — unfiltered echo
+          </div>
+        )}
       </div>
     </div>
   );

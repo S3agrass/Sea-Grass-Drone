@@ -62,11 +62,15 @@ export function DroneProvider({ children }) {
     lon: null,
     depth: null,
   });
-  // Ping2 sonar: forward/obstacle distance + how much the echosounder trusts it.
-  // ok flips the gauge from a calm "—" to a live value; distance is in metres.
+  // Ping2 sonar. distance_m is the server-side FILTERED range (median of
+  // confidence-gated samples — null when nothing real is in view); raw_m is the
+  // latest unfiltered echo for debugging; quality is the lock state
+  // ("good" | "weak" | "none"); ok tracks the serial link on the Pi.
   const [sonar, setSonar] = useState({
     distance_m: null,
+    raw_m: null,
     confidence: null,
+    quality: "none",
     ok: false,
   });
   const [cameraActive, setCameraActive] = useState(false);
@@ -194,7 +198,7 @@ export function DroneProvider({ children }) {
           setCameraActive(false);
           setDetectActive(false);
           setDetections([]);
-          setSonar({ distance_m: null, confidence: null, ok: false });
+          setSonar({ distance_m: null, raw_m: null, confidence: null, quality: "none", ok: false });
           setRecording(false);
           setRecElapsed(0);
         }
@@ -216,7 +220,9 @@ export function DroneProvider({ children }) {
         } else if (m.type === "sonar") {
           setSonar({
             distance_m: m.distance_m ?? null,
+            raw_m: m.raw_m ?? null,
             confidence: m.confidence ?? null,
+            quality: m.quality ?? "none",
             ok: Boolean(m.ok),
           });
         } else if (m.type === "media_saved") {
@@ -247,9 +253,12 @@ export function DroneProvider({ children }) {
       }));
       // Simulated submerged sonar: a wandering forward distance with a healthy
       // confidence, so the gauge previews live-looking data with no hardware.
+      const simDist = Number((2.5 + Math.random() * 1.5).toFixed(2));
       setSonar({
-        distance_m: Number((2.5 + Math.random() * 1.5).toFixed(2)),
+        distance_m: simDist,
+        raw_m: Number((simDist + (Math.random() * 0.2 - 0.1)).toFixed(2)),
         confidence: Math.round(55 + Math.random() * 35),
+        quality: "good",
         ok: true,
       });
     }, 900);

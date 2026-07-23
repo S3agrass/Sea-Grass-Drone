@@ -62,7 +62,9 @@ export default function ControlPage() {
             <DepthMeter depth={telemetry.depth} />
             <SonarGauge
               distance={sonar.distance_m}
+              raw={sonar.raw_m}
               confidence={sonar.confidence}
+              quality={sonar.quality}
               ok={sonar.ok}
             />
             <SpeedGauge speed={telemetry.groundspeed} />

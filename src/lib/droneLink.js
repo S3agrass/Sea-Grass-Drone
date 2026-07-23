@@ -22,7 +22,9 @@
  *                      recording, rec_elapsed_s, autorecord }
  *     { type: "media_saved", kind: "photo", name }   a capture landed on the Pi
  *     { type: "telemetry", heading, groundspeed, battery, lat, lon, depth }
- *     { type: "sonar", distance_m, confidence, ok }   Ping2 forward/obstacle range
+ *     { type: "sonar", distance_m, raw_m, confidence, quality, ok }
+ *         Ping2 range. distance_m is confidence-gated + median-filtered (null =
+ *         no lock); raw_m is the latest unfiltered echo; quality: good|weak|none
  *     { type: "motors", angle, mag, left, right, left_pwm, right_pwm }  10Hz, helm only
  *     { type: "soft_stop", latched }         latched soft-stop state changed
  *     { type: "detections", boxes: [{ cls, conf, x, y, w, h }], ts }
