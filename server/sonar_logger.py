@@ -15,8 +15,9 @@ Run:
     python3 sonar_logger.py
 
 Env vars:
-    PING_PORT     Ping2 serial device   (default /dev/ttyUSB0)
+    PING_PORT     Ping2 serial device   (default /dev/ttyAMA2 — uart2, pins 7/29)
     PING_BAUD     Ping2 baud rate       (default 115200)
+    PING_FIX_MUX  set GPIO4/5 to a2 on start (default 1; set 0 to skip)
     PIXHAWK_PORT  Pixhawk serial device (default /dev/ttyACM0)
     PIXHAWK_BAUD  Pixhawk baud rate     (default 115200)
 
@@ -25,6 +26,7 @@ The Pixhawk is optional: without it, rows still log with heading/depth empty.
 
 import csv
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -33,8 +35,12 @@ from brping import Ping1D  # Ping2 speaks the Ping1D protocol/driver
 from pymavlink import mavutil
 
 # ---------------- configuration ----------------
-PING_PORT = os.environ.get("PING_PORT", "/dev/ttyUSB0")
+# On this Pi the Ping2 is on the GPIO UART (uart2 -> /dev/ttyAMA2, pins 7/29), not
+# USB. GPIO4/5 must be muxed to a2 (TXD2/RXD2); a4 is RI0/DTR0 and silently
+# disconnects the UART. See sonar/README.md.
+PING_PORT = os.environ.get("PING_PORT", "/dev/ttyAMA2")
 PING_BAUD = int(os.environ.get("PING_BAUD", "115200"))
+PING_FIX_MUX = os.environ.get("PING_FIX_MUX", "1") not in ("0", "false", "False", "")
 SERIAL_PORT = os.environ.get("PIXHAWK_PORT", "/dev/ttyACM0")
 BAUD = int(os.environ.get("PIXHAWK_BAUD", "115200"))
 
@@ -44,10 +50,25 @@ CSV_FIELDS = ["timestamp", "distance_m", "confidence", "heading_deg", "depth_m"]
 
 
 # ---------------- Ping2 sonar ----------------
+def fix_uart_mux():
+    """Force GPIO4/5 to a2 (TXD2/RXD2) so /dev/ttyAMA2 reaches the header pins.
+    Best-effort: pinctrl may be absent off a Pi, in which case we skip it."""
+    if not PING_FIX_MUX:
+        return
+    try:
+        subprocess.run(["pinctrl", "set", "4", "a2"], check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["pinctrl", "set", "5", "a2"], check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (FileNotFoundError, OSError) as exc:
+        print(f"Could not set uart2 mux ({exc}) — continuing anyway")
+
+
 def connect_ping():
     """Connect to the Ping2. Fatal (clean exit) on failure — the sonar is
     the whole point of this script, so there is nothing to log without it."""
     try:
+        fix_uart_mux()
         print(f"Connecting to Ping2 sonar on {PING_PORT} @ {PING_BAUD}…")
         ping = Ping1D()
         ping.connect_serial(PING_PORT, PING_BAUD)

@@ -77,6 +77,52 @@ export function BatteryMeter({ level }) {
   );
 }
 
+// Confidence colour: the Ping2 reports how much it trusts each echo. In air it
+// sits near 0% (noise), so low confidence self-documents as untrustworthy.
+function confTone(conf) {
+  if (conf == null) return "var(--faint)";
+  if (conf >= 50) return "var(--teal)";
+  if (conf >= 20) return "var(--amber)";
+  return "var(--red)";
+}
+
+export function SonarGauge({ distance, confidence, ok = false, maxRange = 30 }) {
+  const live = ok && distance != null;
+  // Range bar: how far the echo is across the sonar's usable window.
+  const rangePct = live ? Math.min(100, (distance / maxRange) * 100) : 0;
+  const confPct = confidence == null ? 0 : Math.max(0, Math.min(100, confidence));
+  const tone = confTone(live ? confidence : null);
+
+  return (
+    <div className="inst">
+      <div className="eyebrow">Sonar</div>
+      <div className="sonar">
+        <div className="sonar-readout">
+          <span className="inst-value mono" style={{ color: live ? tone : undefined }}>
+            {live ? fmt(distance, 2) : "—"}
+          </span>
+          <span className="inst-unit mono">m</span>
+        </div>
+        <div className="sonar-range-track" title={`0–${maxRange} m range`}>
+          <div className="sonar-range-fill" style={{ width: `${rangePct}%` }} />
+        </div>
+        <div className="sonar-conf">
+          <span className="sonar-conf-label mono">conf</span>
+          <div className="sonar-conf-track">
+            <div
+              className="sonar-conf-fill"
+              style={{ width: `${confPct}%`, background: tone }}
+            />
+          </div>
+          <span className="sonar-conf-value mono" style={{ color: tone }}>
+            {live && confidence != null ? `${Math.round(confPct)}%` : "—"}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function SpeedGauge({ speed, max = 5 }) {
   const pct = speed == null ? 0 : Math.min(100, (speed / max) * 100);
   return (

@@ -454,6 +454,34 @@
 .battery-fill { height: 100%; transition: width 0.5s ease; border-radius: 6px; }
 .battery .inst-value { font-size: 16px; }
 
+/* sonar — distance readout + range bar + confidence bar */
+.sonar { display: flex; flex-direction: column; gap: 8px; }
+.sonar-readout { display: flex; align-items: baseline; gap: 5px; }
+.sonar-range-track {
+  height: 5px;
+  background: var(--abyss);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.sonar-range-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--teal-dim), var(--teal));
+  transition: width 0.4s ease;
+}
+.sonar-conf { display: flex; align-items: center; gap: 8px; }
+.sonar-conf-label { font-size: 10px; color: var(--muted); }
+.sonar-conf-track {
+  flex: 1;
+  height: 8px;
+  background: var(--abyss);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.sonar-conf-fill { height: 100%; transition: width 0.4s ease, background 0.4s ease; border-radius: 4px; }
+.sonar-conf-value { font-size: 12px; font-weight: 700; min-width: 34px; text-align: right; }
+
 .speed { display: flex; align-items: baseline; gap: 5px; }
 .speed-track {
   height: 5px;

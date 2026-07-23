@@ -62,6 +62,13 @@ export function DroneProvider({ children }) {
     lon: null,
     depth: null,
   });
+  // Ping2 sonar: forward/obstacle distance + how much the echosounder trusts it.
+  // ok flips the gauge from a calm "—" to a live value; distance is in metres.
+  const [sonar, setSonar] = useState({
+    distance_m: null,
+    confidence: null,
+    ok: false,
+  });
   const [cameraActive, setCameraActive] = useState(false);
   const [detectActive, setDetectActive] = useState(false);
   const [detections, setDetections] = useState([]); // latest bbox array
@@ -187,6 +194,7 @@ export function DroneProvider({ children }) {
           setCameraActive(false);
           setDetectActive(false);
           setDetections([]);
+          setSonar({ distance_m: null, confidence: null, ok: false });
           setRecording(false);
           setRecElapsed(0);
         }
@@ -205,6 +213,12 @@ export function DroneProvider({ children }) {
           setTelemetry((t) => ({ ...t, ...m }));
         } else if (m.type === "detections") {
           setDetections(m.boxes || []);
+        } else if (m.type === "sonar") {
+          setSonar({
+            distance_m: m.distance_m ?? null,
+            confidence: m.confidence ?? null,
+            ok: Boolean(m.ok),
+          });
         } else if (m.type === "media_saved") {
           pushToast("warn", `📸 ${m.kind === "photo" ? "Photo" : "Clip"} saved · ${m.name}`);
         } else if (m.type === "notice") {
@@ -231,6 +245,13 @@ export function DroneProvider({ children }) {
         battery: 82,
         depth: 0.4 + Math.random() * 0.2,
       }));
+      // Simulated submerged sonar: a wandering forward distance with a healthy
+      // confidence, so the gauge previews live-looking data with no hardware.
+      setSonar({
+        distance_m: Number((2.5 + Math.random() * 1.5).toFixed(2)),
+        confidence: Math.round(55 + Math.random() * 35),
+        ok: true,
+      });
     }, 900);
     return () => clearInterval(id);
   }, [demoMode, linkStatus]);
@@ -336,6 +357,7 @@ export function DroneProvider({ children }) {
     detections,
     detectOn,
     detectOff,
+    sonar,
     recording,
     recElapsed,
     autoRecord,

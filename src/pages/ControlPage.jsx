@@ -9,13 +9,14 @@ import Toasts from "../components/Toasts";
 import {
   Compass,
   DepthMeter,
+  SonarGauge,
   BatteryMeter,
   SpeedGauge,
 } from "../components/Instruments";
 import { useDrone } from "../context/DroneContext";
 
 export default function ControlPage() {
-  const { activeDrone, telemetry } = useDrone();
+  const { activeDrone, telemetry, sonar } = useDrone();
   const [waypoints, setWaypoints] = useState([]);
   const [trail, setTrail] = useState([]);
   const lastTrailPoint = useRef(null);
@@ -59,6 +60,11 @@ export default function ControlPage() {
           <div className="inst-cluster">
             <Compass heading={telemetry.heading} />
             <DepthMeter depth={telemetry.depth} />
+            <SonarGauge
+              distance={sonar.distance_m}
+              confidence={sonar.confidence}
+              ok={sonar.ok}
+            />
             <SpeedGauge speed={telemetry.groundspeed} />
             <BatteryMeter level={telemetry.battery} />
           </div>

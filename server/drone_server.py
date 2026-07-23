@@ -44,6 +44,8 @@ import urllib.request
 import websockets
 from pymavlink import mavutil
 
+from sonar_reader import SonarReader
+
 # ---------------- configuration ----------------
 SERIAL_PORT = os.environ.get("PIXHAWK_PORT", "/dev/ttyACM0")
 BAUD = int(os.environ.get("PIXHAWK_BAUD", "115200"))
@@ -281,6 +283,11 @@ mode = "MANUAL"
 # whether it must drain MAVLink itself (no client) to keep `armed` fresh, or leave
 # that to the per-client telemetry loop (avoids two concurrent readers).
 client_count = 0
+
+# Ping2 sonar reader — runs on its own daemon thread (see sonar_reader.py) so its
+# blocking serial reads never touch this asyncio loop. Started in main(), non-fatal
+# if the sonar is absent; the telemetry loop broadcasts sonar.latest to the UI.
+sonar = SonarReader()
 
 # ---------------- camera subprocess ----------------
 # The repo-root camera_stream.py (Picamera2 -> MJPEG on :8000) is the camera
@@ -1068,6 +1075,7 @@ async def client_handler(ws):
             data, notices = read_telemetry()
             if data:
                 await send({"type": "telemetry", **data})
+            await send({"type": "sonar", **sonar.latest})
             for level, message in notices:
                 await send({"type": "notice", "level": level, "message": message})
             await state()
@@ -1281,6 +1289,10 @@ async def main():
     # heartbeat is never delayed by the asyncio loop and ArduSub never trips its
     # heartbeat failsafe.
     start_heartbeat_thread()
+    # Begin reading the Ping2 sonar on its own daemon thread (non-fatal if absent).
+    # It sets the uart2 mux and retries the connect itself, so nothing else needs
+    # to be launched for the sonar to appear in the UI.
+    sonar.start()
     # Stream RC overrides continuously (see control_loop) so ArduSub's separate
     # manual-control failsafe is fed just as steadily as the heartbeat feeds the
     # GCS failsafe.
