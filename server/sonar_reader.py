@@ -139,16 +139,31 @@ class SonarReader:
         return False
 
     def _configure(self, ping):
-        """Push accuracy settings to the device. Same ~3% packet loss applies to
-        set_* exchanges, so each gets a few attempts; a miss is logged, not fatal."""
+        """Push accuracy settings to the device. Best-effort only: brping's
+        set_speed_of_sound(verify=True) reads back an internal attribute that is
+        not always populated on this decode path and raises AttributeError instead
+        of returning False on that race, so it's called with verify=False and
+        confirmed separately via get_speed_of_sound. Nothing here may ever raise —
+        accuracy tuning must not be able to take down the whole reader thread."""
         sos_mm_s = int(PING_SOS_M_S * 1000)  # protocol wants mm/s
-        for _ in range(3):
-            if ping.set_speed_of_sound(sos_mm_s):
-                print(f"Sonar: speed of sound set to {PING_SOS_M_S:g} m/s")
+        try:
+            for _ in range(3):
+                if ping.set_speed_of_sound(sos_mm_s, verify=False):
+                    break
+                time.sleep(0.2)
+            else:
+                print(f"Sonar: speed-of-sound request not acknowledged "
+                      f"(wanted {PING_SOS_M_S:g} m/s) — ranges may be off")
                 return
-            time.sleep(0.2)
-        print(f"Sonar: could not set speed of sound (wanted {PING_SOS_M_S:g} m/s) "
-              "— ranges may be ~1% off")
+            readback = ping.get_speed_of_sound()
+            if readback == sos_mm_s:
+                print(f"Sonar: speed of sound set to {PING_SOS_M_S:g} m/s")
+            else:
+                print(f"Sonar: speed-of-sound readback {readback} != {sos_mm_s} "
+                      "mm/s — device may not have applied it")
+        except Exception as exc:  # noqa: BLE001
+            print(f"Sonar: could not set speed of sound ({exc}) — continuing "
+                  "with the device's current setting")
 
     def _mark_down(self):
         self._ping = None
@@ -159,55 +174,68 @@ class SonarReader:
     def _run(self):
         misses = 0
         while not self._stop.is_set():
-            if self._ping is None:
-                if not self._connect():
-                    # Back off before retrying so a missing sonar doesn't spin the CPU.
-                    self._stop.wait(_RECONNECT_BACKOFF_S)
-                    continue
-                misses = 0
-
+            # Top-level safety net: this library has already thrown one
+            # surprising internal AttributeError (see _configure) instead of
+            # returning False as documented. Nothing raised anywhere in this
+            # loop may be allowed to end the thread — that's what silently
+            # freezes the UI on "Sonar OFF" with no further retries. Any
+            # unexpected exception is treated exactly like a read error: tear
+            # the link down and let the normal reconnect path take over.
             try:
-                data = self._ping.get_distance()
-            except Exception as exc:  # noqa: BLE001
-                print(f"Sonar: read error ({exc}) — reconnecting")
-                self._mark_down()
-                continue
-
-            if data is None:
-                misses += 1
-                if misses >= _MAX_CONSECUTIVE_MISSES:
-                    print("Sonar: too many missed reads — reconnecting")
-                    self._mark_down()
+                if self._ping is None:
+                    if not self._connect():
+                        # Back off so a missing sonar doesn't spin the CPU.
+                        self._stop.wait(_RECONNECT_BACKOFF_S)
+                        continue
                     misses = 0
-            else:
-                misses = 0
-                now = time.time()
-                raw_m = round(data["distance"] / 1000.0, 3)  # mm -> m
-                conf = int(data["confidence"])
-                self._window.append((raw_m, conf, now))
 
-                # Median of the samples that pass the confidence gate and aren't
-                # stale. A 0%-confidence 90 m spike (air / cup / tube reverb)
-                # contributes nothing, so the displayed distance can't be noise.
-                accepted = [d for (d, c, t) in self._window
-                            if c >= PING_MIN_CONF and now - t <= _SAMPLE_MAX_AGE_S]
-                if len(accepted) >= _GOOD_MIN_ACCEPTED:
-                    quality, filtered = "good", round(statistics.median(accepted), 3)
-                elif accepted:
-                    quality, filtered = "weak", round(statistics.median(accepted), 3)
+                try:
+                    data = self._ping.get_distance()
+                except Exception as exc:  # noqa: BLE001
+                    print(f"Sonar: read error ({exc}) — reconnecting")
+                    self._mark_down()
+                    continue
+
+                if data is None:
+                    misses += 1
+                    if misses >= _MAX_CONSECUTIVE_MISSES:
+                        print("Sonar: too many missed reads — reconnecting")
+                        self._mark_down()
+                        misses = 0
                 else:
-                    quality, filtered = "none", None
+                    misses = 0
+                    now = time.time()
+                    raw_m = round(data["distance"] / 1000.0, 3)  # mm -> m
+                    conf = int(data["confidence"])
+                    self._window.append((raw_m, conf, now))
 
-                self.latest = {
-                    "distance_m": filtered,
-                    "raw_m": raw_m,
-                    "confidence": conf,
-                    "quality": quality,
-                    "ok": True,
-                    "ts": now,
-                }
+                    # Median of the samples that pass the confidence gate and
+                    # aren't stale. A 0%-confidence 90 m spike (air / cup /
+                    # tube reverb) contributes nothing, so the displayed
+                    # distance can never be noise.
+                    accepted = [d for (d, c, t) in self._window
+                                if c >= PING_MIN_CONF and now - t <= _SAMPLE_MAX_AGE_S]
+                    if len(accepted) >= _GOOD_MIN_ACCEPTED:
+                        quality, filtered = "good", round(statistics.median(accepted), 3)
+                    elif accepted:
+                        quality, filtered = "weak", round(statistics.median(accepted), 3)
+                    else:
+                        quality, filtered = "none", None
 
-            self._stop.wait(_READ_PERIOD_S)
+                    self.latest = {
+                        "distance_m": filtered,
+                        "raw_m": raw_m,
+                        "confidence": conf,
+                        "quality": quality,
+                        "ok": True,
+                        "ts": now,
+                    }
+
+                self._stop.wait(_READ_PERIOD_S)
+            except Exception as exc:  # noqa: BLE001
+                print(f"Sonar: unexpected error in reader loop ({exc}) — reconnecting")
+                self._mark_down()
+                self._stop.wait(_RECONNECT_BACKOFF_S)
 
         if self._ping is not None and getattr(self._ping, "iodev", None):
             try:
