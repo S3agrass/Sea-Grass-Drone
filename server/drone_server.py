@@ -36,6 +36,7 @@ import math
 import os
 import signal
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -45,6 +46,11 @@ import websockets
 from pymavlink import mavutil
 
 from sonar_reader import SonarReader
+
+# pid_controller.py lives at the repo root (one level up from server/), so make
+# it importable without installing the package.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from pid_controller import PIDController  # noqa: E402
 
 # ---------------- configuration ----------------
 SERIAL_PORT = os.environ.get("PIXHAWK_PORT", "/dev/ttyACM0")
@@ -288,6 +294,49 @@ client_count = 0
 # blocking serial reads never touch this asyncio loop. Started in main(), non-fatal
 # if the sonar is absent; the telemetry loop broadcasts sonar.latest to the UI.
 sonar = SonarReader()
+
+# Altitude-hold PID demo. It runs on the live barometric altitude and its output
+# is DISPLAY-ONLY — nothing actuates on it (there is no vertical control authority
+# wired). Gains mirror test_pid_synthetic.py. The setpoint is captured from the
+# first valid altitude reading ("hold this height"); change pid_setpoint to target
+# a fixed altitude or a UI-driven value instead.
+alt_pid = PIDController(
+    kp=0.3, ki=0.05, kd=0.1,
+    output_limits=(-1.0, 1.0),
+    integral_limits=(-2.0, 2.0),
+)
+pid_setpoint = None  # None until the first altitude sample captures it
+pid_readout = {
+    "setpoint": None, "measurement": None, "error": None,
+    "integral": None, "output": None, "ok": False,
+}
+
+
+def reset_alt_pid():
+    """Drop PID state so a fresh setpoint is captured on the next altitude sample."""
+    global pid_setpoint
+    alt_pid.reset()
+    pid_setpoint = None
+    pid_readout.update(setpoint=None, measurement=None, error=None,
+                       integral=None, output=None, ok=False)
+
+
+def step_alt_pid(altitude):
+    """Feed one altitude sample to the PID and refresh pid_readout. altitude is
+    the barometric altitude in meters; returns nothing (state lives in globals)."""
+    global pid_setpoint
+    if pid_setpoint is None:
+        pid_setpoint = altitude  # hold whatever height we first saw
+        alt_pid.setpoint = pid_setpoint
+    output = alt_pid.update(altitude, current_time=time.time())
+    pid_readout.update(
+        setpoint=round(pid_setpoint, 2),
+        measurement=round(altitude, 2),
+        error=round(pid_setpoint - altitude, 3),
+        integral=round(alt_pid._integral, 3),
+        output=round(output, 3),
+        ok=True,
+    )
 
 # ---------------- camera subprocess ----------------
 # The repo-root camera_stream.py (Picamera2 -> MJPEG on :8000) is the camera
@@ -1002,6 +1051,18 @@ def read_telemetry():
         if t == "VFR_HUD":
             out["heading"] = msg.heading
             out["groundspeed"] = round(msg.groundspeed * 1.94384, 2)  # m/s -> kn
+            # Altitude + climb come from the Pixhawk's onboard barometer, so they
+            # are real even with no external sensors attached (baro alt is MSL-ish
+            # and drifts, but tracks vertical motion). Meters and m/s.
+            out["altitude"] = round(msg.alt, 2)
+            out["climb"] = round(msg.climb, 2)
+        elif t == "ATTITUDE":
+            # EKF-fused vehicle attitude. MAVLink sends radians; the UI wants
+            # degrees. Roll/pitch are signed (±180 / ±90); yaw is normalized to
+            # 0–360 so it reads like a compass bearing.
+            out["roll"] = round(math.degrees(msg.roll), 1)
+            out["pitch"] = round(math.degrees(msg.pitch), 1)
+            out["yaw"] = round(math.degrees(msg.yaw) % 360, 1)
         elif t == "GLOBAL_POSITION_INT":
             out["lat"] = msg.lat / 1e7
             out["lon"] = msg.lon / 1e7
@@ -1075,6 +1136,9 @@ async def client_handler(ws):
             data, notices = read_telemetry()
             if data:
                 await send({"type": "telemetry", **data})
+            if "altitude" in data:
+                step_alt_pid(data["altitude"])
+            await send({"type": "pid", **pid_readout})
             await send({"type": "sonar", **sonar.latest})
             for level, message in notices:
                 await send({"type": "notice", "level": level, "message": message})
@@ -1228,6 +1292,10 @@ async def client_handler(ws):
         tele_task.cancel()
         detect_task.cancel()
         motors_task.cancel()
+        if client_count == 0:
+            # Last operator left — drop PID state so the next session re-captures
+            # its hold altitude fresh rather than resuming a stale setpoint.
+            reset_alt_pid()
         if helm_holder is ws:
             helm_holder = None
             pressed.clear()
