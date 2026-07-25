@@ -1139,7 +1139,11 @@ async def client_handler(ws):
             if "altitude" in data:
                 step_alt_pid(data["altitude"])
             await send({"type": "pid", **pid_readout})
-            await send({"type": "sonar", **sonar.latest})
+            # Gauge-level sonar: scalars only. The ~200-sample amplitude array
+            # goes out on its own faster loop below, so it is stripped here
+            # rather than paying ~800 bytes twice at two different rates.
+            await send({"type": "sonar",
+                        **{k: v for k, v in sonar.latest.items() if k != "profile"}})
             for level, message in notices:
                 await send({"type": "notice", "level": level, "message": message})
             await state()
@@ -1158,6 +1162,36 @@ async def client_handler(ws):
                 await send({"type": "detections", **latest_detections})
             await asyncio.sleep(0.2)
 
+    async def sonar_profile_loop():
+        # Feed the UI's echogram at the reader's own ~10 Hz sample rate. The
+        # 0.5 s telemetry loop is far too coarse for a scrolling waterfall — at
+        # 2 Hz you lose 4 of every 5 pings and the display stutters.
+        #
+        # Keyed on ping_number so a row is emitted once per ACOUSTIC ping: this
+        # loop and the reader thread are unsynchronised, so polling faster than
+        # the device pings would otherwise duplicate rows and stretch the time
+        # axis. A skipped ping (link loss) just leaves a gap, which is honest.
+        last_ping = None
+        while True:
+            snap = sonar.latest  # replaced wholesale by the reader — safe to alias
+            ping_no = snap.get("ping_number")
+            if snap.get("ok") and ping_no is not None and ping_no != last_ping:
+                last_ping = ping_no
+                await send({
+                    "type": "sonar_profile",
+                    "ping": ping_no,
+                    "ts": snap.get("ts"),
+                    "distance_m": snap.get("distance_m"),
+                    "raw_m": snap.get("raw_m"),
+                    "confidence": snap.get("confidence"),
+                    "quality": snap.get("quality"),
+                    "scan_start_m": snap.get("scan_start_m"),
+                    "scan_length_m": snap.get("scan_length_m"),
+                    "gain": snap.get("gain"),
+                    "profile": snap.get("profile"),
+                })
+            await asyncio.sleep(0.05)
+
     async def motors_loop():
         # Push the live per-motor readout (angle/mag/left/right) to the helm holder
         # at ~10 Hz so terminal_control.py can print what each motor is doing as the
@@ -1170,6 +1204,7 @@ async def client_handler(ws):
     tele_task = asyncio.create_task(telemetry_loop())
     detect_task = asyncio.create_task(detections_loop())
     motors_task = asyncio.create_task(motors_loop())
+    sonar_task = asyncio.create_task(sonar_profile_loop())
     try:
         async for raw in ws:
             last_seen = time.time()
@@ -1292,6 +1327,7 @@ async def client_handler(ws):
         tele_task.cancel()
         detect_task.cancel()
         motors_task.cancel()
+        sonar_task.cancel()
         if client_count == 0:
             # Last operator left — drop PID state so the next session re-captures
             # its hold altitude fresh rather than resuming a stale setpoint.

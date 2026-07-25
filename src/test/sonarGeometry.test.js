@@ -1,0 +1,149 @@
+import { describe, it, expect } from 'vitest';
+import {
+  amplitudeToRGB,
+  sampleToRange,
+  rangeToRow,
+  decomposeRange,
+  peakRange,
+  PING_MIN_RANGE_M,
+} from '../lib/sonarGeometry';
+
+describe('amplitudeToRGB', () => {
+  it('maps 0 to the abyss background and 255 to the hot end', () => {
+    expect(amplitudeToRGB(0)).toEqual([6, 17, 30]);
+    expect(amplitudeToRGB(255)).toEqual([255, 92, 108]);
+  });
+
+  it('clamps out-of-range and non-numeric input instead of wrapping', () => {
+    expect(amplitudeToRGB(-40)).toEqual([6, 17, 30]);
+    expect(amplitudeToRGB(9999)).toEqual([255, 92, 108]);
+    expect(amplitudeToRGB(undefined)).toEqual([6, 17, 30]);
+    expect(amplitudeToRGB(NaN)).toEqual([6, 17, 30]);
+  });
+
+  it('reproduces each declared palette stop exactly', () => {
+    // Stops are at 0, 0.35, 0.6, 0.82, 1.0 of full scale.
+    expect(amplitudeToRGB(0.35 * 255)).toEqual([30, 143, 124]); // --teal-dim
+    expect(amplitudeToRGB(0.6 * 255)).toEqual([59, 217, 187]); // --teal
+    expect(amplitudeToRGB(0.82 * 255)).toEqual([255, 180, 84]); // --amber
+  });
+
+  it('interpolates linearly between two stops', () => {
+    // Halfway between abyss (0) and teal-dim (0.35) should be the midpoint.
+    const mid = amplitudeToRGB(0.175 * 255);
+    expect(mid[0]).toBeCloseTo((6 + 30) / 2, 0);
+    expect(mid[1]).toBeCloseTo((17 + 143) / 2, 0);
+    expect(mid[2]).toBeCloseTo((30 + 124) / 2, 0);
+  });
+
+  it('rises steadily out of the background across the cool half', () => {
+    // Green channel carries the ramp from abyss through teal; red only takes
+    // over at the amber/red end, so channel-sum is NOT monotonic overall.
+    const greens = [0, 40, 90, 140].map((a) => amplitudeToRGB(a)[1]);
+    for (let i = 1; i < greens.length; i += 1) {
+      expect(greens[i]).toBeGreaterThan(greens[i - 1]);
+    }
+  });
+});
+
+describe('sampleToRange', () => {
+  it('maps the first and last sample to the window edges', () => {
+    expect(sampleToRange(0, 200, 0, 10)).toBe(0);
+    expect(sampleToRange(199, 200, 0, 10)).toBe(10);
+  });
+
+  it('honours a non-zero scan_start', () => {
+    expect(sampleToRange(0, 200, 2, 8)).toBe(2);
+    expect(sampleToRange(199, 200, 2, 8)).toBe(10);
+  });
+
+  it('places the midpoint halfway through the window', () => {
+    expect(sampleToRange(100, 201, 0, 10)).toBeCloseTo(5, 6);
+  });
+
+  it('degrades safely on empty or single-sample profiles', () => {
+    expect(sampleToRange(0, 0, 3, 10)).toBe(3);
+    expect(sampleToRange(0, 1, 3, 10)).toBe(3);
+  });
+});
+
+describe('rangeToRow', () => {
+  it('puts the nearest range at the top row and max range at the bottom', () => {
+    expect(rangeToRow(0, 10, 100)).toBe(0);
+    expect(rangeToRow(10, 10, 100)).toBe(99);
+  });
+
+  it('returns null outside the display window rather than clamping', () => {
+    // A 30 m echo must not be drawn on the bottom edge of a 10 m display —
+    // that would read as a real return at 10 m.
+    expect(rangeToRow(30, 10, 100)).toBeNull();
+    expect(rangeToRow(-1, 10, 100)).toBeNull();
+  });
+
+  it('guards against degenerate geometry and bad numbers', () => {
+    expect(rangeToRow(5, 0, 100)).toBeNull();
+    expect(rangeToRow(5, 10, 0)).toBeNull();
+    expect(rangeToRow(NaN, 10, 100)).toBeNull();
+  });
+});
+
+describe('decomposeRange', () => {
+  // Angle is off VERTICAL: 0 = straight down, 90 = dead ahead.
+  it('is all depth and no reach when pointing straight down', () => {
+    const { forward, down } = decomposeRange(4, 0, 0);
+    expect(down).toBeCloseTo(4, 6);
+    expect(forward).toBeCloseTo(0, 6);
+  });
+
+  it('is all reach and no depth when pointing dead ahead', () => {
+    const { forward, down } = decomposeRange(4, 90, 0);
+    expect(down).toBeCloseTo(0, 6);
+    expect(forward).toBeCloseTo(4, 6);
+  });
+
+  it('splits evenly at the 45 degree diagonal mount', () => {
+    const { forward, down } = decomposeRange(10, 45, 0);
+    expect(forward).toBeCloseTo(10 / Math.SQRT2, 6);
+    expect(down).toBeCloseTo(10 / Math.SQRT2, 6);
+    expect(forward).toBeCloseTo(down, 6);
+  });
+
+  it('nose-up pitch trades depth for forward reach', () => {
+    const level = decomposeRange(10, 45, 0);
+    const noseUp = decomposeRange(10, 45, 20);
+    expect(noseUp.down).toBeGreaterThan(level.down);
+    expect(noseUp.forward).toBeLessThan(level.forward);
+    // Total range is unchanged — pitch only rotates the beam.
+    expect(Math.hypot(noseUp.forward, noseUp.down)).toBeCloseTo(10, 6);
+  });
+
+  it('returns nulls for a missing range instead of a confident zero', () => {
+    expect(decomposeRange(null)).toEqual({ forward: null, down: null });
+    expect(decomposeRange(NaN)).toEqual({ forward: null, down: null });
+  });
+});
+
+describe('peakRange', () => {
+  it('finds the range of the brightest sample', () => {
+    const profile = new Array(200).fill(10);
+    profile[100] = 250;
+    // 200 samples over a 0-10 m window: index 100 sits just past halfway.
+    expect(peakRange(profile, 0, 10)).toBeCloseTo(sampleToRange(100, 200, 0, 10), 6);
+  });
+
+  it('ignores dead-zone ringing, which is always the brightest thing', () => {
+    const profile = new Array(200).fill(5);
+    profile[0] = 255; // transducer ringing at ~0 m
+    profile[150] = 200; // the actual target
+    const r = peakRange(profile, 0, 10);
+    expect(r).toBeGreaterThanOrEqual(PING_MIN_RANGE_M);
+    expect(r).toBeCloseTo(sampleToRange(150, 200, 0, 10), 6);
+  });
+
+  it('returns null when there is no profile or the window is all dead zone', () => {
+    expect(peakRange(null, 0, 10)).toBeNull();
+    expect(peakRange([], 0, 10)).toBeNull();
+    // A 0.3 m window is entirely inside the 0.5 m dead zone.
+    expect(peakRange(new Array(200).fill(100), 0, 0.3)).toBeNull();
+  });
+});

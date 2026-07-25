@@ -5,6 +5,7 @@ import DroneMap from "../components/DroneMap";
 import CameraView from "../components/CameraView";
 import GamepadControl from "../components/GamepadControl";
 import ConnectionPanel from "../components/ConnectionPanel";
+import SonarView from "../components/SonarView";
 import Toasts from "../components/Toasts";
 import {
   Compass,
@@ -105,6 +106,10 @@ export default function ControlPage() {
           <CameraView />
           <GamepadControl />
         </aside>
+
+        {/* Full-width strip under the three columns — the echogram needs
+            horizontal room for time history, which the 250px rail can't give. */}
+        <SonarView />
       </div>
     </div>
   );

@@ -26,8 +26,19 @@
  *         altitude/climb are baro-derived; roll/pitch/yaw are the EKF-fused
  *         attitude in DEGREES (server converts from MAVLink radians)
  *     { type: "sonar", distance_m, raw_m, confidence, quality, ok }
- *         Ping2 range. distance_m is confidence-gated + median-filtered (null =
- *         no lock); raw_m is the latest unfiltered echo; quality: good|weak|none
+ *         Ping2 range, ~2Hz. distance_m is confidence-gated + median-filtered
+ *         (null = no lock); raw_m is the latest unfiltered echo; quality:
+ *         good|weak|none. Scalars only — the amplitude array is stripped here.
+ *     { type: "sonar_profile", ping, ts, distance_m, raw_m, confidence, quality,
+ *                              scan_start_m, scan_length_m, gain, profile }
+ *         One row of the echogram, emitted once per acoustic ping (~5Hz, device
+ *         rate). `profile` is ~200 amplitudes 0-255, nearest first, spanning
+ *         scan_start_m .. scan_start_m + scan_length_m — that window MOVES while
+ *         the device auto-ranges, so a bin is not a fixed distance. Null when
+ *         PING_PROFILE=0 or the link degraded to distance-only reads.
+ *         Consumed by SonarView directly off this link, NOT via DroneContext:
+ *         the context value isn't memoized, so array data at this rate would
+ *         re-render the map and camera panels too.
  *     { type: "pid", setpoint, measurement, error, integral, output, ok }
  *         Altitude-hold PID on live baro altitude; output is display-only
  *     { type: "motors", angle, mag, left, right, left_pwm, right_pwm }  10Hz, helm only

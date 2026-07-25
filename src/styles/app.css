@@ -323,6 +323,8 @@
   min-height: 0;
   display: grid;
   grid-template-columns: 250px 1fr 320px;
+  /* Row 1 takes the slack; row 2 is the sonar strip, sized by its content. */
+  grid-template-rows: minmax(0, 1fr) auto;
   gap: 10px;
   padding: 10px;
 }
@@ -360,7 +362,7 @@
 .panel-head-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* connection panel */
-.conn-panel, .inst-cluster, .camera-panel, .kbd-panel {
+.conn-panel, .inst-cluster, .camera-panel, .kbd-panel, .sonar-panel {
   background: var(--console);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius);
@@ -579,6 +581,103 @@
   border: 1px solid;
   border-radius: 4px;
 }
+
+/* ============ visual sonar (echogram + beam cone) ============ */
+.sonar-panel {
+  /* Spans all three deck columns on the second grid row. */
+  grid-column: 1 / -1;
+  padding: 12px 14px;
+}
+.sonar-panel .panel-head { margin-bottom: 8px; gap: 10px; justify-content: flex-start; }
+
+.sonar-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+.sonar-ctl {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.08em;
+}
+.sonar-ctl input[type="range"] { width: 90px; accent-color: var(--teal); }
+.sonar-ctl select {
+  background: var(--abyss);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 4px;
+}
+.sonar-ctl-val { color: var(--ink); font-size: 11px; min-width: 30px; }
+.sonar-toggle {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 3px 8px;
+  background: transparent;
+}
+.sonar-toggle:hover { color: var(--ink); border-color: var(--faint); }
+.sonar-toggle.on { color: var(--teal); border-color: var(--teal-dim); }
+
+.sonar-body {
+  display: grid;
+  grid-template-columns: 250px 1fr;
+  gap: 14px;
+  align-items: stretch;
+}
+
+/* --- beam cone --- */
+.sonar-cone { display: flex; gap: 8px; align-items: center; }
+.sonar-cone svg { width: 150px; height: 130px; flex-shrink: 0; }
+.sonar-cone-readout { display: flex; flex-direction: column; gap: 3px; flex: 1; }
+.sonar-cone-row { display: flex; justify-content: space-between; gap: 6px; align-items: baseline; }
+.sonar-lbl { font-size: 10px; color: var(--muted); }
+.sonar-num { font-size: 13px; font-weight: 700; }
+.sonar-note { font-size: 9px; color: var(--amber); line-height: 1.3; margin-top: 2px; }
+
+/* --- echogram --- */
+.sonar-echo { position: relative; display: flex; flex-direction: column; min-width: 0; }
+.sonar-echo-canvas {
+  width: 100%;
+  height: 130px;
+  display: block;
+  background: var(--abyss);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  /* One bitmap column == one ping. Let the browser scale it rather than
+     redrawing at devicePixelRatio; crisper for 1px columns and cheaper. */
+  image-rendering: pixelated;
+}
+.sonar-echo-axis {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  color: var(--faint);
+  margin-top: 3px;
+}
+.sonar-echo-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: var(--faint);
+  pointer-events: none;
+}
+
+/* The gauge's .sonar-quality chip (see above) floats right inside its eyebrow;
+   in the panel head it's a flex item, so the float has to be neutralised. */
+.sonar-panel .sonar-quality { float: none; }
 
 /* ============ map ============ */
 .map-wrap { position: relative; width: 100%; height: 100%; }
@@ -1089,9 +1188,21 @@
 /* ============ responsive ============ */
 @media (max-width: 1080px) {
   body { overflow: auto; }
-  .deck { grid-template-columns: 1fr; grid-auto-rows: auto; overflow-y: auto; }
+  /* Single column: grid-template-rows from the desktop layout would pin the
+     sonar strip to a second row that no longer exists, so reset it and let the
+     panels stack in document order. */
+  .deck {
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
+    grid-auto-rows: auto;
+    overflow-y: auto;
+  }
   .deck-map { height: 55vh; min-height: 360px; order: -1; }
   .deck-left, .deck-right { overflow: visible; }
+  /* Stack cone above echogram — 250px of cone plus a canvas doesn't fit. */
+  .sonar-panel { grid-column: auto; }
+  .sonar-body { grid-template-columns: 1fr; }
+  .sonar-controls { margin-left: 0; }
   .topbar-center { display: none; }
   .login { grid-template-columns: 1fr; }
   .login-hero { display: none; }
