@@ -454,6 +454,44 @@
 .battery-fill { height: 100%; transition: width 0.5s ease; border-radius: 6px; }
 .battery .inst-value { font-size: 16px; }
 
+/* sonar — distance readout + range bar + confidence bar */
+.sonar { display: flex; flex-direction: column; gap: 8px; }
+.sonar-readout { display: flex; align-items: baseline; gap: 5px; }
+.sonar-range-track {
+  height: 5px;
+  background: var(--abyss);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.sonar-range-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--teal-dim), var(--teal));
+  transition: width 0.4s ease;
+}
+.sonar-conf { display: flex; align-items: center; gap: 8px; }
+.sonar-conf-label { font-size: 10px; color: var(--muted); }
+.sonar-conf-track {
+  flex: 1;
+  height: 8px;
+  background: var(--abyss);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.sonar-conf-fill { height: 100%; transition: width 0.4s ease, background 0.4s ease; border-radius: 4px; }
+.sonar-conf-value { font-size: 12px; font-weight: 700; min-width: 34px; text-align: right; }
+.sonar-quality {
+  float: right;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 1px 6px;
+  border: 1px solid;
+  border-radius: 4px;
+}
+.sonar-raw { font-size: 10px; color: var(--muted); }
+
 .speed { display: flex; align-items: baseline; gap: 5px; }
 .speed-track {
   height: 5px;
@@ -465,6 +503,81 @@
   height: 100%;
   background: linear-gradient(90deg, var(--teal-dim), var(--teal));
   transition: width 0.4s ease;
+}
+
+/* altitude — baro readout */
+.alt { display: flex; align-items: baseline; gap: 5px; }
+
+/* climb — signed vertical speed with a center-zero bar */
+.climb { display: flex; align-items: baseline; gap: 5px; }
+.climb .inst-value { font-size: 18px; }
+.climb-track {
+  position: relative;
+  height: 6px;
+  background: var(--abyss);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.climb-mid {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 1px;
+  height: 100%;
+  background: var(--faint);
+}
+.climb-fill {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  transition: left 0.4s ease, width 0.4s ease, background 0.4s ease;
+}
+
+/* attitude — artificial horizon + roll/pitch/yaw readout */
+.attitude { display: flex; align-items: center; gap: 10px; }
+.attitude-ball { flex: 0 0 84px; }
+.attitude-ball svg { width: 84px; height: 84px; display: block; }
+.attitude-readout { display: flex; flex-direction: column; gap: 3px; flex: 1; }
+.attitude-row { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+.attitude-label { font-size: 10px; color: var(--muted); }
+.attitude-num { font-size: 13px; font-weight: 700; }
+
+/* alt-hold PID — setpoint/measurement/error/output + center-zero output bar */
+.pid { display: flex; flex-direction: column; gap: 6px; }
+.pid-row { display: grid; grid-template-columns: auto 1fr auto 1fr; gap: 6px; align-items: baseline; }
+.pid-label { font-size: 10px; color: var(--muted); }
+.pid-num { font-size: 14px; font-weight: 700; text-align: right; }
+.pid-track {
+  position: relative;
+  height: 6px;
+  background: var(--abyss);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.pid-mid {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 1px;
+  height: 100%;
+  background: var(--faint);
+}
+.pid-fill {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  transition: left 0.4s ease, width 0.4s ease, background 0.4s ease;
+}
+.pid-tag {
+  float: right;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 1px 6px;
+  border: 1px solid;
+  border-radius: 4px;
 }
 
 /* ============ map ============ */

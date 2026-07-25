@@ -61,6 +61,34 @@ export function DroneProvider({ children }) {
     lat: null,
     lon: null,
     depth: null,
+    altitude: null,
+    climb: null,
+    // EKF-fused attitude in degrees (roll/pitch signed, yaw 0–360).
+    roll: null,
+    pitch: null,
+    yaw: null,
+  });
+  // Ping2 sonar. distance_m is the server-side FILTERED range (median of
+  // confidence-gated samples — null when nothing real is in view); raw_m is the
+  // latest unfiltered echo for debugging; quality is the lock state
+  // ("good" | "weak" | "none"); ok tracks the serial link on the Pi.
+  const [sonar, setSonar] = useState({
+    distance_m: null,
+    raw_m: null,
+    confidence: null,
+    quality: "none",
+    ok: false,
+  });
+  // Altitude-hold PID demo state (server runs it on live baro altitude; output is
+  // display-only). setpoint is the captured "hold" altitude; ok tracks whether the
+  // server is currently feeding it altitude samples.
+  const [pid, setPid] = useState({
+    setpoint: null,
+    measurement: null,
+    error: null,
+    integral: null,
+    output: null,
+    ok: false,
   });
   const [cameraActive, setCameraActive] = useState(false);
   const [detectActive, setDetectActive] = useState(false);
@@ -187,6 +215,8 @@ export function DroneProvider({ children }) {
           setCameraActive(false);
           setDetectActive(false);
           setDetections([]);
+          setSonar({ distance_m: null, raw_m: null, confidence: null, quality: "none", ok: false });
+          setPid({ setpoint: null, measurement: null, error: null, integral: null, output: null, ok: false });
           setRecording(false);
           setRecElapsed(0);
         }
@@ -205,6 +235,23 @@ export function DroneProvider({ children }) {
           setTelemetry((t) => ({ ...t, ...m }));
         } else if (m.type === "detections") {
           setDetections(m.boxes || []);
+        } else if (m.type === "sonar") {
+          setSonar({
+            distance_m: m.distance_m ?? null,
+            raw_m: m.raw_m ?? null,
+            confidence: m.confidence ?? null,
+            quality: m.quality ?? "none",
+            ok: Boolean(m.ok),
+          });
+        } else if (m.type === "pid") {
+          setPid({
+            setpoint: m.setpoint ?? null,
+            measurement: m.measurement ?? null,
+            error: m.error ?? null,
+            integral: m.integral ?? null,
+            output: m.output ?? null,
+            ok: Boolean(m.ok),
+          });
         } else if (m.type === "media_saved") {
           pushToast("warn", `📸 ${m.kind === "photo" ? "Photo" : "Clip"} saved · ${m.name}`);
         } else if (m.type === "notice") {
@@ -222,15 +269,48 @@ export function DroneProvider({ children }) {
     localStorage.setItem("seagrass-demo", demoMode ? "1" : "0");
     if (!demoMode || linkStatus === "connected") return;
     let heading = 42;
+    let altitude = 12.0; // wanders around the hold setpoint below
+    const pidSetpoint = 12.0;
+    let phase = 0; // drives a slow, believable attitude wobble
     const id = setInterval(() => {
       heading = (heading + (Math.random() * 6 - 3) + 360) % 360;
+      altitude = altitude + (Math.random() * 0.6 - 0.3); // drift ±0.3 m
+      const climb = Number((Math.random() * 0.8 - 0.4).toFixed(2));
+      // Gentle rolling/pitching swell rather than random jitter, so the
+      // artificial horizon visibly moves instead of twitching.
+      phase += 0.35;
       setTelemetry((t) => ({
         ...t,
         heading,
         groundspeed: 1.6 + Math.random() * 0.8,
         battery: 82,
         depth: 0.4 + Math.random() * 0.2,
+        altitude: Number(altitude.toFixed(2)),
+        climb,
+        roll: Number((Math.sin(phase) * 14).toFixed(1)),
+        pitch: Number((Math.sin(phase * 0.6) * 8).toFixed(1)),
+        yaw: Number(heading.toFixed(1)),
       }));
+      // Simulated submerged sonar: a wandering forward distance with a healthy
+      // confidence, so the gauge previews live-looking data with no hardware.
+      const simDist = Number((2.5 + Math.random() * 1.5).toFixed(2));
+      setSonar({
+        distance_m: simDist,
+        raw_m: Number((simDist + (Math.random() * 0.2 - 0.1)).toFixed(2)),
+        confidence: Math.round(55 + Math.random() * 35),
+        quality: "good",
+        ok: true,
+      });
+      // Simulated altitude-hold PID: error drives the (display-only) output.
+      const error = pidSetpoint - altitude;
+      setPid({
+        setpoint: pidSetpoint,
+        measurement: Number(altitude.toFixed(2)),
+        error: Number(error.toFixed(3)),
+        integral: Number((error * 0.5).toFixed(3)),
+        output: Number(Math.max(-1, Math.min(1, error * 0.3)).toFixed(3)),
+        ok: true,
+      });
     }, 900);
     return () => clearInterval(id);
   }, [demoMode, linkStatus]);
@@ -336,6 +416,8 @@ export function DroneProvider({ children }) {
     detections,
     detectOn,
     detectOff,
+    sonar,
+    pid,
     recording,
     recElapsed,
     autoRecord,

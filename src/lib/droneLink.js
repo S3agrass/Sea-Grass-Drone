@@ -21,7 +21,15 @@
  *     { type: "state", armed, mode, pixhawk, camera, detect,
  *                      recording, rec_elapsed_s, autorecord }
  *     { type: "media_saved", kind: "photo", name }   a capture landed on the Pi
- *     { type: "telemetry", heading, groundspeed, battery, lat, lon, depth }
+ *     { type: "telemetry", heading, groundspeed, battery, lat, lon, depth,
+ *                          altitude, climb, roll, pitch, yaw }
+ *         altitude/climb are baro-derived; roll/pitch/yaw are the EKF-fused
+ *         attitude in DEGREES (server converts from MAVLink radians)
+ *     { type: "sonar", distance_m, raw_m, confidence, quality, ok }
+ *         Ping2 range. distance_m is confidence-gated + median-filtered (null =
+ *         no lock); raw_m is the latest unfiltered echo; quality: good|weak|none
+ *     { type: "pid", setpoint, measurement, error, integral, output, ok }
+ *         Altitude-hold PID on live baro altitude; output is display-only
  *     { type: "motors", angle, mag, left, right, left_pwm, right_pwm }  10Hz, helm only
  *     { type: "soft_stop", latched }         latched soft-stop state changed
  *     { type: "detections", boxes: [{ cls, conf, x, y, w, h }], ts }
