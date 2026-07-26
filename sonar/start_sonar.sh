@@ -18,7 +18,7 @@ echo "== checking Ping power on pin 29 =="
 pinctrl set 5 ip pd; sleep 0.1
 state=$(pinctrl get 5)
 echo "  $state"
-pinctrl set 5 a2   # restore RXD2
+pinctrl set 5 a2 pu   # restore RXD2 (and the pull the probe overrode)
 if ! echo "$state" | grep -q 'hi'; then
     echo "  !! pin 29 is FLOATING -> the Ping is not powered."
     echo "     Reseat red(pin4)/black(pin6) power leads and the Ping's own cable connector,"

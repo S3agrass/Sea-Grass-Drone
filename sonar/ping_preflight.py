@@ -60,9 +60,11 @@ def _pin_is_driven_high(gpio):
     except (OSError, subprocess.SubprocessError):
         return None
     finally:
-        # ALWAYS put the uart mux back. On this Pi TXD2/RXD2 are alt2 — setting
-        # these pins to a4 instead silently disconnects the UART from the header.
-        subprocess.run(["pinctrl", "set", str(gpio), "a2"],
+        # ALWAYS put the uart mux back, and the pull with it. On this Pi
+        # TXD2/RXD2 are alt2 — setting these pins to a4 instead silently
+        # disconnects the UART from the header. Leaving the probe's pull-down in
+        # place would also sit against an idle-high RX line.
+        subprocess.run(["pinctrl", "set", str(gpio), "a2", "pu"],
                        capture_output=True, timeout=5)
     return "| hi" in out
 

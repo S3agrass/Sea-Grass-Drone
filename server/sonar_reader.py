@@ -55,8 +55,6 @@ The sonar is optional: if it never connects, `latest["ok"]` stays False and the
 rest of the server runs normally — same non-fatal contract as the Pixhawk link.
 """
 
-import contextlib
-import io
 import os
 import statistics
 import subprocess
@@ -113,6 +111,32 @@ def _empty_reading(ok=False, ts=0.0):
             "quality": "none", "ok": ok, "ts": ts,
             "profile": None, "scan_start_m": None, "scan_length_m": None,
             "gain": None, "ping_number": None}
+
+
+def _silence_brping_chatter():
+    """Stop brping printing "Opening <port> at <baud> bps" on every attempt.
+
+    That one library print is what floods the journal while the sonar is
+    disconnected: the reconnect loop calls connect_serial every few seconds and
+    the line is unconditional, so no amount of de-duplication in our own logging
+    can reach it. Our messages already name the port and baud.
+
+    Assigning `print` into the library module's namespace shadows the builtin
+    for THAT MODULE ONLY. The obvious alternative — wrapping the call in
+    contextlib.redirect_stdout — swaps sys.stdout process-wide, and because this
+    reader runs on its own thread it swallowed whatever the main thread happened
+    to be printing at that instant. That is not hypothetical: it ate the
+    server's "listening on ws://…" line, which the `drone` launcher greps for to
+    decide startup succeeded, so a perfectly healthy server reported a timeout.
+    """
+    try:
+        import brping.device
+        brping.device.print = lambda *a, **k: None
+    except Exception:  # noqa: BLE001
+        pass  # library layout changed — the only cost is a chattier log
+
+
+_silence_brping_chatter()
 
 
 def _close_iodev(ping):
@@ -213,9 +237,11 @@ class SonarReader:
         except (OSError, subprocess.SubprocessError):
             return None
         finally:
-            # Always restore the uart mux. TXD2/RXD2 are alt2 on this Pi — any
-            # other alt silently disconnects the UART from the header.
-            subprocess.run(["pinctrl", "set", "5", "a2"], check=False,
+            # Always restore the uart mux AND the pull. TXD2/RXD2 are alt2 on
+            # this Pi — any other alt silently disconnects the UART from the
+            # header. Restoring `pu` matters too: leaving the pull-down from the
+            # probe in place would sit against an idle-high RX line.
+            subprocess.run(["pinctrl", "set", "5", "a2", "pu"], check=False,
                            capture_output=True, timeout=5)
         return "| hi" not in out
 
@@ -224,15 +250,7 @@ class SonarReader:
         self._apply_mux()
         try:
             ping = Ping1D()
-            # brping prints "Opening <port> at <baud> bps" to stdout on EVERY
-            # attempt, which is what actually floods the journal while the sonar
-            # is disconnected — our own messages are already de-duplicated, and
-            # they name the port and baud anyway, so this adds nothing.
-            # redirect_stdout is process-wide, so in principle another thread
-            # printing inside this window loses a line; the window is the few ms
-            # of one serial open, and nothing else logs at that rate.
-            with contextlib.redirect_stdout(io.StringIO()):
-                ping.connect_serial(self.port, self.baud)
+            ping.connect_serial(self.port, self.baud)
         except Exception as exc:  # noqa: BLE001
             hint = ""
             if "lock" in str(exc).lower() or "busy" in str(exc).lower():
@@ -280,28 +298,43 @@ class SonarReader:
         confirmed separately via get_speed_of_sound. Nothing here may ever raise —
         accuracy tuning must not be able to take down the whole reader thread."""
         sos_mm_s = int(PING_SOS_M_S * 1000)  # protocol wants mm/s
+        acknowledged = False
         try:
             for _ in range(3):
                 if ping.set_speed_of_sound(sos_mm_s, verify=False):
+                    acknowledged = True
                     break
                 time.sleep(0.2)
-            else:
-                print(f"Sonar: speed-of-sound request not acknowledged "
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"Sonar: could not set speed of sound ({exc}) — continuing "
+                      "with the device's current setting")
+            return
+        if not acknowledged:
+            self._log(f"Sonar: speed-of-sound request not acknowledged "
                       f"(wanted {PING_SOS_M_S:g} m/s) — ranges may be off")
-                return
+            return
+
+        # The write is done and the device acked it. The confirmation below is
+        # strictly a nice-to-have and is guarded SEPARATELY, because brping's
+        # get_speed_of_sound() reads back self._speed_of_sound — an attribute the
+        # library only populates on some decode paths, so it raises AttributeError
+        # often enough to matter. Folding it into the try above made a healthy,
+        # applied setting report "could not set speed of sound", which is exactly
+        # backwards and sent us looking for a fault that wasn't there.
+        try:
             # get_speed_of_sound() returns a DICT ({"speed_of_sound": mm/s}),
             # not the bare int — comparing it to sos_mm_s always failed, so this
             # used to log "device may not have applied it" even on success.
             readback = ping.get_speed_of_sound()
             applied = readback.get("speed_of_sound") if isinstance(readback, dict) else readback
             if applied == sos_mm_s:
-                print(f"Sonar: speed of sound set to {PING_SOS_M_S:g} m/s")
+                self._log(f"Sonar: speed of sound set to {PING_SOS_M_S:g} m/s")
             else:
-                print(f"Sonar: speed-of-sound readback {applied} != {sos_mm_s} "
-                      "mm/s — device may not have applied it")
+                self._log(f"Sonar: speed-of-sound readback {applied} != {sos_mm_s} "
+                          "mm/s — device may not have applied it")
         except Exception as exc:  # noqa: BLE001
-            print(f"Sonar: could not set speed of sound ({exc}) — continuing "
-                  "with the device's current setting")
+            self._log(f"Sonar: speed of sound set to {PING_SOS_M_S:g} m/s "
+                      f"(device acked it; readback unavailable: {exc})")
 
         # Pin the scan window if asked. set_range only takes effect in manual
         # mode — auto-ranging overrides both range and gain — so mode must go
