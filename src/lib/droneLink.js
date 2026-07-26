@@ -12,6 +12,11 @@
  *     { type: "stop" }                       hard kill — server process exits
  *     { type: "soft_stop" }                  latched recoverable all-stop (toggle)
  *     { type: "ping" }                       keepalive
+ *     { type: "heading_hold_on" } / { type: "heading_hold_off" }
+ *         Engage/release compass heading hold. "on" captures the CURRENT heading
+ *         as the setpoint; the server refuses (and replies with a notice) unless
+ *         the vehicle is armed, not soft-stopped, and has a fresh compass
+ *         reading. Manual steering always overrides it.
  *     { type: "camera_on" } / { type: "camera_off" }
  *     { type: "detect_on" } / { type: "detect_off" }   toggle object detection
  *     { type: "record_start" } / { type: "record_stop" }  SD-card recording (Pi-side)
@@ -40,7 +45,18 @@
  *         the context value isn't memoized, so array data at this rate would
  *         re-render the map and camera panels too.
  *     { type: "pid", setpoint, measurement, error, integral, output, ok }
- *         Altitude-hold PID on live baro altitude; output is display-only
+ *         Altitude-hold PID on live baro altitude; output is display-only.
+ *         NOTE this vehicle has no vertical thruster, so this loop can never
+ *         close — it is a readout, not control. Heading hold below is the one
+ *         that actually steers.
+ *     { type: "heading_hold", engaged, suspended, setpoint, heading, error,
+ *                             output, ok }
+ *         Compass heading hold, ~2Hz. `engaged` is the operator's toggle;
+ *         `suspended` means it is engaged but yielding to manual steering, so
+ *         `ok` (engaged && !suspended) is what "actively steering" means.
+ *         setpoint/heading/error are degrees, error wrapped to +/-180. Unlike
+ *         the pid message above, output here DOES drive the vehicle: it is
+ *         injected as a steer input on ch4.
  *     { type: "motors", angle, mag, left, right, left_pwm, right_pwm }  10Hz, helm only
  *     { type: "soft_stop", latched }         latched soft-stop state changed
  *     { type: "detections", boxes: [{ cls, conf, x, y, w, h }], ts }
@@ -171,6 +187,10 @@ export default class DroneLink {
    *  the vehicle armed, so it's recoverable by toggling again. While latched the
    *  server ignores axis input entirely. */
   softStop() { return this.send({ type: "soft_stop" }); }
+  // Heading hold captures the CURRENT heading server-side, so there is nothing
+  // to pass — the operator points the vehicle, then engages.
+  headingHoldOn() { return this.send({ type: "heading_hold_on" }); }
+  headingHoldOff() { return this.send({ type: "heading_hold_off" }); }
   cameraOn() { return this.send({ type: "camera_on" }); }
   cameraOff() { return this.send({ type: "camera_off" }); }
   detectOn() { return this.send({ type: "detect_on" }); }

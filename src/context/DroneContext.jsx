@@ -90,6 +90,18 @@ export function DroneProvider({ children }) {
     output: null,
     ok: false,
   });
+  // Compass heading hold. Unlike `pid` above this one actually steers, so
+  // `suspended` matters to the operator: engaged-but-yielding to their stick is
+  // a different state from not engaged, and only `ok` means it is really driving.
+  const [headingHold, setHeadingHold] = useState({
+    engaged: false,
+    suspended: false,
+    setpoint: null,
+    heading: null,
+    error: null,
+    output: 0,
+    ok: false,
+  });
   const [cameraActive, setCameraActive] = useState(false);
   const [detectActive, setDetectActive] = useState(false);
   const [detections, setDetections] = useState([]); // latest bbox array
@@ -217,6 +229,10 @@ export function DroneProvider({ children }) {
           setDetections([]);
           setSonar({ distance_m: null, raw_m: null, confidence: null, quality: "none", ok: false });
           setPid({ setpoint: null, measurement: null, error: null, integral: null, output: null, ok: false });
+          // The server releases the hold when the client drops, so the UI must
+          // not keep showing "engaged" after a disconnect.
+          setHeadingHold({ engaged: false, suspended: false, setpoint: null,
+                           heading: null, error: null, output: 0, ok: false });
           setRecording(false);
           setRecElapsed(0);
         }
@@ -250,6 +266,16 @@ export function DroneProvider({ children }) {
             error: m.error ?? null,
             integral: m.integral ?? null,
             output: m.output ?? null,
+            ok: Boolean(m.ok),
+          });
+        } else if (m.type === "heading_hold") {
+          setHeadingHold({
+            engaged: Boolean(m.engaged),
+            suspended: Boolean(m.suspended),
+            setpoint: m.setpoint ?? null,
+            heading: m.heading ?? null,
+            error: m.error ?? null,
+            output: m.output ?? 0,
             ok: Boolean(m.ok),
           });
         } else if (m.type === "media_saved") {
@@ -322,6 +348,8 @@ export function DroneProvider({ children }) {
 
   const disconnect = useCallback(() => link.disconnect(), [link]);
 
+  const headingHoldOn = useCallback(() => link.headingHoldOn(), [link]);
+  const headingHoldOff = useCallback(() => link.headingHoldOff(), [link]);
   const cameraOn = useCallback(() => link.cameraOn(), [link]);
   const cameraOff = useCallback(() => link.cameraOff(), [link]);
   const detectOn = useCallback(() => link.detectOn(), [link]);
@@ -418,6 +446,9 @@ export function DroneProvider({ children }) {
     detectOff,
     sonar,
     pid,
+    headingHold,
+    headingHoldOn,
+    headingHoldOff,
     recording,
     recElapsed,
     autoRecord,

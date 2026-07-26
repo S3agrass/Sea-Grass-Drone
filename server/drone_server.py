@@ -50,7 +50,7 @@ from sonar_reader import SonarReader
 # pid_controller.py lives at the repo root (one level up from server/), so make
 # it importable without installing the package.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from pid_controller import PIDController  # noqa: E402
+from pid_controller import PIDController, wrap_deg  # noqa: E402
 
 # ---------------- configuration ----------------
 SERIAL_PORT = os.environ.get("PIXHAWK_PORT", "/dev/ttyACM0")
@@ -337,6 +337,152 @@ def step_alt_pid(altitude):
         output=round(output, 3),
         ok=True,
     )
+
+
+# ---------------- heading hold ----------------
+# The first closed loop this frame can actually fly. Two forward-facing thrusters
+# mean differential thrust steers and nothing controls depth (the buoyancy engine
+# that will drive the dive profile is not installed yet), so holding a compass
+# bearing is the autonomy that keeps survey transects straight.
+#
+# Gains are in DEGREES of error and are deliberately gentle. They WILL need
+# tuning in water. Do not reach for the altitude demo's kp=0.3 above: at that
+# gain a 10 degree error saturates the output immediately, which is bang-bang
+# steering that overshoots and weaves (see test_pid_synthetic.py).
+HEADING_KP = float(os.environ.get("SEAGRASS_HEADING_KP", "0.03"))
+HEADING_KI = float(os.environ.get("SEAGRASS_HEADING_KI", "0.005"))
+HEADING_KD = float(os.environ.get("SEAGRASS_HEADING_KD", "0.02"))
+# Stick deflection past which the operator counts as steering. Manual input
+# always wins.
+HEADING_MANUAL_DEADZONE = float(os.environ.get("SEAGRASS_HEADING_DEADZONE", "0.08"))
+# Yaw older than this is not trusted. Telemetry runs at ~2 Hz, so a gap this long
+# means the link stalled — steering on a stale bearing is worse than not steering.
+HEADING_STALE_S = 2.0
+
+heading_pid = PIDController(
+    kp=HEADING_KP, ki=HEADING_KI, kd=HEADING_KD,
+    output_limits=(-1.0, 1.0),
+    integral_limits=(-2.0, 2.0),
+    angular=True,  # headings wrap at 0/360 — see pid_controller.wrap_deg
+)
+heading_hold_engaged = False
+heading_hold_suspended = False  # operator is steering; the hold yields
+heading_setpoint = None         # degrees, captured on engage
+heading_output = 0.0            # steer command in [-1, 1], consumed by channel_frame
+heading_last_yaw = None
+heading_last_yaw_at = 0.0
+heading_readout = {
+    "engaged": False, "suspended": False, "setpoint": None,
+    "heading": None, "error": None, "output": 0.0, "ok": False,
+}
+
+
+def _refresh_heading_readout():
+    heading_readout.update(
+        engaged=heading_hold_engaged,
+        suspended=heading_hold_suspended,
+        setpoint=None if heading_setpoint is None else round(heading_setpoint, 1),
+        heading=None if heading_last_yaw is None else round(heading_last_yaw, 1),
+        error=None if (heading_setpoint is None or heading_last_yaw is None)
+        else round(wrap_deg(heading_setpoint - heading_last_yaw), 1),
+        output=round(heading_output, 3),
+        ok=heading_hold_engaged and not heading_hold_suspended,
+    )
+
+
+def engage_heading_hold():
+    """Capture the current heading and start holding it. Returns (ok, message).
+
+    Refuses unless armed, not soft-stopped, and holding a FRESH yaw sample —
+    engaging on a stale or absent compass would confidently steer toward a
+    bearing that means nothing, which is the worst failure this loop can have.
+    """
+    global heading_hold_engaged, heading_hold_suspended, heading_setpoint, heading_output
+    if not armed:
+        return False, "not armed"
+    if motion_latched:
+        return False, "soft stop is latched"
+    if heading_last_yaw is None or time.time() - heading_last_yaw_at > HEADING_STALE_S:
+        return False, "no fresh heading — check the compass"
+    heading_pid.reset()
+    heading_setpoint = heading_last_yaw
+    heading_pid.setpoint = heading_setpoint
+    heading_output = 0.0
+    heading_hold_engaged = True
+    heading_hold_suspended = False
+    _refresh_heading_readout()
+    print(f"Heading hold: engaged on {heading_setpoint:.1f} deg")
+    return True, f"holding {heading_setpoint:.0f} deg"
+
+
+def disengage_heading_hold(reason=""):
+    """Stop holding. Safe to call unconditionally — every cancel path lands here,
+    including all_stop(), so a path added later cannot forget to release it."""
+    global heading_hold_engaged, heading_hold_suspended, heading_setpoint, heading_output
+    if not heading_hold_engaged:
+        return
+    heading_hold_engaged = False
+    heading_hold_suspended = False
+    heading_setpoint = None
+    # Zeroing the output stops channel_frame injecting; the existing ramp then
+    # decays steering to neutral rather than dropping it in one step.
+    heading_output = 0.0
+    heading_pid.reset()
+    _refresh_heading_readout()
+    print(f"Heading hold: disengaged{' — ' + reason if reason else ''}")
+
+
+def step_heading_hold(yaw):
+    """Feed one yaw sample (degrees, 0-360) to the heading PID.
+
+    Also the freshness clock for engage_heading_hold(), so it must be called on
+    every telemetry pass whether or not the hold is running.
+    """
+    global heading_last_yaw, heading_last_yaw_at, heading_output, heading_hold_suspended
+    global heading_setpoint
+    heading_last_yaw = yaw
+    heading_last_yaw_at = time.time()
+
+    if not heading_hold_engaged:
+        _refresh_heading_readout()
+        return
+
+    # Re-check the gates every sample, not just at engage: arming, soft stop and
+    # the MAVLink link can all change underneath a running hold.
+    if not armed:
+        disengage_heading_hold("disarmed")
+        return
+    if motion_latched:
+        disengage_heading_hold("soft stop latched")
+        return
+    if not pixhawk_ok:
+        disengage_heading_hold("Pixhawk link lost")
+        return
+
+    # Operator steering always wins. Suspending rather than summing means manual
+    # and autonomous commands can never add into a bigger turn than either one
+    # asked for.
+    if abs(_axis_value("d", "a", axis_targets["steer"])) > HEADING_MANUAL_DEADZONE:
+        if not heading_hold_suspended:
+            print("Heading hold: suspended — manual steering")
+        heading_hold_suspended = True
+        heading_output = 0.0
+        heading_pid.reset()
+        _refresh_heading_readout()
+        return
+
+    if heading_hold_suspended:
+        # Stick back at centre: adopt whatever bearing the pilot steered onto,
+        # so "turn, then let go" sets the new course.
+        heading_hold_suspended = False
+        heading_setpoint = yaw
+        heading_pid.setpoint = yaw
+        heading_pid.reset()
+        print(f"Heading hold: resumed on {yaw:.1f} deg")
+
+    heading_output = heading_pid.update(yaw, current_time=time.time())
+    _refresh_heading_readout()
+
 
 # ---------------- camera subprocess ----------------
 # The repo-root camera_stream.py (Picamera2 -> MJPEG on :8000) is the camera
@@ -640,6 +786,11 @@ def set_rc(channel, pwm):
 
 
 def all_stop():
+    # Release any autonomous hold FIRST. Every stop path in the server funnels
+    # through here, so releasing it in this one place means a path added later
+    # cannot forget to — and an "all stop" that left the vehicle still steering
+    # itself would be a lie.
+    disengage_heading_hold("all stop")
     # Zero every input source and the ramped PWM state first, so the control_loop
     # doesn't immediately ramp back up from the pre-stop speed on its next tick.
     reset_motion_state()
@@ -647,9 +798,12 @@ def all_stop():
         return
     # ArduSub's manual-control mixer uses a fixed RC scheme: ch1=Pitch,
     # ch2=Roll, ch3=Throttle/vertical, ch4=Yaw, ch5=Forward, ch6=Lateral.
-    # This 2-motor SimpleROV-3 frame has authority over ch3 (vertical), ch4
-    # (steering/yaw) and ch5 (forward) — not ch6 (lateral), which has no
-    # thruster. Neutral those three and leave the light channel alone (mirrors
+    # FRAME_CONFIG=4 (SimpleROV-3) declares a vertical thruster, but this vehicle
+    # is built with only the TWO horizontal motors — so in practice ch4
+    # (steering/yaw) and ch5 (forward) are the only channels with real authority.
+    # ch3 is neutralled anyway: it costs nothing and stays correct if the
+    # buoyancy/vertical hardware is fitted later. ch6 (lateral) has no thruster
+    # in any configuration. Leave the light channel alone (mirrors
     # keyboard_control.py's all_stop).
     rc = [65535] * 8
     rc[2] = NEUTRAL_PWM               # channel 3 - throttle/vertical
@@ -898,6 +1052,14 @@ def channel_frame(dt):
     surge_in = _axis_value("w", "s", axis_targets["surge"])
     steer_in = _axis_value("d", "a", axis_targets["steer"])
     depth_in = _axis_value("q", "e", axis_targets["depth"])
+
+    # Heading hold steers only while the operator isn't. Injecting here as an
+    # ordinary steer input — rather than writing ch4 directly — is what makes the
+    # autonomous command inherit every existing safety path unchanged: the ramp,
+    # expo, turn-assist, creep floor, soft stop, watchdog and all_stop all apply
+    # exactly as they do to a human on the stick.
+    if heading_hold_engaged and not heading_hold_suspended:
+        steer_in = max(-1.0, min(1.0, heading_output))
 
     # Stick as the pilot actually moved it, kept for the readout: the default
     # branch below mutates steer_in/surge_in with expo and turn-assist, which
@@ -1189,7 +1351,12 @@ async def client_handler(ws):
                 await send({"type": "telemetry", **data})
             if "altitude" in data:
                 step_alt_pid(data["altitude"])
+            # Must run on every pass, engaged or not: it is also the freshness
+            # clock that engage_heading_hold() checks before trusting the compass.
+            if "yaw" in data:
+                step_heading_hold(data["yaw"])
             await send({"type": "pid", **pid_readout})
+            await send({"type": "heading_hold", **heading_readout})
             # Gauge-level sonar: scalars only. The ~200-sample amplitude array
             # goes out on its own faster loop below, so it is stripped here
             # rather than paying ~800 bytes twice at two different rates.
@@ -1201,8 +1368,16 @@ async def client_handler(ws):
             # watchdog — force neutral if the client went silent mid-motion
             # (a held key OR a deflected analog stick both count as motion)
             if helm_holder is ws and motion_active() and time.time() - last_seen > WATCHDOG_S:
-                all_stop()  # also clears keys + axes via reset_motion_state
+                all_stop()  # also releases heading hold + clears keys/axes
                 print("Watchdog: all stop")
+            # A running hold keeps the vehicle steering with no stick deflection,
+            # so motion_active() is false and the watchdog above never fires. This
+            # is the equivalent guard for autonomous motion: a silent operator
+            # must not leave the vehicle holding a bearing indefinitely.
+            elif (helm_holder is ws and heading_hold_engaged
+                  and time.time() - last_seen > WATCHDOG_S):
+                all_stop()
+                print("Watchdog: all stop (heading hold, client silent)")
             await asyncio.sleep(0.5)
 
     async def detections_loop():
@@ -1299,6 +1474,15 @@ async def client_handler(ws):
                 # or resume. Recoverable — unlike "stop", it does NOT disarm/shutdown.
                 toggle_soft_stop()
                 await send({"type": "soft_stop", "latched": motion_latched})
+            elif mtype == "heading_hold_on":
+                ok, detail = engage_heading_hold()
+                if not ok:
+                    await send({"type": "notice", "level": "warn",
+                                "message": f"Heading hold refused: {detail}"})
+                await send({"type": "heading_hold", **heading_readout})
+            elif mtype == "heading_hold_off":
+                disengage_heading_hold("operator")
+                await send({"type": "heading_hold", **heading_readout})
             elif mtype == "arm":
                 do_arm()
                 await state()
@@ -1383,6 +1567,9 @@ async def client_handler(ws):
             # Last operator left — drop PID state so the next session re-captures
             # its hold altitude fresh rather than resuming a stale setpoint.
             reset_alt_pid()
+        # Autonomy never outlives its operator: release the hold on ANY client
+        # leaving, not just the helm holder, and regardless of client_count.
+        disengage_heading_hold("operator disconnected")
         if helm_holder is ws:
             helm_holder = None
             pressed.clear()
