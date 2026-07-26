@@ -22,7 +22,7 @@ const CAMERA_OFF_DEBOUNCE_MS = 400;
 const LOCAL_DRONE = {
   id: "local",
   name: "Seagrass One",
-  host: "ws://seagrass-pi.local:8765",
+  host: "ws://seagrass.local:8765",
   camera_url: "",
   token: "",
 };

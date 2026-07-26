@@ -541,6 +541,10 @@ async def stop_detector():
 
 
 HEARTBEAT_S = 1.0  # 1 Hz — well under ArduSub's GCS failsafe timeout (~5s)
+# How long to wait between attempts to rebuild a dropped Pixhawk link. A USB
+# re-enumeration takes a few seconds (and a bootloader pass ~5s), so retrying
+# faster than this just fills the log without reconnecting any sooner.
+PIXHAWK_RETRY_S = 3.0
 
 
 def _heartbeat_loop():
@@ -566,8 +570,11 @@ def _heartbeat_loop():
                     mavutil.mavlink.MAV_AUTOPILOT_INVALID,
                     0, 0, 0,
                 )
-            except OSError:
-                pass  # link dropped; read_telemetry surfaces it on next read
+            except OSError as exc:
+                # serial.SerialException is an OSError. Flag the drop here rather
+                # than waiting for the next read: with no client connected this
+                # 1 Hz send is often the first thing to notice the link is gone.
+                mark_link_lost(exc)
         time.sleep(HEARTBEAT_S)
 
 
@@ -575,16 +582,50 @@ def start_heartbeat_thread():
     threading.Thread(target=_heartbeat_loop, daemon=True).start()
 
 
-def connect_pixhawk():
+def _close_master():
+    """Drop the current MAVLink handle. Safe to call on an already-dead link."""
     global master, pixhawk_ok
+    old, master = master, None
+    pixhawk_ok = False
+    if old is not None:
+        try:
+            old.close()
+        except Exception:  # noqa: BLE001
+            pass  # the link is already gone — closing is best-effort
+
+
+def mark_link_lost(exc):
+    """Flag the Pixhawk link as down so the supervisor rebuilds it.
+
+    Called from wherever a read/write actually fails. Deliberately idempotent:
+    several loops touch the link and they will all trip on the same dropout.
+    """
+    if master is None and not pixhawk_ok:
+        return  # already torn down; don't spam the log
+    print(f"Pixhawk link lost: {exc}")
+    _close_master()
+
+
+def connect_pixhawk():
+    """(Re)build the MAVLink link. Blocking — call it off the event loop.
+
+    Sets pixhawk_ok, which is what the UI's Pixhawk indicator reflects.
+    """
+    global master, pixhawk_ok
+    _close_master()
     try:
+        # A USB CDC node that hasn't re-enumerated yet fails slowly and noisily;
+        # checking first keeps the retry loop cheap and the log readable.
+        if SERIAL_PORT.startswith("/dev/") and not os.path.exists(SERIAL_PORT):
+            raise FileNotFoundError(f"{SERIAL_PORT} not present")
         print(f"Connecting to Pixhawk on {SERIAL_PORT} @ {BAUD}…")
-        master = mavutil.mavlink_connection(SERIAL_PORT, baud=BAUD)
-        master.wait_heartbeat(timeout=10)
+        link = mavutil.mavlink_connection(SERIAL_PORT, baud=BAUD)
+        link.wait_heartbeat(timeout=10)
+        master = link
         pixhawk_ok = True
         print("Pixhawk heartbeat OK")
     except Exception as exc:  # noqa: BLE001
-        pixhawk_ok = False
+        _close_master()
         print(f"Pixhawk not available: {exc}")
 
 
@@ -1044,7 +1085,17 @@ def read_telemetry():
     out = {}
     notices = []
     while True:
-        msg = master.recv_match(blocking=False)
+        try:
+            msg = master.recv_match(blocking=False)
+        except Exception as exc:  # noqa: BLE001
+            # The Pixhawk is a USB CDC device: a knocked cable, a brown-out on the
+            # shared 5V rail, or the autopilot rebooting makes /dev/ttyACM0 vanish
+            # and pyserial raises right here. This used to propagate out and kill
+            # mission_recorder_loop outright while pixhawk_ok stayed True forever,
+            # so the UI kept showing a healthy Pixhawk on a dead link. Flag it
+            # instead and let pixhawk_supervisor_loop rebuild the connection.
+            mark_link_lost(exc)
+            return out, notices
         if msg is None:
             break
         t = msg.get_type()
@@ -1386,6 +1437,26 @@ async def mission_recorder_loop():
         await asyncio.sleep(0.5)
 
 
+async def pixhawk_supervisor_loop():
+    """Rebuild the MAVLink link after a dropout, for the whole server lifetime.
+
+    Without this a single USB re-enumeration (cable knock, 5V brown-out, or the
+    autopilot rebooting through its bootloader) left the server holding a dead
+    handle until someone restarted it by hand.
+
+    connect_pixhawk() blocks for up to 10s in wait_heartbeat, so it runs in a
+    worker thread — blocking the event loop here would stall the websocket and
+    RC-override loops, which is exactly what you don't want mid-dive.
+    """
+    loop = asyncio.get_running_loop()
+    while True:
+        if not pixhawk_ok:
+            await loop.run_in_executor(None, connect_pixhawk)
+            if not pixhawk_ok:
+                await asyncio.sleep(PIXHAWK_RETRY_S)
+        await asyncio.sleep(1.0)
+
+
 async def main():
     connect_pixhawk()
     # Announce ourselves as a GCS at 1 Hz on a dedicated daemon thread, for the
@@ -1404,6 +1475,8 @@ async def main():
     # Auto-record missions (arm→record, disarm→stop), running with or without an
     # operator connected. See mission_recorder_loop.
     asyncio.create_task(mission_recorder_loop())
+    # Reconnect the Pixhawk automatically if its USB link drops.
+    asyncio.create_task(pixhawk_supervisor_loop())
     print(f"Auto-record: {'ON' if autorecord_enabled else 'off'}")
     async with websockets.serve(client_handler, WS_HOST, WS_PORT):
         print(f"Seagrass drone server listening on ws://{WS_HOST}:{WS_PORT}")

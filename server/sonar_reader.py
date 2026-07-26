@@ -55,6 +55,8 @@ The sonar is optional: if it never connects, `latest["ok"]` stays False and the
 rest of the server runs normally — same non-fatal contract as the Pixhawk link.
 """
 
+import contextlib
+import io
 import os
 import statistics
 import subprocess
@@ -113,6 +115,17 @@ def _empty_reading(ok=False, ts=0.0):
             "gain": None, "ping_number": None}
 
 
+def _close_iodev(ping):
+    """Close a Ping1D's serial fd. Idempotent and never raises."""
+    iodev = getattr(ping, "iodev", None)
+    if iodev is None:
+        return
+    try:
+        iodev.close()
+    except OSError:
+        pass
+
+
 class SonarReader:
     """Owns the Ping serial link on a daemon thread. Read `.latest` from anywhere."""
 
@@ -132,6 +145,11 @@ class SonarReader:
         self._window = deque(maxlen=_WINDOW_SAMPLES)  # (distance_m, conf, ts)
         self._want_profile = PING_PROFILE
         self._profile_failures = 0
+        # Repeat-suppression state for _log. The reader retries forever, so an
+        # unplugged sonar used to write the same two lines to the journal every
+        # few seconds all night — which buries anything that actually changed.
+        self._last_log = None
+        self._repeats = 0
 
     # ---------------- lifecycle ----------------
     def start(self):
@@ -157,14 +175,72 @@ class SonarReader:
         except (FileNotFoundError, OSError) as exc:
             print(f"Sonar: could not set uart2 mux ({exc}) — continuing anyway")
 
+    def _log(self, message):
+        """Print `message`, collapsing consecutive duplicates into a count.
+
+        The reconnect loop repeats every few seconds indefinitely, so without
+        this a sonar that is simply unplugged floods the journal and makes the
+        one line that matters — the state *change* — impossible to spot.
+        """
+        if message == self._last_log:
+            self._repeats += 1
+            return
+        if self._repeats:
+            print(f"Sonar: (previous message repeated {self._repeats}x)")
+        self._last_log = message
+        self._repeats = 0
+        print(message)
+
+    def _appears_unpowered(self):
+        """True if the Ping's TX line is floating, i.e. the Ping has no power.
+
+        A powered Ping idles its TX high, so forcing an internal pull-down on
+        GPIO5 (header pin 29) and still reading `hi` means it is driving the
+        line. Reading `lo` means nothing is connected or powered — usually the
+        red/black leads have unseated from pins 4/6, which share those pins with
+        the battery feed and pop out easily when the other leads are moved.
+
+        Returns None when it can't be measured, so callers can stay quiet rather
+        than assert a fault they never observed.
+        """
+        if not self.fix_mux:
+            return None  # we don't own the mux, so don't disturb it
+        try:
+            subprocess.run(["pinctrl", "set", "5", "ip", "pd"], check=True,
+                           capture_output=True, timeout=5)
+            out = subprocess.run(["pinctrl", "get", "5"], check=True,
+                                 capture_output=True, text=True, timeout=5).stdout
+        except (OSError, subprocess.SubprocessError):
+            return None
+        finally:
+            # Always restore the uart mux. TXD2/RXD2 are alt2 on this Pi — any
+            # other alt silently disconnects the UART from the header.
+            subprocess.run(["pinctrl", "set", "5", "a2"], check=False,
+                           capture_output=True, timeout=5)
+        return "| hi" not in out
+
     def _connect(self):
         """Open the Ping and initialize with retries. Returns True on success."""
         self._apply_mux()
         try:
             ping = Ping1D()
-            ping.connect_serial(self.port, self.baud)
+            # brping prints "Opening <port> at <baud> bps" to stdout on EVERY
+            # attempt, which is what actually floods the journal while the sonar
+            # is disconnected — our own messages are already de-duplicated, and
+            # they name the port and baud anyway, so this adds nothing.
+            # redirect_stdout is process-wide, so in principle another thread
+            # printing inside this window loses a line; the window is the few ms
+            # of one serial open, and nothing else logs at that rate.
+            with contextlib.redirect_stdout(io.StringIO()):
+                ping.connect_serial(self.port, self.baud)
         except Exception as exc:  # noqa: BLE001
-            print(f"Sonar: could not open {self.port}: {exc}")
+            hint = ""
+            if "lock" in str(exc).lower() or "busy" in str(exc).lower():
+                # Only one process can hold the port; the usual cause is a
+                # standalone ping_live.py/start_sonar.sh run alongside the server.
+                hint = (" — another process is holding the port "
+                        "(standalone ping_live.py / start_sonar.sh?)")
+            self._log(f"Sonar: could not open {self.port}: {exc}{hint}")
             return False
         # ~3% loss + no internal retry in initialize() => retry a handful of times.
         for _ in range(5):
@@ -172,20 +248,28 @@ class SonarReader:
                 break
             if ping.initialize():
                 self._ping = ping
-                print(f"Sonar connected on {self.port} @ {self.baud}")
+                self._log(f"Sonar connected on {self.port} @ {self.baud}")
                 self._configure(ping)
                 return True
             time.sleep(0.3)
         else:
-            print(f"Sonar: {self.port} did not initialize (check power/wiring/mux)")
+            # Close before probing: the power check drives GPIO5, which would
+            # corrupt this port's stream if it were still open.
+            _close_iodev(ping)
+            if self._appears_unpowered():
+                self._log(
+                    f"Sonar: {self.port} did not initialize — the Ping appears "
+                    "UNPOWERED (pin 29 floating; a powered Ping idles TX high). "
+                    "Check the red lead in pin 4 and black in pin 6."
+                )
+            else:
+                self._log(f"Sonar: {self.port} did not initialize "
+                          "(check power/wiring/mux)")
         # Close the port on every failure path — each retry cycle opens a fresh
         # fd, and leaking one every backoff would exhaust the fd limit within
-        # an hour of the sonar being unplugged.
-        if getattr(ping, "iodev", None):
-            try:
-                ping.iodev.close()
-            except OSError:
-                pass
+        # an hour of the sonar being unplugged. Idempotent, so the early close
+        # taken before the power probe above is safe to repeat here.
+        _close_iodev(ping)
         return False
 
     def _configure(self, ping):
