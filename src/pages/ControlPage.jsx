@@ -17,11 +17,15 @@ import {
   ClimbGauge,
   AttitudeIndicator,
   PIDGauge,
+  HeadingHoldGauge,
 } from "../components/Instruments";
 import { useDrone } from "../context/DroneContext";
 
 export default function ControlPage() {
-  const { activeDrone, telemetry, sonar, pid } = useDrone();
+  const {
+    activeDrone, telemetry, sonar, pid,
+    headingHold, headingHoldOn, headingHoldOff, armed,
+  } = useDrone();
   const [waypoints, setWaypoints] = useState([]);
   const [trail, setTrail] = useState([]);
   const lastTrailPoint = useRef(null);
@@ -79,6 +83,18 @@ export default function ControlPage() {
               roll={telemetry.roll}
               pitch={telemetry.pitch}
               yaw={telemetry.yaw}
+            />
+            <HeadingHoldGauge
+              engaged={headingHold.engaged}
+              suspended={headingHold.suspended}
+              setpoint={headingHold.setpoint}
+              heading={headingHold.heading}
+              error={headingHold.error}
+              output={headingHold.output}
+              ok={headingHold.ok}
+              armed={armed}
+              onEngage={headingHoldOn}
+              onRelease={headingHoldOff}
             />
             <PIDGauge
               setpoint={pid.setpoint}
