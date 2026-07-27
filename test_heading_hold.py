@@ -150,12 +150,37 @@ def test_only_injects_when_it_should():
           f"ch4 pwm={after:.1f}")
 
 
+def test_hold_watchdog_outlives_the_client_keepalive():
+    """The autonomous watchdog must be longer than the client's ping interval.
+
+    Regression guard for a real failure: the hold reused WATCHDOG_S (1.5s), which
+    is safe for manual control only because a held stick streams input constantly.
+    With heading hold there is no input at all — DroneLink's 5s keepalive ping is
+    the ONLY thing refreshing last_seen — so the watchdog fired within 1.5s of
+    every engage and the hold released itself immediately.
+
+    The 5.0 below mirrors `_keepAlive` in src/lib/droneLink.js. If that interval
+    ever changes, this test is the thing that should fail.
+    """
+    print("\n=== Autonomous watchdog outlives the client keepalive ===")
+    client_keepalive_s = 5.0
+    check("hold watchdog exceeds the keepalive interval",
+          ds.HOLD_WATCHDOG_S > client_keepalive_s,
+          f"HOLD_WATCHDOG_S={ds.HOLD_WATCHDOG_S}, keepalive={client_keepalive_s}")
+    check("hold watchdog tolerates a lost ping",
+          ds.HOLD_WATCHDOG_S > 2 * client_keepalive_s,
+          f"HOLD_WATCHDOG_S={ds.HOLD_WATCHDOG_S}")
+    check("manual watchdog left untouched", ds.WATCHDOG_S == 1.5,
+          f"WATCHDOG_S={ds.WATCHDOG_S}")
+
+
 if __name__ == "__main__":
     test_refuses_without_preconditions()
     test_release_paths()
     test_manual_override_wins()
     test_steers_the_short_way()
     test_only_injects_when_it_should()
+    test_hold_watchdog_outlives_the_client_keepalive()
 
     print()
     if FAILURES:

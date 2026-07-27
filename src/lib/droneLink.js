@@ -116,7 +116,11 @@ export default class DroneLink {
     ws.onopen = () => {
       this._setStatus("connected");
       this.send({ type: "hello", token: this.token });
-      // heartbeat so the server watchdog knows we're alive
+      // Heartbeat so the server watchdog knows we're alive. THE SERVER DEPENDS
+      // ON THIS INTERVAL: with heading hold running there is no other traffic
+      // from us, so this ping alone refreshes the server's last_seen. Its
+      // HOLD_WATCHDOG_S (drone_server.py) must stay comfortably above this
+      // value — when it didn't, the hold released ~1.5s after every engage.
       this._keepAlive = setInterval(() => this.send({ type: "ping" }), 5000);
     };
 

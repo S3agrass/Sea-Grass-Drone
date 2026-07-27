@@ -61,6 +61,21 @@ TOKEN = os.environ.get("SEAGRASS_TOKEN", "")  # empty = auth disabled (LAN only!
 if not TOKEN:
     raise SystemExit("SEAGRASS_TOKEN must be set — export it before running this script.")
 WATCHDOG_S = 1.5
+# Separate, much longer watchdog for AUTONOMOUS motion (heading hold).
+#
+# WATCHDOG_S above works for manual control because it only applies while a key
+# or stick is held, and a client doing that is streaming input messages several
+# times a second — so last_seen is always fresh. Heading hold is motion with NO
+# operator input, where the only thing refreshing last_seen is DroneLink's
+# keepalive ping every 5s (src/lib/droneLink.js, _keepAlive). Reusing 1.5s there
+# meant the watchdog fired within 1.5s of every engage, so the hold released
+# almost immediately, every time.
+#
+# 12s tolerates a lost ping and some jitter. It does NOT delay the response to a
+# client actually going away: a closed socket disengages the hold immediately in
+# client_handler's finally block. This only covers the case where the TCP
+# connection is still up but the client has stopped talking.
+HOLD_WATCHDOG_S = 12.0
 
 # Stream the RC override frame to the Pixhawk at this rate, every tick even
 # when nothing changed, so ArduSub's manual-control (pilot-input) failsafe
@@ -1373,9 +1388,10 @@ async def client_handler(ws):
             # A running hold keeps the vehicle steering with no stick deflection,
             # so motion_active() is false and the watchdog above never fires. This
             # is the equivalent guard for autonomous motion: a silent operator
-            # must not leave the vehicle holding a bearing indefinitely.
+            # must not leave the vehicle holding a bearing indefinitely. It needs
+            # its own, longer timeout — see HOLD_WATCHDOG_S.
             elif (helm_holder is ws and heading_hold_engaged
-                  and time.time() - last_seen > WATCHDOG_S):
+                  and time.time() - last_seen > HOLD_WATCHDOG_S):
                 all_stop()
                 print("Watchdog: all stop (heading hold, client silent)")
             await asyncio.sleep(0.5)
