@@ -1,10 +1,29 @@
+"""One-shot Ping2 connectivity check.
+
+    python3 test_ping.py [port]     # default /dev/ttyAMA2
+
+Wiring that works on this Pi: green -> pin 7, white -> pin 29, red -> pin 4,
+black -> pin 6. Do NOT use pin 8 / uart0 -- GPIO14 is dead on this board, which
+is why the default here is ttyAMA2 and not ttyAMA0.
+"""
 import sys
 import time
 
 from brping import Ping1D
 
-# uart0 = pins 8/10, uart2 = pins 7/29. Override from the command line.
-PORT = sys.argv[1] if len(sys.argv) > 1 else "/dev/ttyAMA0"
+import ping_preflight
+
+# uart2 = pins 7/29. Override from the command line.
+PORT = sys.argv[1] if len(sys.argv) > 1 else "/dev/ttyAMA2"
+
+# Catch "another process owns the port" and "the Ping has no power" up front --
+# both otherwise present as a bare initialize() failure that reads like a
+# wiring fault and sends you hunting in the wrong place.
+# Stop here rather than pressing on: neither problem can be worked around from
+# software, and continuing just buries the explanation under a pyserial traceback.
+if not ping_preflight.report(PORT):
+    print("\n  Fix the above first — the test cannot pass through it.\n")
+    sys.exit(1)
 
 myPing = Ping1D()
 myPing.connect_serial(PORT, 115200)
@@ -18,7 +37,8 @@ for attempt in range(1, 6):
     time.sleep(0.3)
 else:
     print("Failed to initialize Ping after 5 attempts! Check wiring/baud rate.")
-    exit(1)
+    ping_preflight.report(PORT)
+    sys.exit(1)
 
 print("Ping initialized — reading distance...")
 for _ in range(10):

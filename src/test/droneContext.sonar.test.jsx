@@ -42,6 +42,9 @@ beforeEach(() => {
 
 const EMPTY_SONAR = {
   distance_m: null, raw_m: null, confidence: null, quality: 'none', ok: false,
+  // Sonar brake state. Rides the sonar message because it is derived from the
+  // sonar, but describes what the SERVER is doing to forward thrust.
+  brake: 0, braking: false,
 };
 
 describe('DroneContext — sonar state', () => {
@@ -60,6 +63,7 @@ describe('DroneContext — sonar state', () => {
     });
     expect(getCtx().sonar).toEqual({
       distance_m: 2.34, raw_m: 2.31, confidence: 62, quality: 'good', ok: true,
+      brake: 0, braking: false,
     });
   });
 
@@ -73,7 +77,37 @@ describe('DroneContext — sonar state', () => {
     });
     expect(getCtx().sonar).toEqual({
       distance_m: null, raw_m: 89.9, confidence: 0, quality: 'none', ok: true,
+      brake: 0, braking: false,
     });
+  });
+
+  it('carries the sonar brake state through to consumers', () => {
+    const getCtx = renderContext();
+    act(() => {
+      emitToLink({
+        type: 'message',
+        data: {
+          type: 'sonar', distance_m: 0.55, raw_m: 0.55, confidence: 88,
+          quality: 'good', ok: true, brake: 1, braking: true,
+        },
+      });
+    });
+    expect(getCtx().sonar.brake).toBe(1);
+    expect(getCtx().sonar.braking).toBe(true);
+  });
+
+  it('defaults the brake to released when the server omits it', () => {
+    // An older server build has no brake fields; the UI must read that as "not
+    // braking" rather than as undefined, which would render as a live warning.
+    const getCtx = renderContext();
+    act(() => {
+      emitToLink({
+        type: 'message',
+        data: { type: 'sonar', distance_m: 3.2, raw_m: 3.2, confidence: 70, quality: 'good', ok: true },
+      });
+    });
+    expect(getCtx().sonar.brake).toBe(0);
+    expect(getCtx().sonar.braking).toBe(false);
   });
 
   it('coerces ok to a boolean and missing fields to defaults', () => {

@@ -266,6 +266,91 @@ export function AttitudeIndicator({ roll, pitch, yaw }) {
 // Altitude-hold PID. Shows the held setpoint vs live measurement, the error,
 // and a center-zero output bar (−1…+1). Output is display-only — nothing
 // actuates on it. Greyed "OFF" state until the server feeds it altitude.
+/* Compass heading hold — the one control loop on this deck that actually steers.
+   Three distinct states the operator has to be able to tell apart at a glance:
+     OFF     not engaged
+     MANUAL  engaged but yielding, because the pilot is on the stick
+     HOLD    engaged and actively steering
+   MANUAL is the one worth calling out: the hold is still armed and will resume
+   the moment the stick centres, which is different from it being off. */
+export function HeadingHoldGauge({
+  engaged = false,
+  suspended = false,
+  setpoint,
+  heading,
+  error,
+  output,
+  ok = false,
+  armed = false,
+  onEngage,
+  onRelease,
+}) {
+  const state = !engaged ? "OFF" : suspended ? "MANUAL" : "HOLD";
+  const tone =
+    state === "HOLD" ? "var(--teal)"
+      : state === "MANUAL" ? "var(--amber)"
+        : "var(--faint)";
+  const outPct = output == null ? 0 : Math.min(100, Math.abs(output) * 100);
+  const outTone = !ok ? "var(--faint)" : output >= 0 ? "var(--teal)" : "var(--amber)";
+
+  // The server refuses to engage unless armed, so disable rather than let the
+  // operator fire a command that can only come back as a rejection toast.
+  const blocked = !engaged && !armed;
+
+  return (
+    <div className="inst">
+      <div className="eyebrow">
+        Heading Hold
+        <span className="pid-tag mono" style={{ color: tone, borderColor: tone }}>
+          {state}
+        </span>
+      </div>
+      <div className="pid">
+        <div className="pid-row mono">
+          <span className="pid-label">hold</span>
+          <span className="pid-num">{setpoint == null ? "—" : `${fmt(setpoint, 0)}°`}</span>
+          <span className="pid-label">now</span>
+          <span className="pid-num">{heading == null ? "—" : `${fmt(heading, 0)}°`}</span>
+        </div>
+        <div className="pid-row mono">
+          <span className="pid-label">err</span>
+          <span className="pid-num" style={{ color: ok ? "var(--amber)" : undefined }}>
+            {error == null ? "—" : `${fmt(error, 1)}°`}
+          </span>
+          <span className="pid-label">steer</span>
+          <span className="pid-num" style={{ color: outTone }}>{fmt(output, 2)}</span>
+        </div>
+        <div className="pid-track" title="steering command −1…+1">
+          <div className="pid-mid" />
+          <div
+            className="pid-fill"
+            style={{
+              width: `${outPct / 2}%`,
+              background: outTone,
+              left: (output ?? 0) >= 0 ? "50%" : `${50 - outPct / 2}%`,
+            }}
+          />
+        </div>
+        <button
+          className={`btn${engaged ? "" : " btn-primary"}`}
+          style={{ width: "100%", padding: "7px 8px", fontSize: 12 }}
+          disabled={blocked}
+          title={
+            blocked
+              ? "Arm the vehicle first — the server refuses to hold a heading while disarmed"
+              : engaged
+                ? "Stop holding and return steering to manual"
+                : "Hold the heading the vehicle is pointing at right now"
+          }
+          onClick={engaged ? onRelease : onEngage}
+        >
+          {engaged ? "Release" : "Hold this heading"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function PIDGauge({ setpoint, measurement, error, output, ok = false }) {
   const tone = !ok ? "var(--faint)" : "var(--teal)";
   // Output bar is centered at 0; fill extends right for +output, left for −.

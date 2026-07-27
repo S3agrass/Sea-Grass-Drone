@@ -1,0 +1,167 @@
+/* Geometry + colour maths for the Ping2 sonar views.
+ *
+ * Pure functions, deliberately kept out of the component: the canvas itself
+ * can't be asserted on in jsdom (no 2D context), so the logic that can actually
+ * be wrong lives here and is unit-tested directly. Same split as
+ * src/lib/stickCurve.js.
+ *
+ * Two coordinate conventions matter and are easy to mix up:
+ *   - A profile sample's index maps to an ABSOLUTE range via the device's scan
+ *     window (scan_start .. scan_start + scan_length). That window moves every
+ *     ping while the device is auto-ranging, so a bin is NOT a fixed distance.
+ *   - The mount angle is measured OFF VERTICAL: 0deg = straight down,
+ *     90deg = dead ahead. Pitch is nose-up positive, matching MAVLink.
+ */
+
+// Ping2 physical limits, not arbitrary display choices.
+export const PING_MIN_RANGE_M = 0.5; // dead zone — nothing closer can be resolved
+export const PING_BEAM_DEG = 25; // ~25-30deg cone; the narrow end is the honest one
+
+/* Amplitude 0-255 -> [r,g,b] on the app's palette, dark to hot:
+ *   --abyss #06111e -> --teal-dim #1e8f7c -> --teal #3bd9bb -> --amber #ffb454 -> --red #ff5c6c
+ * Linear interpolation between stops. Anything out of range clamps rather than
+ * wrapping, so a corrupt sample can't produce a wild colour. */
+const RAMP = [
+  [0.0, [6, 17, 30]],
+  [0.35, [30, 143, 124]],
+  [0.6, [59, 217, 187]],
+  [0.82, [255, 180, 84]],
+  [1.0, [255, 92, 108]],
+];
+
+export function amplitudeToRGB(amplitude) {
+  const a = Number.isFinite(amplitude) ? Math.max(0, Math.min(255, amplitude)) / 255 : 0;
+  for (let i = 1; i < RAMP.length; i += 1) {
+    const [hi, hiRGB] = RAMP[i];
+    if (a <= hi) {
+      const [lo, loRGB] = RAMP[i - 1];
+      const t = hi === lo ? 0 : (a - lo) / (hi - lo);
+      return [
+        Math.round(loRGB[0] + (hiRGB[0] - loRGB[0]) * t),
+        Math.round(loRGB[1] + (hiRGB[1] - loRGB[1]) * t),
+        Math.round(loRGB[2] + (hiRGB[2] - loRGB[2]) * t),
+      ];
+    }
+  }
+  return RAMP[RAMP.length - 1][1];
+}
+
+/* Profile index -> absolute range in metres. `len` is the sample count, and the
+ * window is the device's own reported scan_start/scan_length for THAT ping. */
+export function sampleToRange(index, len, scanStartM = 0, scanLengthM = 0) {
+  if (!len || len < 1) return scanStartM;
+  if (len === 1) return scanStartM;
+  return scanStartM + (index / (len - 1)) * scanLengthM;
+}
+
+/* Metres -> echogram row (0 = top = nearest). Returns null when the range falls
+ * outside the display window, so callers skip rather than clamping a far echo
+ * onto the bottom edge where it would read as a real return. */
+export function rangeToRow(rangeM, maxRangeM, heightPx) {
+  if (!Number.isFinite(rangeM) || maxRangeM <= 0 || heightPx <= 0) return null;
+  if (rangeM < 0 || rangeM > maxRangeM) return null;
+  const row = Math.round((rangeM / maxRangeM) * (heightPx - 1));
+  return Math.max(0, Math.min(heightPx - 1, row));
+}
+
+/* Split a slant range into how far AHEAD and how far BELOW the target is.
+ *
+ *   down    = R * cos(theta - pitch)
+ *   forward = R * sin(theta - pitch)
+ *
+ * with theta measured off vertical. Nose-up pitch tilts the beam upward, which
+ * reduces the downward component and extends reach ahead — hence the
+ * subtraction. Returns nulls for a missing range so the UI shows "—" rather
+ * than a confident 0.0.
+ */
+export function decomposeRange(rangeM, mountDeg = 45, pitchDeg = 0) {
+  if (!Number.isFinite(rangeM)) return { forward: null, down: null };
+  const rad = ((mountDeg - pitchDeg) * Math.PI) / 180;
+  return {
+    forward: rangeM * Math.sin(rad),
+    down: rangeM * Math.cos(rad),
+  };
+}
+
+/* Half-angle of the beam's footprint as seen from DIRECTLY ABOVE, in degrees.
+ *
+ * The plan view looks straight down, so it shows the beam's horizontal spread —
+ * which is not the beam width. Take the cone edge deflected purely sideways by
+ * half-angle B: it sits R*sin(B) off to the side, and its along-axis component
+ * R*cos(B) projects to R*cos(B)*sin(theta) ahead. From above it therefore
+ * subtends atan(tan B / sin theta) — which correctly collapses to B itself when
+ * the beam is horizontal (theta = 90).
+ *
+ * The consequence is the point of drawing it this way: tilt the mount toward
+ * vertical and the wedge fans out toward 90deg while its reach collapses to
+ * nothing. That is the truth about a downward-looking beam — it sees a wide
+ * patch of seabed directly under the vehicle and nothing useful ahead of it —
+ * and it is exactly the thing an operator needs to know before trusting the
+ * sonar brake to see a wall. Clamped just under 90 so the wedge never degenerates
+ * into a half-plane the SVG arc can't draw.
+ */
+export function planHalfAngleDeg(effectiveMountDeg, beamDeg = PING_BEAM_DEG) {
+  if (!Number.isFinite(effectiveMountDeg) || !Number.isFinite(beamDeg)) return null;
+  const lateral = Math.tan((Math.min(89, Math.max(0, beamDeg) / 2) * Math.PI) / 180);
+  const forward = Math.sin((effectiveMountDeg * Math.PI) / 180);
+  // forward <= 0 means the beam points at or above the horizon: no plan-view
+  // reach at all, so the footprint is "everywhere and nowhere".
+  if (forward <= 0) return 89;
+  return Math.min(89, (Math.atan2(lateral, forward) * 180) / Math.PI);
+}
+
+/* POV tunnel: range -> ring radius in px, for the head-on submarine view.
+ *
+ * Perspective, not linear: a ring right at the transducer fills the frame and
+ * rings crowd together as they recede toward a vanishing point at maxRange.
+ * PERSPECTIVE_K sets how hard the falloff bites — higher pushes more of the
+ * range scale into the near field, which is where the detail matters, since
+ * that is where the sonar brake is deciding things.
+ */
+const PERSPECTIVE_K = 3;
+
+export function povRingRadius(rangeM, maxRangeM, viewSize) {
+  if (!Number.isFinite(rangeM) || !(maxRangeM > 0) || !(viewSize > 0)) return null;
+  if (rangeM < 0 || rangeM > maxRangeM) return null;
+  const t = rangeM / maxRangeM;
+  return ((viewSize / 2) * (1 - t)) / (1 + PERSPECTIVE_K * t);
+}
+
+/* POV blip: how big and how solid to draw a detection in the tunnel.
+ *
+ * `size` is a FRACTION of the view size, not pixels, so the caller owns the
+ * canvas scale (and the tests don't have to know it). Near contacts are drawn
+ * large and far ones small, matching the ring perspective, but with a floor so a
+ * contact at maximum range is still a visible dot rather than a sub-pixel one.
+ * Opacity carries confidence — a weak lock should look weak, not like a
+ * confident return.
+ */
+export function povBlipStyle(rangeM, maxRangeM, confidence) {
+  if (!Number.isFinite(rangeM) || !(maxRangeM > 0)) return null;
+  if (rangeM < 0 || rangeM > maxRangeM) return null;
+  const t = rangeM / maxRangeM;
+  const conf = Number.isFinite(confidence) ? Math.max(0, Math.min(100, confidence)) : 0;
+  return {
+    size: 0.04 + 0.16 * (1 - t) ** 1.5,
+    opacity: 0.25 + 0.75 * (conf / 100),
+  };
+}
+
+/* Peak-amplitude range from a profile, ignoring the dead zone. The device's own
+ * `distance` is confidence-gated and often null in air; this is the "brightest
+ * thing out there" used to place the cone marker when there is no hard lock. */
+export function peakRange(profile, scanStartM = 0, scanLengthM = 0) {
+  if (!profile || profile.length === 0) return null;
+  let bestIdx = -1;
+  let best = -1;
+  for (let i = 0; i < profile.length; i += 1) {
+    const r = sampleToRange(i, profile.length, scanStartM, scanLengthM);
+    if (r < PING_MIN_RANGE_M) continue; // dead-zone ringing is always brightest
+    if (profile[i] > best) {
+      best = profile[i];
+      bestIdx = i;
+    }
+  }
+  if (bestIdx < 0) return null;
+  return sampleToRange(bestIdx, profile.length, scanStartM, scanLengthM);
+}

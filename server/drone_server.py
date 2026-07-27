@@ -50,7 +50,7 @@ from sonar_reader import SonarReader
 # pid_controller.py lives at the repo root (one level up from server/), so make
 # it importable without installing the package.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from pid_controller import PIDController  # noqa: E402
+from pid_controller import PIDController, wrap_deg  # noqa: E402
 
 # ---------------- configuration ----------------
 SERIAL_PORT = os.environ.get("PIXHAWK_PORT", "/dev/ttyACM0")
@@ -61,6 +61,21 @@ TOKEN = os.environ.get("SEAGRASS_TOKEN", "")  # empty = auth disabled (LAN only!
 if not TOKEN:
     raise SystemExit("SEAGRASS_TOKEN must be set — export it before running this script.")
 WATCHDOG_S = 1.5
+# Separate, much longer watchdog for AUTONOMOUS motion (heading hold).
+#
+# WATCHDOG_S above works for manual control because it only applies while a key
+# or stick is held, and a client doing that is streaming input messages several
+# times a second — so last_seen is always fresh. Heading hold is motion with NO
+# operator input, where the only thing refreshing last_seen is DroneLink's
+# keepalive ping every 5s (src/lib/droneLink.js, _keepAlive). Reusing 1.5s there
+# meant the watchdog fired within 1.5s of every engage, so the hold released
+# almost immediately, every time.
+#
+# 12s tolerates a lost ping and some jitter. It does NOT delay the response to a
+# client actually going away: a closed socket disengages the hold immediately in
+# client_handler's finally block. This only covers the case where the TCP
+# connection is still up but the client has stopped talking.
+HOLD_WATCHDOG_S = 12.0
 
 # Stream the RC override frame to the Pixhawk at this rate, every tick even
 # when nothing changed, so ArduSub's manual-control (pilot-input) failsafe
@@ -338,6 +353,222 @@ def step_alt_pid(altitude):
         ok=True,
     )
 
+
+# ---------------- heading hold ----------------
+# The first closed loop this frame can actually fly. Two forward-facing thrusters
+# mean differential thrust steers and nothing controls depth (the buoyancy engine
+# that will drive the dive profile is not installed yet), so holding a compass
+# bearing is the autonomy that keeps survey transects straight.
+#
+# Gains are in DEGREES of error and are deliberately gentle. They WILL need
+# tuning in water. Do not reach for the altitude demo's kp=0.3 above: at that
+# gain a 10 degree error saturates the output immediately, which is bang-bang
+# steering that overshoots and weaves (see test_pid_synthetic.py).
+HEADING_KP = float(os.environ.get("SEAGRASS_HEADING_KP", "0.03"))
+HEADING_KI = float(os.environ.get("SEAGRASS_HEADING_KI", "0.005"))
+HEADING_KD = float(os.environ.get("SEAGRASS_HEADING_KD", "0.02"))
+# Stick deflection past which the operator counts as steering. Manual input
+# always wins.
+HEADING_MANUAL_DEADZONE = float(os.environ.get("SEAGRASS_HEADING_DEADZONE", "0.08"))
+# Yaw older than this is not trusted. Telemetry runs at ~2 Hz, so a gap this long
+# means the link stalled — steering on a stale bearing is worse than not steering.
+HEADING_STALE_S = 2.0
+
+heading_pid = PIDController(
+    kp=HEADING_KP, ki=HEADING_KI, kd=HEADING_KD,
+    output_limits=(-1.0, 1.0),
+    integral_limits=(-2.0, 2.0),
+    angular=True,  # headings wrap at 0/360 — see pid_controller.wrap_deg
+)
+heading_hold_engaged = False
+heading_hold_suspended = False  # operator is steering; the hold yields
+heading_setpoint = None         # degrees, captured on engage
+heading_output = 0.0            # steer command in [-1, 1], consumed by channel_frame
+heading_last_yaw = None
+heading_last_yaw_at = 0.0
+heading_readout = {
+    "engaged": False, "suspended": False, "setpoint": None,
+    "heading": None, "error": None, "output": 0.0, "ok": False,
+}
+
+
+def _refresh_heading_readout():
+    heading_readout.update(
+        engaged=heading_hold_engaged,
+        suspended=heading_hold_suspended,
+        setpoint=None if heading_setpoint is None else round(heading_setpoint, 1),
+        heading=None if heading_last_yaw is None else round(heading_last_yaw, 1),
+        error=None if (heading_setpoint is None or heading_last_yaw is None)
+        else round(wrap_deg(heading_setpoint - heading_last_yaw), 1),
+        output=round(heading_output, 3),
+        ok=heading_hold_engaged and not heading_hold_suspended,
+    )
+
+
+def engage_heading_hold():
+    """Capture the current heading and start holding it. Returns (ok, message).
+
+    Refuses unless armed, not soft-stopped, and holding a FRESH yaw sample —
+    engaging on a stale or absent compass would confidently steer toward a
+    bearing that means nothing, which is the worst failure this loop can have.
+    """
+    global heading_hold_engaged, heading_hold_suspended, heading_setpoint, heading_output
+    if not armed:
+        return False, "not armed"
+    if motion_latched:
+        return False, "soft stop is latched"
+    if heading_last_yaw is None or time.time() - heading_last_yaw_at > HEADING_STALE_S:
+        return False, "no fresh heading — check the compass"
+    heading_pid.reset()
+    heading_setpoint = heading_last_yaw
+    heading_pid.setpoint = heading_setpoint
+    heading_output = 0.0
+    heading_hold_engaged = True
+    heading_hold_suspended = False
+    _refresh_heading_readout()
+    print(f"Heading hold: engaged on {heading_setpoint:.1f} deg")
+    return True, f"holding {heading_setpoint:.0f} deg"
+
+
+def disengage_heading_hold(reason=""):
+    """Stop holding. Safe to call unconditionally — every cancel path lands here,
+    including all_stop(), so a path added later cannot forget to release it."""
+    global heading_hold_engaged, heading_hold_suspended, heading_setpoint, heading_output
+    if not heading_hold_engaged:
+        return
+    heading_hold_engaged = False
+    heading_hold_suspended = False
+    heading_setpoint = None
+    # Zeroing the output stops channel_frame injecting; the existing ramp then
+    # decays steering to neutral rather than dropping it in one step.
+    heading_output = 0.0
+    heading_pid.reset()
+    _refresh_heading_readout()
+    print(f"Heading hold: disengaged{' — ' + reason if reason else ''}")
+
+
+def step_heading_hold(yaw):
+    """Feed one yaw sample (degrees, 0-360) to the heading PID.
+
+    Also the freshness clock for engage_heading_hold(), so it must be called on
+    every telemetry pass whether or not the hold is running.
+    """
+    global heading_last_yaw, heading_last_yaw_at, heading_output, heading_hold_suspended
+    global heading_setpoint
+    heading_last_yaw = yaw
+    heading_last_yaw_at = time.time()
+
+    if not heading_hold_engaged:
+        _refresh_heading_readout()
+        return
+
+    # Re-check the gates every sample, not just at engage: arming, soft stop and
+    # the MAVLink link can all change underneath a running hold.
+    if not armed:
+        disengage_heading_hold("disarmed")
+        return
+    if motion_latched:
+        disengage_heading_hold("soft stop latched")
+        return
+    if not pixhawk_ok:
+        disengage_heading_hold("Pixhawk link lost")
+        return
+
+    # Operator steering always wins. Suspending rather than summing means manual
+    # and autonomous commands can never add into a bigger turn than either one
+    # asked for.
+    if abs(_axis_value("d", "a", axis_targets["steer"])) > HEADING_MANUAL_DEADZONE:
+        if not heading_hold_suspended:
+            print("Heading hold: suspended — manual steering")
+        heading_hold_suspended = True
+        heading_output = 0.0
+        heading_pid.reset()
+        _refresh_heading_readout()
+        return
+
+    if heading_hold_suspended:
+        # Stick back at centre: adopt whatever bearing the pilot steered onto,
+        # so "turn, then let go" sets the new course.
+        heading_hold_suspended = False
+        heading_setpoint = yaw
+        heading_pid.setpoint = yaw
+        heading_pid.reset()
+        print(f"Heading hold: resumed on {yaw:.1f} deg")
+
+    heading_output = heading_pid.update(yaw, current_time=time.time())
+    _refresh_heading_readout()
+
+
+# ---------------- sonar brake ----------------
+# Forward thrust is shed as the Ping2 sees something closing ahead, and cut
+# entirely inside SONAR_BRAKE_STOP_M. This is a BRAKE, not obstacle avoidance:
+# the Ping2 is one fixed forward beam with no scan and no array, so it can say
+# "something is N metres ahead" and nothing whatsoever about which way is clear.
+# Steering around an obstacle needs a left/right range comparison this hardware
+# cannot make, so the vehicle stops rather than guessing a direction — a guessed
+# dodge would also fight heading hold, which has no notion of "obstacle cleared"
+# and would simply steer back onto the original bearing and re-approach.
+#
+# Applied to the surge axis in channel_frame() rather than to the PWM, so it
+# rides the same ramp/creep-floor/all-stop paths as any other surge input and
+# holds under every drive mode (angle-table, vector, arc).
+SONAR_BRAKE = os.environ.get("SEAGRASS_SONAR_BRAKE", "1") not in ("0", "false", "False", "")
+# Inside this range forward thrust is zero. Wider than the Ping's 0.5 m dead
+# zone (see PING_MIN_RANGE_M in src/lib/sonarGeometry.js) so the vehicle stops
+# while the obstacle is still resolvable rather than as it vanishes into it.
+SONAR_BRAKE_STOP_M = float(os.environ.get("SEAGRASS_SONAR_STOP_M", "0.6"))
+# Braking starts here and ramps linearly to a full stop at STOP_M.
+SONAR_BRAKE_SLOW_M = float(os.environ.get("SEAGRASS_SONAR_SLOW_M", "2.0"))
+# Confidence floor for a reading to be allowed to brake. sonar_reader already
+# gates distance_m at PING_MIN_CONF; this is a second, independently tunable
+# floor so braking can be made stricter than the display without making the
+# display lie.
+SONAR_BRAKE_MIN_CONF = int(os.environ.get("SEAGRASS_SONAR_MIN_CONF", "50"))
+# A reading older than this cannot brake. The reader already blanks `latest` when
+# the link drops (_mark_down), so this is defence in depth for the window between
+# the last good read and that teardown — it keeps the control loop's safety from
+# depending on the reader's internal bookkeeping.
+SONAR_BRAKE_STALE_S = 2.0
+
+sonar_brake = 0.0  # fraction of forward thrust to shed: 0 = none, 1 = full stop
+brake_readout = {"brake": 0.0, "braking": False}
+
+
+def step_sonar_brake():
+    """Recompute `sonar_brake` from the latest sonar reading.
+
+    Uses the FILTERED distance_m (median of confidence-gated samples), not the
+    raw echo: braking on a single spike would lurch the vehicle every time a
+    fish or a bubble crossed the beam. The cost is a few samples of lag before a
+    suddenly-appearing obstacle registers.
+
+    Releasing on a stale/absent reading — rather than latching the brake on —
+    is deliberate. A dead sensor that permanently locked out forward thrust
+    would strand the vehicle with no way to drive out of a current, which is a
+    worse failure than one the operator can see on the camera and drive around.
+    This is an assist under a human, not a guarantee.
+    """
+    global sonar_brake
+    reading = sonar.latest
+    dist = reading.get("distance_m")
+    conf = reading.get("confidence")
+    ts = reading.get("ts") or 0.0
+
+    if (not SONAR_BRAKE or dist is None or conf is None
+            or conf < SONAR_BRAKE_MIN_CONF
+            or time.time() - ts > SONAR_BRAKE_STALE_S):
+        sonar_brake = 0.0
+    elif dist <= SONAR_BRAKE_STOP_M:
+        sonar_brake = 1.0
+    elif dist >= SONAR_BRAKE_SLOW_M:
+        sonar_brake = 0.0
+    else:
+        span = SONAR_BRAKE_SLOW_M - SONAR_BRAKE_STOP_M
+        sonar_brake = (SONAR_BRAKE_SLOW_M - dist) / span if span > 0 else 1.0
+
+    brake_readout.update(brake=round(sonar_brake, 3), braking=sonar_brake > 0.0)
+
+
 # ---------------- camera subprocess ----------------
 # The repo-root camera_stream.py (Picamera2 -> MJPEG on :8000) is the camera
 # path that actually runs on this Pi. server/camera_stream.py is the WebRTC/
@@ -541,6 +772,10 @@ async def stop_detector():
 
 
 HEARTBEAT_S = 1.0  # 1 Hz — well under ArduSub's GCS failsafe timeout (~5s)
+# How long to wait between attempts to rebuild a dropped Pixhawk link. A USB
+# re-enumeration takes a few seconds (and a bootloader pass ~5s), so retrying
+# faster than this just fills the log without reconnecting any sooner.
+PIXHAWK_RETRY_S = 3.0
 
 
 def _heartbeat_loop():
@@ -566,8 +801,11 @@ def _heartbeat_loop():
                     mavutil.mavlink.MAV_AUTOPILOT_INVALID,
                     0, 0, 0,
                 )
-            except OSError:
-                pass  # link dropped; read_telemetry surfaces it on next read
+            except OSError as exc:
+                # serial.SerialException is an OSError. Flag the drop here rather
+                # than waiting for the next read: with no client connected this
+                # 1 Hz send is often the first thing to notice the link is gone.
+                mark_link_lost(exc)
         time.sleep(HEARTBEAT_S)
 
 
@@ -575,16 +813,50 @@ def start_heartbeat_thread():
     threading.Thread(target=_heartbeat_loop, daemon=True).start()
 
 
-def connect_pixhawk():
+def _close_master():
+    """Drop the current MAVLink handle. Safe to call on an already-dead link."""
     global master, pixhawk_ok
+    old, master = master, None
+    pixhawk_ok = False
+    if old is not None:
+        try:
+            old.close()
+        except Exception:  # noqa: BLE001
+            pass  # the link is already gone — closing is best-effort
+
+
+def mark_link_lost(exc):
+    """Flag the Pixhawk link as down so the supervisor rebuilds it.
+
+    Called from wherever a read/write actually fails. Deliberately idempotent:
+    several loops touch the link and they will all trip on the same dropout.
+    """
+    if master is None and not pixhawk_ok:
+        return  # already torn down; don't spam the log
+    print(f"Pixhawk link lost: {exc}")
+    _close_master()
+
+
+def connect_pixhawk():
+    """(Re)build the MAVLink link. Blocking — call it off the event loop.
+
+    Sets pixhawk_ok, which is what the UI's Pixhawk indicator reflects.
+    """
+    global master, pixhawk_ok
+    _close_master()
     try:
+        # A USB CDC node that hasn't re-enumerated yet fails slowly and noisily;
+        # checking first keeps the retry loop cheap and the log readable.
+        if SERIAL_PORT.startswith("/dev/") and not os.path.exists(SERIAL_PORT):
+            raise FileNotFoundError(f"{SERIAL_PORT} not present")
         print(f"Connecting to Pixhawk on {SERIAL_PORT} @ {BAUD}…")
-        master = mavutil.mavlink_connection(SERIAL_PORT, baud=BAUD)
-        master.wait_heartbeat(timeout=10)
+        link = mavutil.mavlink_connection(SERIAL_PORT, baud=BAUD)
+        link.wait_heartbeat(timeout=10)
+        master = link
         pixhawk_ok = True
         print("Pixhawk heartbeat OK")
     except Exception as exc:  # noqa: BLE001
-        pixhawk_ok = False
+        _close_master()
         print(f"Pixhawk not available: {exc}")
 
 
@@ -599,6 +871,11 @@ def set_rc(channel, pwm):
 
 
 def all_stop():
+    # Release any autonomous hold FIRST. Every stop path in the server funnels
+    # through here, so releasing it in this one place means a path added later
+    # cannot forget to — and an "all stop" that left the vehicle still steering
+    # itself would be a lie.
+    disengage_heading_hold("all stop")
     # Zero every input source and the ramped PWM state first, so the control_loop
     # doesn't immediately ramp back up from the pre-stop speed on its next tick.
     reset_motion_state()
@@ -606,9 +883,12 @@ def all_stop():
         return
     # ArduSub's manual-control mixer uses a fixed RC scheme: ch1=Pitch,
     # ch2=Roll, ch3=Throttle/vertical, ch4=Yaw, ch5=Forward, ch6=Lateral.
-    # This 2-motor SimpleROV-3 frame has authority over ch3 (vertical), ch4
-    # (steering/yaw) and ch5 (forward) — not ch6 (lateral), which has no
-    # thruster. Neutral those three and leave the light channel alone (mirrors
+    # FRAME_CONFIG=4 (SimpleROV-3) declares a vertical thruster, but this vehicle
+    # is built with only the TWO horizontal motors — so in practice ch4
+    # (steering/yaw) and ch5 (forward) are the only channels with real authority.
+    # ch3 is neutralled anyway: it costs nothing and stays correct if the
+    # buoyancy/vertical hardware is fitted later. ch6 (lateral) has no thruster
+    # in any configuration. Leave the light channel alone (mirrors
     # keyboard_control.py's all_stop).
     rc = [65535] * 8
     rc[2] = NEUTRAL_PWM               # channel 3 - throttle/vertical
@@ -858,6 +1138,24 @@ def channel_frame(dt):
     steer_in = _axis_value("d", "a", axis_targets["steer"])
     depth_in = _axis_value("q", "e", axis_targets["depth"])
 
+    # Sonar brake: shed forward thrust as something closes ahead. Applied to the
+    # axis input, before expo/turn-assist/ramp, so it damps the *request* and
+    # every downstream path (all three drive modes, the creep floor, the ramp)
+    # treats the braked value as if the pilot had eased off the stick.
+    # Deliberately one-directional — reverse is how you back away from whatever
+    # triggered it, so it is never restricted.
+    step_sonar_brake()
+    if sonar_brake > 0.0 and surge_in > 0.0:
+        surge_in *= 1.0 - sonar_brake
+
+    # Heading hold steers only while the operator isn't. Injecting here as an
+    # ordinary steer input — rather than writing ch4 directly — is what makes the
+    # autonomous command inherit every existing safety path unchanged: the ramp,
+    # expo, turn-assist, creep floor, soft stop, watchdog and all_stop all apply
+    # exactly as they do to a human on the stick.
+    if heading_hold_engaged and not heading_hold_suspended:
+        steer_in = max(-1.0, min(1.0, heading_output))
+
     # Stick as the pilot actually moved it, kept for the readout: the default
     # branch below mutates steer_in/surge_in with expo and turn-assist, which
     # would make the reported angle/mag describe the mix rather than the stick.
@@ -1044,7 +1342,17 @@ def read_telemetry():
     out = {}
     notices = []
     while True:
-        msg = master.recv_match(blocking=False)
+        try:
+            msg = master.recv_match(blocking=False)
+        except Exception as exc:  # noqa: BLE001
+            # The Pixhawk is a USB CDC device: a knocked cable, a brown-out on the
+            # shared 5V rail, or the autopilot rebooting makes /dev/ttyACM0 vanish
+            # and pyserial raises right here. This used to propagate out and kill
+            # mission_recorder_loop outright while pixhawk_ok stayed True forever,
+            # so the UI kept showing a healthy Pixhawk on a dead link. Flag it
+            # instead and let pixhawk_supervisor_loop rebuild the connection.
+            mark_link_lost(exc)
+            return out, notices
         if msg is None:
             break
         t = msg.get_type()
@@ -1138,16 +1446,38 @@ async def client_handler(ws):
                 await send({"type": "telemetry", **data})
             if "altitude" in data:
                 step_alt_pid(data["altitude"])
+            # Must run on every pass, engaged or not: it is also the freshness
+            # clock that engage_heading_hold() checks before trusting the compass.
+            if "yaw" in data:
+                step_heading_hold(data["yaw"])
             await send({"type": "pid", **pid_readout})
-            await send({"type": "sonar", **sonar.latest})
+            await send({"type": "heading_hold", **heading_readout})
+            # Gauge-level sonar: scalars only. The ~200-sample amplitude array
+            # goes out on its own faster loop below, so it is stripped here
+            # rather than paying ~800 bytes twice at two different rates.
+            # brake_readout rides along so the operator can see *why* forward
+            # thrust went away — an unexplained refusal to drive reads as a
+            # broken vehicle, not as an assist doing its job.
+            await send({"type": "sonar",
+                        **{k: v for k, v in sonar.latest.items() if k != "profile"},
+                        **brake_readout})
             for level, message in notices:
                 await send({"type": "notice", "level": level, "message": message})
             await state()
             # watchdog — force neutral if the client went silent mid-motion
             # (a held key OR a deflected analog stick both count as motion)
             if helm_holder is ws and motion_active() and time.time() - last_seen > WATCHDOG_S:
-                all_stop()  # also clears keys + axes via reset_motion_state
+                all_stop()  # also releases heading hold + clears keys/axes
                 print("Watchdog: all stop")
+            # A running hold keeps the vehicle steering with no stick deflection,
+            # so motion_active() is false and the watchdog above never fires. This
+            # is the equivalent guard for autonomous motion: a silent operator
+            # must not leave the vehicle holding a bearing indefinitely. It needs
+            # its own, longer timeout — see HOLD_WATCHDOG_S.
+            elif (helm_holder is ws and heading_hold_engaged
+                  and time.time() - last_seen > HOLD_WATCHDOG_S):
+                all_stop()
+                print("Watchdog: all stop (heading hold, client silent)")
             await asyncio.sleep(0.5)
 
     async def detections_loop():
@@ -1157,6 +1487,36 @@ async def client_handler(ws):
             if detector_running():
                 await send({"type": "detections", **latest_detections})
             await asyncio.sleep(0.2)
+
+    async def sonar_profile_loop():
+        # Feed the UI's echogram at the reader's own ~10 Hz sample rate. The
+        # 0.5 s telemetry loop is far too coarse for a scrolling waterfall — at
+        # 2 Hz you lose 4 of every 5 pings and the display stutters.
+        #
+        # Keyed on ping_number so a row is emitted once per ACOUSTIC ping: this
+        # loop and the reader thread are unsynchronised, so polling faster than
+        # the device pings would otherwise duplicate rows and stretch the time
+        # axis. A skipped ping (link loss) just leaves a gap, which is honest.
+        last_ping = None
+        while True:
+            snap = sonar.latest  # replaced wholesale by the reader — safe to alias
+            ping_no = snap.get("ping_number")
+            if snap.get("ok") and ping_no is not None and ping_no != last_ping:
+                last_ping = ping_no
+                await send({
+                    "type": "sonar_profile",
+                    "ping": ping_no,
+                    "ts": snap.get("ts"),
+                    "distance_m": snap.get("distance_m"),
+                    "raw_m": snap.get("raw_m"),
+                    "confidence": snap.get("confidence"),
+                    "quality": snap.get("quality"),
+                    "scan_start_m": snap.get("scan_start_m"),
+                    "scan_length_m": snap.get("scan_length_m"),
+                    "gain": snap.get("gain"),
+                    "profile": snap.get("profile"),
+                })
+            await asyncio.sleep(0.05)
 
     async def motors_loop():
         # Push the live per-motor readout (angle/mag/left/right) to the helm holder
@@ -1170,6 +1530,7 @@ async def client_handler(ws):
     tele_task = asyncio.create_task(telemetry_loop())
     detect_task = asyncio.create_task(detections_loop())
     motors_task = asyncio.create_task(motors_loop())
+    sonar_task = asyncio.create_task(sonar_profile_loop())
     try:
         async for raw in ws:
             last_seen = time.time()
@@ -1213,6 +1574,15 @@ async def client_handler(ws):
                 # or resume. Recoverable — unlike "stop", it does NOT disarm/shutdown.
                 toggle_soft_stop()
                 await send({"type": "soft_stop", "latched": motion_latched})
+            elif mtype == "heading_hold_on":
+                ok, detail = engage_heading_hold()
+                if not ok:
+                    await send({"type": "notice", "level": "warn",
+                                "message": f"Heading hold refused: {detail}"})
+                await send({"type": "heading_hold", **heading_readout})
+            elif mtype == "heading_hold_off":
+                disengage_heading_hold("operator")
+                await send({"type": "heading_hold", **heading_readout})
             elif mtype == "arm":
                 do_arm()
                 await state()
@@ -1292,10 +1662,14 @@ async def client_handler(ws):
         tele_task.cancel()
         detect_task.cancel()
         motors_task.cancel()
+        sonar_task.cancel()
         if client_count == 0:
             # Last operator left — drop PID state so the next session re-captures
             # its hold altitude fresh rather than resuming a stale setpoint.
             reset_alt_pid()
+        # Autonomy never outlives its operator: release the hold on ANY client
+        # leaving, not just the helm holder, and regardless of client_count.
+        disengage_heading_hold("operator disconnected")
         if helm_holder is ws:
             helm_holder = None
             pressed.clear()
@@ -1350,6 +1724,26 @@ async def mission_recorder_loop():
         await asyncio.sleep(0.5)
 
 
+async def pixhawk_supervisor_loop():
+    """Rebuild the MAVLink link after a dropout, for the whole server lifetime.
+
+    Without this a single USB re-enumeration (cable knock, 5V brown-out, or the
+    autopilot rebooting through its bootloader) left the server holding a dead
+    handle until someone restarted it by hand.
+
+    connect_pixhawk() blocks for up to 10s in wait_heartbeat, so it runs in a
+    worker thread — blocking the event loop here would stall the websocket and
+    RC-override loops, which is exactly what you don't want mid-dive.
+    """
+    loop = asyncio.get_running_loop()
+    while True:
+        if not pixhawk_ok:
+            await loop.run_in_executor(None, connect_pixhawk)
+            if not pixhawk_ok:
+                await asyncio.sleep(PIXHAWK_RETRY_S)
+        await asyncio.sleep(1.0)
+
+
 async def main():
     connect_pixhawk()
     # Announce ourselves as a GCS at 1 Hz on a dedicated daemon thread, for the
@@ -1368,6 +1762,8 @@ async def main():
     # Auto-record missions (arm→record, disarm→stop), running with or without an
     # operator connected. See mission_recorder_loop.
     asyncio.create_task(mission_recorder_loop())
+    # Reconnect the Pixhawk automatically if its USB link drops.
+    asyncio.create_task(pixhawk_supervisor_loop())
     print(f"Auto-record: {'ON' if autorecord_enabled else 'off'}")
     async with websockets.serve(client_handler, WS_HOST, WS_PORT):
         print(f"Seagrass drone server listening on ws://{WS_HOST}:{WS_PORT}")

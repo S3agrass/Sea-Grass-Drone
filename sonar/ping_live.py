@@ -12,6 +12,8 @@ from collections import deque
 
 from brping import Ping1D
 
+import ping_preflight
+
 PORT = sys.argv[1] if len(sys.argv) > 1 else "/dev/ttyAMA2"
 SPARK = " ▁▂▃▄▅▆▇█"
 
@@ -42,9 +44,18 @@ def colour(conf):
     return "\033[31m"       # red    - noise (expected in air)
 
 
+# Catch "another process owns the port" and "the Ping has no power" up front --
+# both otherwise look like a bare initialize() failure and read as a wiring fault.
+# Stop here rather than pressing on: neither problem can be worked around from
+# software, and continuing just buries the explanation under a pyserial traceback.
+if not ping_preflight.report(PORT):
+    print("\n  Fix the above first — the feed cannot start through it.\n")
+    sys.exit(1)
+
 ping = connect()
 if ping is None:
     print(f"Could not initialize Ping on {PORT} after 5 attempts.")
+    ping_preflight.report(PORT)
     sys.exit(1)
 
 hist = deque(maxlen=60)

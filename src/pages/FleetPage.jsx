@@ -6,7 +6,7 @@ import { useDrone } from "../context/DroneContext";
 const EMPTY = {
   id: "new",
   name: "",
-  host: "ws://seagrass-pi.local:8765",
+  host: "ws://seagrass.local:8765",
   camera_url: "",
   token: "",
 };
@@ -115,7 +115,7 @@ export default function FleetPage() {
               <input
                 className="mono"
                 value={editing.host}
-                placeholder="ws://seagrass-pi.local:8765"
+                placeholder="ws://seagrass.local:8765"
                 onChange={(e) => setEditing({ ...editing, host: e.target.value })}
               />
             </label>

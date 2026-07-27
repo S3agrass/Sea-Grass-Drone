@@ -12,6 +12,11 @@
  *     { type: "stop" }                       hard kill — server process exits
  *     { type: "soft_stop" }                  latched recoverable all-stop (toggle)
  *     { type: "ping" }                       keepalive
+ *     { type: "heading_hold_on" } / { type: "heading_hold_off" }
+ *         Engage/release compass heading hold. "on" captures the CURRENT heading
+ *         as the setpoint; the server refuses (and replies with a notice) unless
+ *         the vehicle is armed, not soft-stopped, and has a fresh compass
+ *         reading. Manual steering always overrides it.
  *     { type: "camera_on" } / { type: "camera_off" }
  *     { type: "detect_on" } / { type: "detect_off" }   toggle object detection
  *     { type: "record_start" } / { type: "record_stop" }  SD-card recording (Pi-side)
@@ -26,10 +31,32 @@
  *         altitude/climb are baro-derived; roll/pitch/yaw are the EKF-fused
  *         attitude in DEGREES (server converts from MAVLink radians)
  *     { type: "sonar", distance_m, raw_m, confidence, quality, ok }
- *         Ping2 range. distance_m is confidence-gated + median-filtered (null =
- *         no lock); raw_m is the latest unfiltered echo; quality: good|weak|none
+ *         Ping2 range, ~2Hz. distance_m is confidence-gated + median-filtered
+ *         (null = no lock); raw_m is the latest unfiltered echo; quality:
+ *         good|weak|none. Scalars only — the amplitude array is stripped here.
+ *     { type: "sonar_profile", ping, ts, distance_m, raw_m, confidence, quality,
+ *                              scan_start_m, scan_length_m, gain, profile }
+ *         One row of the echogram, emitted once per acoustic ping (~5Hz, device
+ *         rate). `profile` is ~200 amplitudes 0-255, nearest first, spanning
+ *         scan_start_m .. scan_start_m + scan_length_m — that window MOVES while
+ *         the device auto-ranges, so a bin is not a fixed distance. Null when
+ *         PING_PROFILE=0 or the link degraded to distance-only reads.
+ *         Consumed by SonarView directly off this link, NOT via DroneContext:
+ *         the context value isn't memoized, so array data at this rate would
+ *         re-render the map and camera panels too.
  *     { type: "pid", setpoint, measurement, error, integral, output, ok }
- *         Altitude-hold PID on live baro altitude; output is display-only
+ *         Altitude-hold PID on live baro altitude; output is display-only.
+ *         NOTE this vehicle has no vertical thruster, so this loop can never
+ *         close — it is a readout, not control. Heading hold below is the one
+ *         that actually steers.
+ *     { type: "heading_hold", engaged, suspended, setpoint, heading, error,
+ *                             output, ok }
+ *         Compass heading hold, ~2Hz. `engaged` is the operator's toggle;
+ *         `suspended` means it is engaged but yielding to manual steering, so
+ *         `ok` (engaged && !suspended) is what "actively steering" means.
+ *         setpoint/heading/error are degrees, error wrapped to +/-180. Unlike
+ *         the pid message above, output here DOES drive the vehicle: it is
+ *         injected as a steer input on ch4.
  *     { type: "motors", angle, mag, left, right, left_pwm, right_pwm }  10Hz, helm only
  *     { type: "soft_stop", latched }         latched soft-stop state changed
  *     { type: "detections", boxes: [{ cls, conf, x, y, w, h }], ts }
@@ -89,7 +116,11 @@ export default class DroneLink {
     ws.onopen = () => {
       this._setStatus("connected");
       this.send({ type: "hello", token: this.token });
-      // heartbeat so the server watchdog knows we're alive
+      // Heartbeat so the server watchdog knows we're alive. THE SERVER DEPENDS
+      // ON THIS INTERVAL: with heading hold running there is no other traffic
+      // from us, so this ping alone refreshes the server's last_seen. Its
+      // HOLD_WATCHDOG_S (drone_server.py) must stay comfortably above this
+      // value — when it didn't, the hold released ~1.5s after every engage.
       this._keepAlive = setInterval(() => this.send({ type: "ping" }), 5000);
     };
 
@@ -160,6 +191,10 @@ export default class DroneLink {
    *  the vehicle armed, so it's recoverable by toggling again. While latched the
    *  server ignores axis input entirely. */
   softStop() { return this.send({ type: "soft_stop" }); }
+  // Heading hold captures the CURRENT heading server-side, so there is nothing
+  // to pass — the operator points the vehicle, then engages.
+  headingHoldOn() { return this.send({ type: "heading_hold_on" }); }
+  headingHoldOff() { return this.send({ type: "heading_hold_off" }); }
   cameraOn() { return this.send({ type: "camera_on" }); }
   cameraOff() { return this.send({ type: "camera_off" }); }
   detectOn() { return this.send({ type: "detect_on" }); }

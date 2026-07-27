@@ -5,6 +5,7 @@ import DroneMap from "../components/DroneMap";
 import CameraView from "../components/CameraView";
 import GamepadControl from "../components/GamepadControl";
 import ConnectionPanel from "../components/ConnectionPanel";
+import SonarView from "../components/SonarView";
 import Toasts from "../components/Toasts";
 import {
   Compass,
@@ -16,11 +17,15 @@ import {
   ClimbGauge,
   AttitudeIndicator,
   PIDGauge,
+  HeadingHoldGauge,
 } from "../components/Instruments";
 import { useDrone } from "../context/DroneContext";
 
 export default function ControlPage() {
-  const { activeDrone, telemetry, sonar, pid } = useDrone();
+  const {
+    activeDrone, telemetry, sonar, pid,
+    headingHold, headingHoldOn, headingHoldOff, armed,
+  } = useDrone();
   const [waypoints, setWaypoints] = useState([]);
   const [trail, setTrail] = useState([]);
   const lastTrailPoint = useRef(null);
@@ -79,6 +84,18 @@ export default function ControlPage() {
               pitch={telemetry.pitch}
               yaw={telemetry.yaw}
             />
+            <HeadingHoldGauge
+              engaged={headingHold.engaged}
+              suspended={headingHold.suspended}
+              setpoint={headingHold.setpoint}
+              heading={headingHold.heading}
+              error={headingHold.error}
+              output={headingHold.output}
+              ok={headingHold.ok}
+              armed={armed}
+              onEngage={headingHoldOn}
+              onRelease={headingHoldOff}
+            />
             <PIDGauge
               setpoint={pid.setpoint}
               measurement={pid.measurement}
@@ -105,6 +122,10 @@ export default function ControlPage() {
           <CameraView />
           <GamepadControl />
         </aside>
+
+        {/* Full-width strip under the three columns — the echogram needs
+            horizontal room for time history, which the 250px rail can't give. */}
+        <SonarView />
       </div>
     </div>
   );

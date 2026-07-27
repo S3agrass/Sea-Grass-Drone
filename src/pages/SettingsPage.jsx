@@ -56,11 +56,11 @@ export default function SettingsPage() {
                 <input
                   className="mono"
                   value={form.host}
-                  placeholder="ws://seagrass-pi.local:8765"
+                  placeholder="ws://seagrass.local:8765"
                   onChange={(e) => setForm({ ...form, host: e.target.value })}
                 />
                 <span className="field-help">
-                  Local network: <span className="mono">ws://seagrass-pi.local:8765</span>.
+                  Local network: <span className="mono">ws://seagrass.local:8765</span>.
                   Remote via Cloudflare Tunnel: <span className="mono">wss://drone.yourdomain.com</span>.
                 </span>
               </label>
@@ -69,7 +69,7 @@ export default function SettingsPage() {
                 <input
                   className="mono"
                   value={form.camera_url || ""}
-                  placeholder="http://seagrass-pi.local:8000/stream.mjpg"
+                  placeholder="http://seagrass.local:8000/stream.mjpg"
                   onChange={(e) => setForm({ ...form, camera_url: e.target.value })}
                 />
               </label>
