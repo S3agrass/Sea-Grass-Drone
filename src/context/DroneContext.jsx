@@ -27,11 +27,40 @@ const LOCAL_DRONE = {
   token: "",
 };
 
+// The Pi's hostname is `seagrass`, so `seagrass.local` resolves and
+// `seagrass-pi.local` never has. It shipped as the default anyway, and a host
+// saved in localStorage overrides the corrected default forever — the UI just
+// sits on "Connecting…" while the server logs nothing at all, because the
+// connection never leaves the laptop. Rewriting it is safe: that hostname
+// resolves for nobody, so no working setup can depend on it.
+const DEAD_HOST = "seagrass-pi.local";
+const LIVE_HOST = "seagrass.local";
+
+function migrateDeadHosts(fleet) {
+  let changed = false;
+  const migrated = fleet.map((d) => {
+    if (typeof d?.host !== "string" || !d.host.includes(DEAD_HOST)) return d;
+    changed = true;
+    return { ...d, host: d.host.replaceAll(DEAD_HOST, LIVE_HOST) };
+  });
+  return changed ? migrated : fleet;
+}
+
 function loadLocalFleet() {
   try {
     const raw = localStorage.getItem("seagrass-fleet");
     const fleet = raw ? JSON.parse(raw) : null;
-    return Array.isArray(fleet) && fleet.length ? fleet : [LOCAL_DRONE];
+    if (!Array.isArray(fleet) || !fleet.length) return [LOCAL_DRONE];
+    const migrated = migrateDeadHosts(fleet);
+    if (migrated !== fleet) {
+      // Persist so the repair survives a reload even if nothing else saves.
+      try {
+        localStorage.setItem("seagrass-fleet", JSON.stringify(migrated));
+      } catch {
+        /* storage full or blocked — the in-memory fix still applies this session */
+      }
+    }
+    return migrated;
   } catch {
     return [LOCAL_DRONE];
   }
