@@ -171,7 +171,7 @@ describe('SonarView', () => {
   it('shows the partial limit while the brake is only easing off', () => {
     mockCtx.sonar = { ...mockCtx.sonar, ok: true, quality: 'good', brake: 0.6, braking: true };
     render(<SonarView />);
-    expect(screen.getByText(/FWD LIMIT 40%/)).toBeInTheDocument();
+    expect(screen.getByText(/FWD capped to 40%/)).toBeInTheDocument();
   });
 
   it('says nothing about braking when nothing is close', () => {

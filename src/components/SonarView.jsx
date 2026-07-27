@@ -48,6 +48,11 @@ const POV_SIZE = 150;
 // view reads as continuously sweeping rather than strobing.
 const POV_PULSE_MS = 1400;
 const POV_MAX_PULSES = 6;
+// No ping for this long and the readout is blanked rather than left showing its
+// last value. A frozen number is indistinguishable from a live one, so a stalled
+// feed would otherwise read as "there is definitely something 1.2 m ahead" long
+// after the sonar stopped saying anything at all.
+const PROFILE_STALE_MS = 3000;
 
 const QUALITY_TONE = {
   good: { label: "LOCK", tone: "var(--teal)" },
@@ -113,6 +118,7 @@ export default function SonarView() {
   const pausedRef = useRef(paused);
   const maxRangeRef = useRef(maxRange);
   const pulsesRef = useRef([]); // POV pulse rings in flight: array of start times
+  const lastPingAtRef = useRef(0); // performance.now() of the last profile received
 
   // Mirror the controls into refs — the draw loop reads them every frame and
   // must not be torn down and restarted each time one changes.
@@ -129,6 +135,10 @@ export default function SonarView() {
     return link.subscribe((event) => {
       if (event.type === "message" && event.data?.type === "sonar_profile") {
         pendingRef.current.push(event.data);
+        // Stamped on ARRIVAL, not on draw: "is the feed alive" is a fact about
+        // the link, and a frozen tab or a paused display must not be mistaken
+        // for a dead sonar.
+        lastPingAtRef.current = performance.now();
         // Bound the queue: if the tab is backgrounded rAF stops firing while
         // messages keep arriving, and an unbounded queue would replay minutes
         // of history in one burst on return.
@@ -359,9 +369,22 @@ export default function SonarView() {
         }
       }
 
+      // Blank a feed that has stopped, rather than leaving its last reading up
+      // looking live. Also drops the contact so the cone and tunnel stop drawing
+      // an echo that is no longer being reported.
+      const t = performance.now();
+      if (lastPingAtRef.current && t - lastPingAtRef.current > PROFILE_STALE_MS) {
+        lastPingAtRef.current = 0;
+        latestRef.current = null;
+        setReadout((r) => (r.live
+          ? { ...r, live: false, range: null, gated: false, confidence: null,
+              quality: "none" }
+          : r));
+      }
+
       // Outside the queue check: the pulses have to keep travelling between
       // pings, or the tunnel freezes for 200ms at a time and reads as broken.
-      drawPov(performance.now());
+      drawPov(t);
     };
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
@@ -524,13 +547,29 @@ export default function SonarView() {
                   {/* boresight */}
                   <path d={`M${ox} ${oy} L${pt(reach, 0)[0]} ${pt(reach, 0)[1]}`}
                         stroke="var(--faint)" strokeWidth="0.5" strokeDasharray="2 2" />
-                  {/* the echo, drawn as an arc: one beam gives range but no
-                      bearing within the cone, so a dot would invent an angle */}
+                  {/* The contact, drawn as an arc spanning the whole beam: one
+                      fixed beam gives range but NO bearing within the cone, so a
+                      dot would be inventing an angle the vehicle cannot know.
+                      The arc is the honest shape — "somewhere across here". */}
                   {echoFwd != null && (
-                    <path d={arc(echoFwd)} fill="none"
-                          stroke={readout.gated ? q.tone : "var(--amber)"}
-                          strokeWidth="3" strokeLinecap="round"
-                          opacity={readout.gated ? 0.95 : 0.55} />
+                    <>
+                      {/* water between you and it, so the gap reads as distance */}
+                      <path d={`M${ox} ${oy} L${pt(echoFwd, 0)[0]} ${pt(echoFwd, 0)[1]}`}
+                            stroke={readout.gated ? q.tone : "var(--amber)"}
+                            strokeWidth="0.6" strokeDasharray="1.5 2"
+                            opacity={0.5} />
+                      <path d={arc(echoFwd)} fill="none"
+                            stroke={readout.gated ? q.tone : "var(--amber)"}
+                            strokeWidth="3.5" strokeLinecap="round"
+                            opacity={readout.gated ? 0.95 : 0.55} />
+                      {/* distance AHEAD, not slant range — the number that says
+                          whether you are about to hit it */}
+                      <text x={ox} y={pt(echoFwd, 0)[1] - 5} textAnchor="middle"
+                            fill={readout.gated ? q.tone : "var(--amber)"}
+                            fontSize="9" fontFamily="monospace" fontWeight="700">
+                        {echoFwd.toFixed(2)} m
+                      </text>
+                    </>
                   )}
                   {/* the drone */}
                   <circle cx={ox} cy={oy} r="4" fill="var(--ink)" />
@@ -573,9 +612,12 @@ export default function SonarView() {
                 unresponsive throttle as a broken vehicle. */}
             {sonar.braking && (
               <div className="sonar-brake mono">
+                {/* Percentage is thrust REMAINING. "FWD LIMIT 32%" was read as
+                    "32% has been taken away", which is the opposite of what it
+                    meant — hence the explicit "capped to". */}
                 {sonar.brake >= 1
                   ? "FWD STOP — obstacle ahead"
-                  : `FWD LIMIT ${Math.round((1 - sonar.brake) * 100)}%`}
+                  : `FWD capped to ${Math.round((1 - sonar.brake) * 100)}%`}
               </div>
             )}
           </div>

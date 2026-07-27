@@ -1510,25 +1510,38 @@ async def client_handler(ws):
         # loop and the reader thread are unsynchronised, so polling faster than
         # the device pings would otherwise duplicate rows and stretch the time
         # axis. A skipped ping (link loss) just leaves a gap, which is honest.
+        #
+        # The body is wrapped because this is a create_task() coroutine whose
+        # result nobody awaits: an unhandled exception here does not crash the
+        # server, it silently retires THIS task and the echogram freezes on its
+        # last frame for the rest of the session, while every other panel keeps
+        # updating. Reconnecting builds a fresh task and it works again, which
+        # makes the fault look like a network problem rather than a dead loop.
+        # Observed in the field exactly that way. send() only swallows
+        # ConnectionClosed, so anything else — a value the encoder can't take,
+        # say — escapes. One bad ping should cost one frame, not the session.
         last_ping = None
         while True:
-            snap = sonar.latest  # replaced wholesale by the reader — safe to alias
-            ping_no = snap.get("ping_number")
-            if snap.get("ok") and ping_no is not None and ping_no != last_ping:
-                last_ping = ping_no
-                await send({
-                    "type": "sonar_profile",
-                    "ping": ping_no,
-                    "ts": snap.get("ts"),
-                    "distance_m": snap.get("distance_m"),
-                    "raw_m": snap.get("raw_m"),
-                    "confidence": snap.get("confidence"),
-                    "quality": snap.get("quality"),
-                    "scan_start_m": snap.get("scan_start_m"),
-                    "scan_length_m": snap.get("scan_length_m"),
-                    "gain": snap.get("gain"),
-                    "profile": snap.get("profile"),
-                })
+            try:
+                snap = sonar.latest  # replaced wholesale by the reader — safe to alias
+                ping_no = snap.get("ping_number")
+                if snap.get("ok") and ping_no is not None and ping_no != last_ping:
+                    last_ping = ping_no
+                    await send({
+                        "type": "sonar_profile",
+                        "ping": ping_no,
+                        "ts": snap.get("ts"),
+                        "distance_m": snap.get("distance_m"),
+                        "raw_m": snap.get("raw_m"),
+                        "confidence": snap.get("confidence"),
+                        "quality": snap.get("quality"),
+                        "scan_start_m": snap.get("scan_start_m"),
+                        "scan_length_m": snap.get("scan_length_m"),
+                        "gain": snap.get("gain"),
+                        "profile": snap.get("profile"),
+                    })
+            except Exception as exc:  # noqa: BLE001 — never let one ping end the stream
+                print(f"Sonar profile loop: {exc!r} — skipping this ping")
             await asyncio.sleep(0.05)
 
     async def motors_loop():
