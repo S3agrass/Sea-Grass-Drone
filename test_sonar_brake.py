@@ -32,13 +32,19 @@ def check(name, condition, detail=""):
         FAILURES.append(name)
 
 
-def set_reading(distance_m, confidence=90, age_s=0.0):
-    """Publish a fake sonar reading. Mirrors sonar_reader's wholesale replace."""
+def set_reading(distance_m, confidence=90, age_s=0.0, quality=None):
+    """Publish a fake sonar reading. Mirrors sonar_reader's wholesale replace.
+
+    `quality` defaults to what the reader would produce, but can be forced to
+    reproduce the field case where a distance exists on only a sample or two.
+    """
+    if quality is None:
+        quality = "good" if (confidence or 0) >= 50 and distance_m is not None else "none"
     ds.sonar.latest = {
         "distance_m": distance_m,
         "raw_m": distance_m,
         "confidence": confidence,
-        "quality": "good" if (confidence or 0) >= 50 else "none",
+        "quality": quality,
         "ok": True,
         "ts": time.time() - age_s,
         "profile": None,
@@ -49,8 +55,8 @@ def set_reading(distance_m, confidence=90, age_s=0.0):
     }
 
 
-def brake_for(distance_m, confidence=90, age_s=0.0):
-    set_reading(distance_m, confidence, age_s)
+def brake_for(distance_m, confidence=90, age_s=0.0, quality=None):
+    set_reading(distance_m, confidence, age_s, quality)
     ds.step_sonar_brake()
     return ds.sonar_brake
 
@@ -108,6 +114,33 @@ def test_brake_releases_when_it_cannot_see():
     # releases above are the gates firing and not the distance being ignored.
     check("brakes on the same range when the reading is good",
           brake_for(close) == 1.0)
+
+
+def test_does_not_brake_on_a_weak_lock():
+    """Regression: the tank flicker.
+
+    Field failure — a Ping2 in a 0.46 m box (everything inside its 0.5 m dead
+    zone) reported 2% confidence and NO LOCK in the UI while the brake flickered
+    at 32%, i.e. a phantom obstacle 1.55 m away that could not physically exist.
+
+    Cause: distance_m is the median of a 2-SECOND WINDOW, confidence is THIS
+    sample. One reverb sample clearing the confidence gate both put a distance
+    into the window and satisfied the confidence check at the same instant. The
+    reader labels that "weak" — fewer than _GOOD_MIN_ACCEPTED samples agreed —
+    and only "good" may command thrust.
+    """
+    print("\n=== Will not brake on a weak/fluke lock ===")
+    phantom = 1.55  # what 32% brake works out to
+
+    check("ignores a weak lock even at high instantaneous confidence",
+          brake_for(phantom, confidence=95, quality="weak") == 0.0)
+    check("ignores a weak lock inside the stop range",
+          brake_for(0.3, confidence=95, quality="weak") == 0.0)
+    check("ignores a no-lock reading that still carries a distance",
+          brake_for(phantom, confidence=95, quality="none") == 0.0)
+    check("brakes on the same range once the lock is good",
+          abs(brake_for(phantom, confidence=95, quality="good") - 0.321) < 0.01,
+          f"brake={ds.sonar_brake:.3f}")
 
 
 def test_readout_tracks_the_brake():
@@ -239,6 +272,7 @@ def test_thresholds_are_sane():
 if __name__ == "__main__":
     test_brake_curve()
     test_brake_releases_when_it_cannot_see()
+    test_does_not_brake_on_a_weak_lock()
     test_readout_tracks_the_brake()
     test_channel_frame_brakes_forward_only()
     test_brake_does_not_touch_steering()

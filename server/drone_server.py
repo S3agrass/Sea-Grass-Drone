@@ -547,14 +547,27 @@ def step_sonar_brake():
     would strand the vehicle with no way to drive out of a current, which is a
     worse failure than one the operator can see on the camera and drive around.
     This is an assist under a human, not a guarantee.
+
+    A "good" lock is required, not merely a non-null distance. This is not
+    belt-and-braces: distance_m is the MEDIAN OF A 2-SECOND WINDOW while
+    confidence is THIS sample's, so the two describe different moments. Gating
+    on confidence alone let a single reverb sample that happened to clear the
+    threshold both admit itself to the window (producing a distance) and pass
+    the confidence check in the same instant — the brake then engaged on a
+    phantom and released on the next sample. Observed in a test tank: 2%
+    confidence displayed, brake flickering at 32%, against an obstacle 1.5 m
+    away in a box 0.46 m long. "good" means _GOOD_MIN_ACCEPTED samples agreed
+    inside the window, which a fluke cannot fake.
     """
     global sonar_brake
     reading = sonar.latest
     dist = reading.get("distance_m")
     conf = reading.get("confidence")
+    quality = reading.get("quality")
     ts = reading.get("ts") or 0.0
 
     if (not SONAR_BRAKE or dist is None or conf is None
+            or quality != "good"
             or conf < SONAR_BRAKE_MIN_CONF
             or time.time() - ts > SONAR_BRAKE_STALE_S):
         sonar_brake = 0.0
