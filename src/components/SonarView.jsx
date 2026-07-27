@@ -24,6 +24,9 @@ import {
   amplitudeToRGB,
   decomposeRange,
   peakRange,
+  planHalfAngleDeg,
+  povBlipStyle,
+  povRingRadius,
   rangeToRow,
   PING_BEAM_DEG,
   PING_MIN_RANGE_M,
@@ -35,6 +38,16 @@ const READOUT_HZ = 4; // text refresh rate; drawing runs at full frame rate
 const RANGE_CHOICES = [2, 5, 10, 20, 30];
 const MOUNT_KEY = "seagrass-sonar-mount-deg";
 const RANGE_KEY = "seagrass-sonar-max-range";
+const VIEW_KEY = "seagrass-sonar-view";
+
+// POV canvas bitmap. Square so the tunnel rings stay circular without the draw
+// code having to carry an aspect correction; CSS fits it to the cone slot.
+const POV_SIZE = 150;
+// How long a ping's expanding pulse ring takes to cross the tunnel. Slower than
+// the ~5 Hz ping rate on purpose, so several rings are in flight at once and the
+// view reads as continuously sweeping rather than strobing.
+const POV_PULSE_MS = 1400;
+const POV_MAX_PULSES = 6;
 
 const QUALITY_TONE = {
   good: { label: "LOCK", tone: "var(--teal)" },
@@ -64,8 +77,13 @@ export default function SonarView() {
   const { link, sonar, telemetry, demoMode } = useDrone();
 
   const [mountDeg, setMountDeg] = useState(() => {
-    const saved = Number(localStorage.getItem(MOUNT_KEY));
-    return Number.isFinite(saved) && saved > 0 ? saved : 45;
+    // `>= 0`, not `> 0`: the slider's own minimum is 0 (straight down), so
+    // rejecting it here silently threw away a legitimate setting on reload.
+    // That matters more now the plan view derives its whole geometry from it.
+    const raw = localStorage.getItem(MOUNT_KEY);
+    const saved = Number(raw);
+    return raw !== null && Number.isFinite(saved) && saved >= 0 && saved <= 90
+      ? saved : 45;
   });
   const [maxRange, setMaxRange] = useState(() => {
     const saved = Number(localStorage.getItem(RANGE_KEY));
@@ -73,6 +91,12 @@ export default function SonarView() {
   });
   const [usePitch, setUsePitch] = useState(true);
   const [paused, setPaused] = useState(false);
+  // "plan" = looking straight down on the vehicle; "pov" = looking out from the
+  // transducer itself. Same data, and both are live at once — the toggle only
+  // chooses which one occupies the slot.
+  const [view, setView] = useState(() => (
+    localStorage.getItem(VIEW_KEY) === "pov" ? "pov" : "plan"
+  ));
 
   // Low-rate mirror of the latest ping, for the text/SVG side of the panel.
   const [readout, setReadout] = useState({
@@ -81,12 +105,14 @@ export default function SonarView() {
   });
 
   const canvasRef = useRef(null);
+  const povRef = useRef(null);
   const pendingRef = useRef([]); // profiles received but not yet drawn
   const latestRef = useRef(null); // most recent ping, for the cone
   const rowsRef = useRef(0);
   const lastReadoutRef = useRef(0);
   const pausedRef = useRef(paused);
   const maxRangeRef = useRef(maxRange);
+  const pulsesRef = useRef([]); // POV pulse rings in flight: array of start times
 
   // Mirror the controls into refs — the draw loop reads them every frame and
   // must not be torn down and restarted each time one changes.
@@ -95,6 +121,7 @@ export default function SonarView() {
 
   useEffect(() => { localStorage.setItem(MOUNT_KEY, String(mountDeg)); }, [mountDeg]);
   useEffect(() => { localStorage.setItem(RANGE_KEY, String(maxRange)); }, [maxRange]);
+  useEffect(() => { localStorage.setItem(VIEW_KEY, view); }, [view]);
 
   /* ---------- ingest: real profiles straight off the link ---------- */
   useEffect(() => {
@@ -201,42 +228,140 @@ export default function SonarView() {
       ctx.putImageData(column, ECHO_COLS - 1, 0);
     };
 
+    /* ---- POV tunnel ----
+     * Looking out along the beam axis from the transducer itself. Range maps to
+     * apparent size the way a tunnel does: a contact at zero range fills the
+     * frame, one at max range is a point at the vanishing point in the centre.
+     *
+     * The expanding rings are RETURNS, not the outgoing ping — the echo travels
+     * from the target back to the vehicle, i.e. far to near, i.e. centre to
+     * edge. That is both the physically honest direction and the one that reads
+     * as a sonar sweep instead of as flying backwards.
+     *
+     * A single fixed beam gives range but no bearing within the cone, so a
+     * contact is drawn as a full ring at its range rather than as a dot at some
+     * invented angle: the vehicle genuinely does not know where in the beam it
+     * is.
+     */
+    const drawPov = (nowMs) => {
+      const el = povRef.current;
+      if (!el) return; // plan view is showing — nothing mounted to draw into
+      const pctx = el.getContext("2d");
+      if (!pctx) return; // jsdom / no 2D context
+      if (el.width !== POV_SIZE) {
+        el.width = POV_SIZE;
+        el.height = POV_SIZE;
+      }
+      const size = POV_SIZE;
+      const cx = size / 2;
+      const cy = size / 2;
+      const maxR = maxRangeRef.current;
+
+      const bg = pctx.createRadialGradient(cx, cy, 0, cx, cy, size / 2);
+      bg.addColorStop(0, "#02090f"); // deepest at the vanishing point
+      bg.addColorStop(1, "#07131f");
+      pctx.fillStyle = bg;
+      pctx.fillRect(0, 0, size, size);
+
+      // Static range rings — the tunnel's depth cue. Evenly spaced in metres,
+      // so their crowding toward the centre is the perspective made visible.
+      pctx.lineWidth = 1;
+      for (let i = 1; i <= 5; i += 1) {
+        const r = povRingRadius((i / 5) * maxR, maxR, size);
+        if (r == null || r < 0.5) continue;
+        pctx.beginPath();
+        pctx.arc(cx, cy, r, 0, Math.PI * 2);
+        pctx.strokeStyle = `rgba(30,143,124,${0.28 - 0.04 * i})`;
+        pctx.stroke();
+      }
+
+      // Boresight crosshair, so the centre reads as "straight ahead" and not as
+      // an empty hole.
+      pctx.strokeStyle = "rgba(77,106,130,0.5)";
+      pctx.beginPath();
+      pctx.moveTo(cx - 5, cy); pctx.lineTo(cx + 5, cy);
+      pctx.moveTo(cx, cy - 5); pctx.lineTo(cx, cy + 5);
+      pctx.stroke();
+
+      // Returns in flight.
+      const pulses = pulsesRef.current;
+      while (pulses.length && nowMs - pulses[0] > POV_PULSE_MS) pulses.shift();
+      for (const start of pulses) {
+        const t = (nowMs - start) / POV_PULSE_MS; // 0 = at max range, 1 = arrived
+        const r = povRingRadius((1 - t) * maxR, maxR, size);
+        if (r == null || r < 0.5) continue;
+        pctx.beginPath();
+        pctx.arc(cx, cy, r, 0, Math.PI * 2);
+        pctx.strokeStyle = `rgba(59,217,187,${0.55 * (1 - t)})`; // fades as it passes
+        pctx.lineWidth = 1.5;
+        pctx.stroke();
+      }
+      pctx.lineWidth = 1;
+
+      // The contact itself.
+      const p = latestRef.current;
+      const contact = p?.distance_m;
+      if (contact != null) {
+        const r = povRingRadius(contact, maxR, size);
+        const style = povBlipStyle(contact, maxR, p.confidence);
+        if (r != null && style) {
+          const hot = contact <= maxR * 0.25; // close enough to matter
+          pctx.save();
+          pctx.globalAlpha = style.opacity;
+          pctx.strokeStyle = hot ? "#ffb454" : "#3bd9bb";
+          pctx.shadowColor = pctx.strokeStyle;
+          pctx.shadowBlur = 12;
+          pctx.lineWidth = Math.max(1.5, style.size * size);
+          pctx.beginPath();
+          pctx.arc(cx, cy, Math.max(r, 1), 0, Math.PI * 2);
+          pctx.stroke();
+          pctx.restore();
+        }
+      }
+    };
+
     const frame = () => {
       raf = requestAnimationFrame(frame);
       const queue = pendingRef.current;
-      if (!queue.length) return;
-      if (pausedRef.current) {
+      if (queue.length && pausedRef.current) {
         pendingRef.current = [];
-        return;
-      }
-      pendingRef.current = [];
-      for (const ping of queue) {
-        drawColumn(ping);
-        latestRef.current = ping;
-        rowsRef.current += 1;
+      } else if (queue.length) {
+        pendingRef.current = [];
+        for (const ping of queue) {
+          drawColumn(ping);
+          latestRef.current = ping;
+          rowsRef.current += 1;
+          if (pulsesRef.current.length < POV_MAX_PULSES) {
+            pulsesRef.current.push(performance.now());
+          }
+        }
+
+        const now = performance.now();
+        if (now - lastReadoutRef.current > 1000 / READOUT_HZ) {
+          lastReadoutRef.current = now;
+          const p = latestRef.current;
+          // Prefer the device's confidence-gated distance; fall back to the
+          // brightest thing in the profile so the cone still points somewhere
+          // when there is no hard lock (in air, that's all there ever is).
+          const gated = p.distance_m;
+          const range = gated ?? peakRange(p.profile, p.scan_start_m ?? 0,
+                                          p.scan_length_m ?? maxRangeRef.current);
+          setReadout({
+            range,
+            gated: gated != null,
+            confidence: p.confidence ?? null,
+            quality: p.quality ?? "none",
+            scanLengthM: p.scan_length_m ?? null,
+            gain: p.gain ?? null,
+            rows: rowsRef.current,
+            live: true,
+          });
+        }
       }
 
-      const now = performance.now();
-      if (now - lastReadoutRef.current > 1000 / READOUT_HZ) {
-        lastReadoutRef.current = now;
-        const p = latestRef.current;
-        // Prefer the device's confidence-gated distance; fall back to the
-        // brightest thing in the profile so the cone still points somewhere
-        // when there is no hard lock (in air, that's all there ever is).
-        const gated = p.distance_m;
-        const range = gated ?? peakRange(p.profile, p.scan_start_m ?? 0,
-                                        p.scan_length_m ?? maxRangeRef.current);
-        setReadout({
-          range,
-          gated: gated != null,
-          confidence: p.confidence ?? null,
-          quality: p.quality ?? "none",
-          scanLengthM: p.scan_length_m ?? null,
-          gain: p.gain ?? null,
-          rows: rowsRef.current,
-          live: true,
-        });
-      }
+      // Outside the queue check: the pulses have to keep travelling between
+      // pings, or the tunnel freezes for 200ms at a time and reads as broken.
+      drawPov(performance.now());
     };
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
@@ -282,6 +407,14 @@ export default function SonarView() {
           </label>
           <button
             type="button"
+            className={`sonar-toggle mono ${view === "pov" ? "on" : ""}`}
+            onClick={() => setView((v) => (v === "pov" ? "plan" : "pov"))}
+            title="Plan: looking down on the vehicle. POV: looking out along the beam."
+          >
+            {view === "pov" ? "pov" : "plan"}
+          </button>
+          <button
+            type="button"
             className={`sonar-toggle mono ${usePitch ? "on" : ""}`}
             onClick={() => setUsePitch((v) => !v)}
             title="Correct the beam angle with live EKF pitch"
@@ -299,8 +432,12 @@ export default function SonarView() {
       </div>
 
       <div className="sonar-body">
-        {/* ---- beam cone: where the echo is, right now ---- */}
+        {/* ---- where the echo is, right now: plan view or POV tunnel ---- */}
         <div className="sonar-cone">
+          {view === "pov" ? (
+            <canvas ref={povRef} className="sonar-pov-canvas"
+                    role="img" aria-label="Sonar POV view" />
+          ) : (
           <svg viewBox="0 0 150 130" role="img" aria-label="Sonar beam cone">
             <defs>
               <pattern id="deadzone" width="5" height="5" patternTransform="rotate(45)"
@@ -310,48 +447,90 @@ export default function SonarView() {
               </pattern>
             </defs>
             {(() => {
-              // Drone sits top-left; the beam sweeps down-right. Scale so the
-              // selected max range fits the box.
-              const ox = 22;
-              const oy = 20;
-              const span = 104; // px representing maxRange
+              // Plan view: straight down on the vehicle, which sits at the bottom
+              // with forward = up.
+              //
+              // Everything is plotted on the FORWARD PROJECTION of the range, not
+              // the slant range, because a beam tilted toward the seabed reaches
+              // less far ahead than it reaches in total — and it is the distance
+              // ahead, not the slant distance, that decides whether you hit
+              // something. A 10 m return on a 45deg mount is only 7 m ahead of
+              // you, and this view says so.
+              const ox = 75;   // bottom centre of the 150x130 box
+              const oy = 114;
+              const span = 100; // px representing maxRange of FORWARD distance
               const eff = mountDeg - pitchDeg;
-              const half = PING_BEAM_DEG / 2;
-              const pt = (rangeM, angleDeg) => {
-                const rad = (angleDeg * Math.PI) / 180;
-                const px = ox + (rangeM / maxRange) * span * Math.sin(rad);
-                const py = oy + (rangeM / maxRange) * span * Math.cos(rad);
-                return [px, py];
+              const half = planHalfAngleDeg(eff, PING_BEAM_DEG) ?? PING_BEAM_DEG / 2;
+              const fwdOf = (slantM) =>
+                decomposeRange(slantM, mountDeg, pitchDeg).forward ?? 0;
+              // Polar: radius is forward distance, angle is bearing off the nose.
+              const pt = (fwdM, bearingDeg) => {
+                const rad = (bearingDeg * Math.PI) / 180;
+                const r = (fwdM / maxRange) * span;
+                return [ox + r * Math.sin(rad), oy - r * Math.cos(rad)];
               };
-              const [ax, ay] = pt(maxRange, eff - half);
-              const [bx, by] = pt(maxRange, eff + half);
-              const [dx, dy] = pt(PING_MIN_RANGE_M, eff);
-              const echo = readout.range != null ? pt(readout.range, eff) : null;
+              // Arc across the wedge at a given forward distance. Split so the
+              // wedge below can reuse the sweep without restating it.
+              const arcTo = (fwdM) => {
+                const [x2, y2] = pt(fwdM, half);
+                const r = (fwdM / maxRange) * span;
+                return `A${r} ${r} 0 0 1 ${x2} ${y2}`;
+              };
+              const arc = (fwdM) => {
+                const [x1, y1] = pt(fwdM, -half);
+                return `M${x1} ${y1} ${arcTo(fwdM)}`;
+              };
+              const reach = fwdOf(maxRange);   // how far ahead this tilt can see
+              const dead = fwdOf(PING_MIN_RANGE_M);
+              // Skip an echo beyond the selected display range rather than
+              // clamping it onto the wedge's outer edge, where it would read as
+              // a real contact at maxRange — same rule as rangeToRow.
+              const echoFwd = readout.range != null && readout.range <= maxRange
+                ? fwdOf(readout.range) : null;
+              // Under 2% of the display range the wedge is a sliver and the
+              // drawing says nothing useful — better to say so in words.
+              const blind = reach < maxRange * 0.02;
+              if (blind) {
+                return (
+                  <>
+                    <circle cx={ox} cy={oy} r="4" fill="var(--ink)" />
+                    <path d={`M${ox - 6} ${oy} L${ox + 6} ${oy}`} stroke="var(--ink)"
+                          strokeWidth="1.5" />
+                    <text x={ox} y={oy - 24} textAnchor="middle" fill="var(--amber)"
+                          fontSize="9" fontFamily="monospace">
+                      no forward reach
+                    </text>
+                    <text x={ox} y={oy - 12} textAnchor="middle" fill="var(--faint)"
+                          fontSize="8" fontFamily="monospace">
+                      beam points straight down
+                    </text>
+                  </>
+                );
+              }
+              const [ax, ay] = pt(reach, -half);
               return (
                 <>
-                  {/* full-range beam wedge */}
-                  <path d={`M${ox} ${oy} L${ax} ${ay} L${bx} ${by} Z`}
+                  {/* footprint the beam actually covers, seen from above */}
+                  <path d={`M${ox} ${oy} L${ax} ${ay} ${arcTo(reach)} Z`}
                         fill="rgba(30,143,124,0.16)" stroke="var(--line)" strokeWidth="0.6" />
-                  {/* range rings at 1/3 and 2/3 of scale */}
-                  {[1 / 3, 2 / 3, 1].map((f) => {
-                    const [rx, ry] = pt(maxRange * f, eff - half);
-                    const [sx, sy] = pt(maxRange * f, eff + half);
-                    return (
-                      <path key={f} d={`M${rx} ${ry} L${sx} ${sy}`} stroke="var(--line)"
-                            strokeWidth="0.5" fill="none" opacity="0.7" />
-                    );
-                  })}
-                  {/* dead zone — nothing inside 0.5 m can be resolved */}
-                  <path d={`M${ox} ${oy} L${dx} ${dy}`} stroke="url(#deadzone)"
-                        strokeWidth="7" />
-                  {/* beam axis */}
-                  <path d={`M${ox} ${oy} L${pt(maxRange, eff)[0]} ${pt(maxRange, eff)[1]}`}
+                  {/* range arcs at 1/3 and 2/3 of the reach */}
+                  {[1 / 3, 2 / 3].map((f) => (
+                    <path key={f} d={arc(reach * f)} stroke="var(--line)"
+                          strokeWidth="0.5" fill="none" opacity="0.7" />
+                  ))}
+                  {/* dead zone — nothing inside 0.5 m slant can be resolved */}
+                  <path d={`M${ox} ${oy} L${pt(dead, 0)[0]} ${pt(dead, 0)[1]}`}
+                        stroke="url(#deadzone)" strokeWidth="7" />
+                  {/* boresight */}
+                  <path d={`M${ox} ${oy} L${pt(reach, 0)[0]} ${pt(reach, 0)[1]}`}
                         stroke="var(--faint)" strokeWidth="0.5" strokeDasharray="2 2" />
-                  {/* the echo */}
-                  {echo && (
-                    <circle cx={echo[0]} cy={echo[1]} r="4.5"
-                            fill={readout.gated ? q.tone : "var(--amber)"}
-                            opacity={readout.gated ? 0.95 : 0.55} />
+                  {/* the echo, drawn as an arc: one beam gives range but no
+                      bearing within the cone, so a dot would invent an angle */}
+                  {echoFwd != null && (
+                    <path d={arc(echoFwd)} fill="none"
+                          stroke={readout.gated ? q.tone : "var(--amber)"}
+                          strokeWidth="3" strokeLinecap="round"
+                          opacity={readout.gated ? 0.95 : 0.55} />
                   )}
                   {/* the drone */}
                   <circle cx={ox} cy={oy} r="4" fill="var(--ink)" />
@@ -361,6 +540,7 @@ export default function SonarView() {
               );
             })()}
           </svg>
+          )}
           <div className="sonar-cone-readout mono">
             <div className="sonar-cone-row">
               <span className="sonar-lbl">range</span>
@@ -388,6 +568,15 @@ export default function SonarView() {
             </div>
             {!readout.gated && readout.range != null && (
               <div className="sonar-note mono">peak echo — below confidence gate</div>
+            )}
+            {/* Why forward thrust went away. Without this the operator reads an
+                unresponsive throttle as a broken vehicle. */}
+            {sonar.braking && (
+              <div className="sonar-brake mono">
+                {sonar.brake >= 1
+                  ? "FWD STOP — obstacle ahead"
+                  : `FWD LIMIT ${Math.round((1 - sonar.brake) * 100)}%`}
+              </div>
             )}
           </div>
         </div>

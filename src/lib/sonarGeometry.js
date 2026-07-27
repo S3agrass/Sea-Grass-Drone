@@ -83,6 +83,70 @@ export function decomposeRange(rangeM, mountDeg = 45, pitchDeg = 0) {
   };
 }
 
+/* Half-angle of the beam's footprint as seen from DIRECTLY ABOVE, in degrees.
+ *
+ * The plan view looks straight down, so it shows the beam's horizontal spread —
+ * which is not the beam width. Take the cone edge deflected purely sideways by
+ * half-angle B: it sits R*sin(B) off to the side, and its along-axis component
+ * R*cos(B) projects to R*cos(B)*sin(theta) ahead. From above it therefore
+ * subtends atan(tan B / sin theta) — which correctly collapses to B itself when
+ * the beam is horizontal (theta = 90).
+ *
+ * The consequence is the point of drawing it this way: tilt the mount toward
+ * vertical and the wedge fans out toward 90deg while its reach collapses to
+ * nothing. That is the truth about a downward-looking beam — it sees a wide
+ * patch of seabed directly under the vehicle and nothing useful ahead of it —
+ * and it is exactly the thing an operator needs to know before trusting the
+ * sonar brake to see a wall. Clamped just under 90 so the wedge never degenerates
+ * into a half-plane the SVG arc can't draw.
+ */
+export function planHalfAngleDeg(effectiveMountDeg, beamDeg = PING_BEAM_DEG) {
+  if (!Number.isFinite(effectiveMountDeg) || !Number.isFinite(beamDeg)) return null;
+  const lateral = Math.tan((Math.min(89, Math.max(0, beamDeg) / 2) * Math.PI) / 180);
+  const forward = Math.sin((effectiveMountDeg * Math.PI) / 180);
+  // forward <= 0 means the beam points at or above the horizon: no plan-view
+  // reach at all, so the footprint is "everywhere and nowhere".
+  if (forward <= 0) return 89;
+  return Math.min(89, (Math.atan2(lateral, forward) * 180) / Math.PI);
+}
+
+/* POV tunnel: range -> ring radius in px, for the head-on submarine view.
+ *
+ * Perspective, not linear: a ring right at the transducer fills the frame and
+ * rings crowd together as they recede toward a vanishing point at maxRange.
+ * PERSPECTIVE_K sets how hard the falloff bites — higher pushes more of the
+ * range scale into the near field, which is where the detail matters, since
+ * that is where the sonar brake is deciding things.
+ */
+const PERSPECTIVE_K = 3;
+
+export function povRingRadius(rangeM, maxRangeM, viewSize) {
+  if (!Number.isFinite(rangeM) || !(maxRangeM > 0) || !(viewSize > 0)) return null;
+  if (rangeM < 0 || rangeM > maxRangeM) return null;
+  const t = rangeM / maxRangeM;
+  return ((viewSize / 2) * (1 - t)) / (1 + PERSPECTIVE_K * t);
+}
+
+/* POV blip: how big and how solid to draw a detection in the tunnel.
+ *
+ * `size` is a FRACTION of the view size, not pixels, so the caller owns the
+ * canvas scale (and the tests don't have to know it). Near contacts are drawn
+ * large and far ones small, matching the ring perspective, but with a floor so a
+ * contact at maximum range is still a visible dot rather than a sub-pixel one.
+ * Opacity carries confidence — a weak lock should look weak, not like a
+ * confident return.
+ */
+export function povBlipStyle(rangeM, maxRangeM, confidence) {
+  if (!Number.isFinite(rangeM) || !(maxRangeM > 0)) return null;
+  if (rangeM < 0 || rangeM > maxRangeM) return null;
+  const t = rangeM / maxRangeM;
+  const conf = Number.isFinite(confidence) ? Math.max(0, Math.min(100, confidence)) : 0;
+  return {
+    size: 0.04 + 0.16 * (1 - t) ** 1.5,
+    opacity: 0.25 + 0.75 * (conf / 100),
+  };
+}
+
 /* Peak-amplitude range from a profile, ignoring the dead zone. The device's own
  * `distance` is confidence-gated and often null in air; this is the "brightest
  * thing out there" used to place the cone marker when there is no hard lock. */

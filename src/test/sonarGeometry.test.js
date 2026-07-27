@@ -5,6 +5,10 @@ import {
   rangeToRow,
   decomposeRange,
   peakRange,
+  planHalfAngleDeg,
+  povBlipStyle,
+  povRingRadius,
+  PING_BEAM_DEG,
   PING_MIN_RANGE_M,
 } from '../lib/sonarGeometry';
 
@@ -145,5 +149,88 @@ describe('peakRange', () => {
     expect(peakRange([], 0, 10)).toBeNull();
     // A 0.3 m window is entirely inside the 0.5 m dead zone.
     expect(peakRange(new Array(200).fill(100), 0, 0.3)).toBeNull();
+  });
+});
+
+describe('planHalfAngleDeg', () => {
+  it('matches the physical beam half-angle when the beam looks dead ahead', () => {
+    // At 90deg off vertical the beam is horizontal, so its footprint seen from
+    // above is just the beam itself.
+    expect(planHalfAngleDeg(90, 25)).toBeCloseTo(12.5, 1);
+  });
+
+  it('widens as the mount tilts down toward the seabed', () => {
+    const ahead = planHalfAngleDeg(90, PING_BEAM_DEG);
+    const tilted = planHalfAngleDeg(45, PING_BEAM_DEG);
+    const steep = planHalfAngleDeg(15, PING_BEAM_DEG);
+    expect(tilted).toBeGreaterThan(ahead);
+    expect(steep).toBeGreaterThan(tilted);
+  });
+
+  it('saturates rather than degenerating when the beam points straight down', () => {
+    // sin(0) = 0 would be an infinite fan; the clamp keeps the wedge drawable.
+    expect(planHalfAngleDeg(0, PING_BEAM_DEG)).toBe(89);
+    expect(planHalfAngleDeg(-10, PING_BEAM_DEG)).toBe(89);
+  });
+
+  it('returns null for non-finite input', () => {
+    expect(planHalfAngleDeg(NaN)).toBeNull();
+    expect(planHalfAngleDeg(45, NaN)).toBeNull();
+  });
+});
+
+describe('povRingRadius', () => {
+  it('fills the frame at zero range and vanishes at max range', () => {
+    expect(povRingRadius(0, 10, 150)).toBeCloseTo(75, 6);
+    expect(povRingRadius(10, 10, 150)).toBeCloseTo(0, 6);
+  });
+
+  it('shrinks monotonically with range', () => {
+    const radii = [0, 2, 4, 6, 8, 10].map((r) => povRingRadius(r, 10, 150));
+    for (let i = 1; i < radii.length; i += 1) {
+      expect(radii[i]).toBeLessThan(radii[i - 1]);
+    }
+  });
+
+  it('crowds far rings together — that is the perspective', () => {
+    // Equal steps in metres must NOT be equal steps in pixels, or the tunnel
+    // reads as a flat set of circles.
+    const near = povRingRadius(0, 10, 150) - povRingRadius(2, 10, 150);
+    const far = povRingRadius(8, 10, 150) - povRingRadius(10, 10, 150);
+    expect(near).toBeGreaterThan(far * 2);
+  });
+
+  it('returns null outside the display window or for degenerate args', () => {
+    expect(povRingRadius(11, 10, 150)).toBeNull();
+    expect(povRingRadius(-1, 10, 150)).toBeNull();
+    expect(povRingRadius(5, 0, 150)).toBeNull();
+    expect(povRingRadius(5, 10, 0)).toBeNull();
+    expect(povRingRadius(NaN, 10, 150)).toBeNull();
+  });
+});
+
+describe('povBlipStyle', () => {
+  it('draws near contacts larger than far ones', () => {
+    expect(povBlipStyle(1, 10, 90).size).toBeGreaterThan(povBlipStyle(9, 10, 90).size);
+  });
+
+  it('keeps a far contact visible rather than shrinking it to nothing', () => {
+    expect(povBlipStyle(10, 10, 90).size).toBeGreaterThan(0.03);
+  });
+
+  it('carries confidence in the opacity so a weak lock looks weak', () => {
+    expect(povBlipStyle(5, 10, 100).opacity).toBeGreaterThan(povBlipStyle(5, 10, 10).opacity);
+    expect(povBlipStyle(5, 10, 100).opacity).toBeCloseTo(1, 6);
+  });
+
+  it('clamps out-of-range confidence instead of producing a wild opacity', () => {
+    expect(povBlipStyle(5, 10, 500).opacity).toBeCloseTo(1, 6);
+    expect(povBlipStyle(5, 10, -50).opacity).toBeCloseTo(0.25, 6);
+    expect(povBlipStyle(5, 10, null).opacity).toBeCloseTo(0.25, 6);
+  });
+
+  it('returns null outside the display window', () => {
+    expect(povBlipStyle(11, 10, 90)).toBeNull();
+    expect(povBlipStyle(NaN, 10, 90)).toBeNull();
   });
 });

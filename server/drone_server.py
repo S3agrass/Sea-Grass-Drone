@@ -499,6 +499,76 @@ def step_heading_hold(yaw):
     _refresh_heading_readout()
 
 
+# ---------------- sonar brake ----------------
+# Forward thrust is shed as the Ping2 sees something closing ahead, and cut
+# entirely inside SONAR_BRAKE_STOP_M. This is a BRAKE, not obstacle avoidance:
+# the Ping2 is one fixed forward beam with no scan and no array, so it can say
+# "something is N metres ahead" and nothing whatsoever about which way is clear.
+# Steering around an obstacle needs a left/right range comparison this hardware
+# cannot make, so the vehicle stops rather than guessing a direction — a guessed
+# dodge would also fight heading hold, which has no notion of "obstacle cleared"
+# and would simply steer back onto the original bearing and re-approach.
+#
+# Applied to the surge axis in channel_frame() rather than to the PWM, so it
+# rides the same ramp/creep-floor/all-stop paths as any other surge input and
+# holds under every drive mode (angle-table, vector, arc).
+SONAR_BRAKE = os.environ.get("SEAGRASS_SONAR_BRAKE", "1") not in ("0", "false", "False", "")
+# Inside this range forward thrust is zero. Wider than the Ping's 0.5 m dead
+# zone (see PING_MIN_RANGE_M in src/lib/sonarGeometry.js) so the vehicle stops
+# while the obstacle is still resolvable rather than as it vanishes into it.
+SONAR_BRAKE_STOP_M = float(os.environ.get("SEAGRASS_SONAR_STOP_M", "0.6"))
+# Braking starts here and ramps linearly to a full stop at STOP_M.
+SONAR_BRAKE_SLOW_M = float(os.environ.get("SEAGRASS_SONAR_SLOW_M", "2.0"))
+# Confidence floor for a reading to be allowed to brake. sonar_reader already
+# gates distance_m at PING_MIN_CONF; this is a second, independently tunable
+# floor so braking can be made stricter than the display without making the
+# display lie.
+SONAR_BRAKE_MIN_CONF = int(os.environ.get("SEAGRASS_SONAR_MIN_CONF", "50"))
+# A reading older than this cannot brake. The reader already blanks `latest` when
+# the link drops (_mark_down), so this is defence in depth for the window between
+# the last good read and that teardown — it keeps the control loop's safety from
+# depending on the reader's internal bookkeeping.
+SONAR_BRAKE_STALE_S = 2.0
+
+sonar_brake = 0.0  # fraction of forward thrust to shed: 0 = none, 1 = full stop
+brake_readout = {"brake": 0.0, "braking": False}
+
+
+def step_sonar_brake():
+    """Recompute `sonar_brake` from the latest sonar reading.
+
+    Uses the FILTERED distance_m (median of confidence-gated samples), not the
+    raw echo: braking on a single spike would lurch the vehicle every time a
+    fish or a bubble crossed the beam. The cost is a few samples of lag before a
+    suddenly-appearing obstacle registers.
+
+    Releasing on a stale/absent reading — rather than latching the brake on —
+    is deliberate. A dead sensor that permanently locked out forward thrust
+    would strand the vehicle with no way to drive out of a current, which is a
+    worse failure than one the operator can see on the camera and drive around.
+    This is an assist under a human, not a guarantee.
+    """
+    global sonar_brake
+    reading = sonar.latest
+    dist = reading.get("distance_m")
+    conf = reading.get("confidence")
+    ts = reading.get("ts") or 0.0
+
+    if (not SONAR_BRAKE or dist is None or conf is None
+            or conf < SONAR_BRAKE_MIN_CONF
+            or time.time() - ts > SONAR_BRAKE_STALE_S):
+        sonar_brake = 0.0
+    elif dist <= SONAR_BRAKE_STOP_M:
+        sonar_brake = 1.0
+    elif dist >= SONAR_BRAKE_SLOW_M:
+        sonar_brake = 0.0
+    else:
+        span = SONAR_BRAKE_SLOW_M - SONAR_BRAKE_STOP_M
+        sonar_brake = (SONAR_BRAKE_SLOW_M - dist) / span if span > 0 else 1.0
+
+    brake_readout.update(brake=round(sonar_brake, 3), braking=sonar_brake > 0.0)
+
+
 # ---------------- camera subprocess ----------------
 # The repo-root camera_stream.py (Picamera2 -> MJPEG on :8000) is the camera
 # path that actually runs on this Pi. server/camera_stream.py is the WebRTC/
@@ -1068,6 +1138,16 @@ def channel_frame(dt):
     steer_in = _axis_value("d", "a", axis_targets["steer"])
     depth_in = _axis_value("q", "e", axis_targets["depth"])
 
+    # Sonar brake: shed forward thrust as something closes ahead. Applied to the
+    # axis input, before expo/turn-assist/ramp, so it damps the *request* and
+    # every downstream path (all three drive modes, the creep floor, the ramp)
+    # treats the braked value as if the pilot had eased off the stick.
+    # Deliberately one-directional — reverse is how you back away from whatever
+    # triggered it, so it is never restricted.
+    step_sonar_brake()
+    if sonar_brake > 0.0 and surge_in > 0.0:
+        surge_in *= 1.0 - sonar_brake
+
     # Heading hold steers only while the operator isn't. Injecting here as an
     # ordinary steer input — rather than writing ch4 directly — is what makes the
     # autonomous command inherit every existing safety path unchanged: the ramp,
@@ -1375,8 +1455,12 @@ async def client_handler(ws):
             # Gauge-level sonar: scalars only. The ~200-sample amplitude array
             # goes out on its own faster loop below, so it is stripped here
             # rather than paying ~800 bytes twice at two different rates.
+            # brake_readout rides along so the operator can see *why* forward
+            # thrust went away — an unexplained refusal to drive reads as a
+            # broken vehicle, not as an assist doing its job.
             await send({"type": "sonar",
-                        **{k: v for k, v in sonar.latest.items() if k != "profile"}})
+                        **{k: v for k, v in sonar.latest.items() if k != "profile"},
+                        **brake_readout})
             for level, message in notices:
                 await send({"type": "notice", "level": level, "message": message})
             await state()

@@ -644,6 +644,35 @@
 .sonar-num { font-size: 13px; font-weight: 700; }
 .sonar-note { font-size: 9px; color: var(--amber); line-height: 1.3; margin-top: 2px; }
 
+/* Sonar brake state. Deliberately the loudest thing in the panel: it is the
+   explanation for a throttle that has stopped responding, and an operator who
+   misses it will think the vehicle has failed. */
+.sonar-brake {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--red);
+  border: 1px solid var(--red);
+  border-radius: var(--radius-sm);
+  padding: 2px 5px;
+  margin-top: 3px;
+  text-align: center;
+}
+
+/* --- POV tunnel --- */
+/* Square bitmap (POV_SIZE in SonarView.jsx) so the rings stay circular without
+   an aspect correction in the draw code; sized here to the cone slot it
+   replaces, so toggling views doesn't reflow the panel. */
+.sonar-pov-canvas {
+  width: 150px;
+  height: 130px;
+  flex-shrink: 0;
+  display: block;
+  background: var(--abyss);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
 /* --- echogram --- */
 .sonar-echo { position: relative; display: flex; flex-direction: column; min-width: 0; }
 .sonar-echo-canvas {

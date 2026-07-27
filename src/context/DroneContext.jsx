@@ -101,12 +101,17 @@ export function DroneProvider({ children }) {
   // confidence-gated samples — null when nothing real is in view); raw_m is the
   // latest unfiltered echo for debugging; quality is the lock state
   // ("good" | "weak" | "none"); ok tracks the serial link on the Pi.
+  // `brake`/`braking` are the sonar brake's state, not the sensor's: the
+  // fraction of forward thrust the server is withholding because something is
+  // close ahead. They ride the sonar message because they are derived from it.
   const [sonar, setSonar] = useState({
     distance_m: null,
     raw_m: null,
     confidence: null,
     quality: "none",
     ok: false,
+    brake: 0,
+    braking: false,
   });
   // Altitude-hold PID demo state (server runs it on live baro altitude; output is
   // display-only). setpoint is the captured "hold" altitude; ok tracks whether the
@@ -256,7 +261,11 @@ export function DroneProvider({ children }) {
           setCameraActive(false);
           setDetectActive(false);
           setDetections([]);
-          setSonar({ distance_m: null, raw_m: null, confidence: null, quality: "none", ok: false });
+          // brake/braking clear with the rest: a "FWD STOP" warning left on
+          // screen after the link dropped would be reporting a live restriction
+          // that nothing is applying any more.
+          setSonar({ distance_m: null, raw_m: null, confidence: null, quality: "none",
+                     ok: false, brake: 0, braking: false });
           setPid({ setpoint: null, measurement: null, error: null, integral: null, output: null, ok: false });
           // The server releases the hold when the client drops, so the UI must
           // not keep showing "engaged" after a disconnect.
@@ -287,6 +296,8 @@ export function DroneProvider({ children }) {
             confidence: m.confidence ?? null,
             quality: m.quality ?? "none",
             ok: Boolean(m.ok),
+            brake: m.brake ?? 0,
+            braking: Boolean(m.braking),
           });
         } else if (m.type === "pid") {
           setPid({
@@ -348,13 +359,22 @@ export function DroneProvider({ children }) {
       }));
       // Simulated submerged sonar: a wandering forward distance with a healthy
       // confidence, so the gauge previews live-looking data with no hardware.
-      const simDist = Number((2.5 + Math.random() * 1.5).toFixed(2));
+      // The range spans the braking band deliberately — otherwise demo mode
+      // could never show the brake indicator, which is the one part of this
+      // feature that has no other way to be seen without water.
+      const simDist = Number((0.4 + Math.random() * 3.2).toFixed(2));
+      // Mirrors the server's SONAR_BRAKE_STOP_M / SONAR_BRAKE_SLOW_M defaults.
+      // Preview only — the real value always comes from the server, which is
+      // the only thing that actually withholds thrust.
+      const simBrake = Math.max(0, Math.min(1, (2.0 - simDist) / (2.0 - 0.6)));
       setSonar({
         distance_m: simDist,
         raw_m: Number((simDist + (Math.random() * 0.2 - 0.1)).toFixed(2)),
         confidence: Math.round(55 + Math.random() * 35),
         quality: "good",
         ok: true,
+        brake: Number(simBrake.toFixed(3)),
+        braking: simBrake > 0,
       });
       // Simulated altitude-hold PID: error drives the (display-only) output.
       const error = pidSetpoint - altitude;
