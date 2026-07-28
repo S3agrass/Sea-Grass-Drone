@@ -20,7 +20,6 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEST_DIR="${HERE}/../server/vision/models"
-DEST="${DEST_DIR}/yolox_nano.onnx"
 
 # 416px input, which matches detector.py's DETECT_SIZE default, and exported by
 # the same yolox.tools.export_onnx that training/scripts/export_onnx.sh uses —
@@ -37,6 +36,18 @@ for arg in "$@"; do
         *) URL="$arg" ;;
     esac
 done
+
+# Name the file after what was actually downloaded. Hardcoding yolox_nano.onnx
+# meant fetching yolox_tiny or yolox_s — the obvious next thing to try when the
+# nano model proves too weak — saved it under the nano name, leaving no way to
+# tell which model was deployed and making DETECT_SIZE mismatches (nano/tiny are
+# 416, s and up are 640) very hard to diagnose.
+BASENAME="$(basename "${URL%%\?*}")"
+case "$BASENAME" in
+    *.onnx) ;;
+    *) BASENAME="yolox_nano.onnx" ;;  # URL without a usable filename
+esac
+DEST="${DEST_DIR}/${BASENAME}"
 
 if [ -f "$DEST" ] && [ "$FORCE" -eq 0 ]; then
     echo "Model already present: $DEST"
@@ -68,6 +79,13 @@ fi
 mv "$TMP" "$DEST"
 trap - EXIT
 echo "Saved $DEST ($((SIZE / 1024 / 1024)) MB)"
+if [ "$BASENAME" != "yolox_nano.onnx" ]; then
+    echo
+    echo "Not the default filename, so point the detector at it:"
+    echo "  DETECT_MODEL=$DEST"
+    echo "Check the input size too — nano and tiny are 416, s and larger are 640:"
+    echo "  DETECT_SIZE=640"
+fi
 echo
 echo "Verify it before wiring anything up — this prints straight to your"
 echo "terminal, where the server would otherwise swallow the output:"
