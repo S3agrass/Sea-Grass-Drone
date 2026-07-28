@@ -1520,13 +1520,40 @@ async def client_handler(ws):
         # Observed in the field exactly that way. send() only swallows
         # ConnectionClosed, so anything else — a value the encoder can't take,
         # say — escapes. One bad ping should cost one frame, not the session.
+        #
+        # LIVENESS. Keying on ping_number alone let the device starve the panel:
+        # if that counter stops advancing while the link still answers, the
+        # reader keeps filling its window with fresh replies — so the lock stays
+        # "good" and the 2 Hz gauge keeps updating — while this loop, seeing an
+        # unchanged key, sends nothing at all. The UI then blanks a few seconds
+        # in and still reads LOCK, which points every suspicion at the wrong
+        # subsystem. So a stale key is forced out after MAX_SILENCE_S: one row
+        # per acoustic ping when the counter behaves, and never total silence
+        # when it does not. A repeated row is honest here — it is what the
+        # device is telling us.
+        MAX_SILENCE_S = 0.5
         last_ping = None
+        last_sent_at = 0.0
+        stall_warned = False
         while True:
             try:
                 snap = sonar.latest  # replaced wholesale by the reader — safe to alias
                 ping_no = snap.get("ping_number")
-                if snap.get("ok") and ping_no is not None and ping_no != last_ping:
+                now = time.time()
+                fresh = ping_no is None or ping_no != last_ping
+                if snap.get("ok") and (fresh or now - last_sent_at > MAX_SILENCE_S):
+                    if not fresh and not stall_warned:
+                        # Said once, not per tick. Names the subsystem, because
+                        # the symptom (blank readout, LOCK still lit) otherwise
+                        # implicates the link or the browser rather than the
+                        # device's own counter.
+                        stall_warned = True
+                        print(f"Sonar: ping_number stuck at {ping_no} while reads "
+                              "still succeed — sending on a timer instead")
+                    elif fresh:
+                        stall_warned = False
                     last_ping = ping_no
+                    last_sent_at = now
                     await send({
                         "type": "sonar_profile",
                         "ping": ping_no,
