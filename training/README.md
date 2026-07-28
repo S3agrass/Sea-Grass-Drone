@@ -37,6 +37,39 @@ wget -O yolox_nano.pth <yolox_nano.pth release URL from YOLOX repo>
 
 ## 1. Collect and annotate footage
 
+> ### Faster: start from a public dataset
+>
+> Annotating from scratch is the slow path — roughly 500–2000 images for a
+> usable fine-tune, at 5–20 s each, so several hours of labelling on top of a
+> dive day. If you need something working sooner, fine-tune on published
+> underwater detection data instead and only add your own footage afterwards.
+>
+> All of these are box-labelled and export or convert to **COCO 1.0**, which is
+> exactly what `train.sh` consumes — drop them into the layout below and skip
+> steps 1–3:
+>
+> | Dataset | Size | Notes |
+> |---|---|---|
+> | **RUOD** | 9,800 train / 4,200 test | 10 categories, the broadest of these |
+> | **DUO** | 7,782 images | 4 classes (holothurian, echinus, scallop, starfish) |
+> | **URPC2019** | 5 categories | Natural seafloor imagery |
+> | **Roboflow Universe** | varies | Search "underwater"; exports COCO directly in the browser |
+>
+> **Expect a domain gap.** A model trained on someone else's water, camera and
+> species will underperform in yours — different turbidity, different colour
+> cast, different fauna. Treat a public-data model as a strong starting point,
+> then fine-tune it again on a few hundred of your own frames once you have
+> them. That second pass is far cheaper than annotating from zero.
+>
+> **Seagrass is not on this list on purpose.** See the note in
+> [`labels.txt`](./labels.txt): it is ground cover rather than discrete objects,
+> so it wants classification or segmentation, not boxes. The relevant public
+> work — DeepSeagrass (66k images, patch labels, pretrained CSIRO models) and
+> *Image Labels Are All You Need for Coarse Seagrass Segmentation* (WACV 2024) —
+> is a separate model with a separate inference path, not a class here.
+
+### Collecting your own
+
 1. Pull video/stills off the ROV and extract frames (e.g. `ffmpeg -i dive.mp4 -vf fps=2 frames/%05d.jpg`).
 2. Annotate bounding boxes. Recommended tool: **CVAT** (MIT, self-hosted via
    Docker) — it does video-frame annotation and exports COCO natively.

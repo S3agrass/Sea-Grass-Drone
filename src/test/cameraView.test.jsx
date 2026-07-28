@@ -175,6 +175,26 @@ describe('CameraView — detection toggle', () => {
     const { container } = render(<CameraView />);
     expect(container.querySelector('canvas.detection-overlay')).toBeInTheDocument();
   });
+
+  it('renders the detection overlay canvas for an MJPEG stream too', () => {
+    // The one that mattered. The overlay was gated on webrtc while the Pi
+    // actually serves MJPEG (camera_stream.py, :8000/stream.mjpg), so on real
+    // hardware the canvas never existed and no detection could ever be drawn,
+    // however well the detector was running.
+    mockCtx.cameraActive = true;
+    mockCtx.activeDrone = { camera_url: 'http://seagrass.local:8000/stream.mjpg' };
+    const { container } = render(<CameraView />);
+    expect(container.querySelector('canvas.detection-overlay')).toBeInTheDocument();
+  });
+
+  it('gives the MJPEG img a ref target so the overlay can measure it', () => {
+    // The <img> had no ref at all; without one the draw effect bails and the
+    // canvas stays blank even once it is mounted.
+    mockCtx.cameraActive = true;
+    mockCtx.activeDrone = { camera_url: 'http://seagrass.local:8000/stream.mjpg' };
+    const { container } = render(<CameraView />);
+    expect(container.querySelector('img[alt="Live camera feed"]')).toBeInTheDocument();
+  });
 });
 
 describe('CameraView — standalone viewing (no drone link)', () => {

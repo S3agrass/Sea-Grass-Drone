@@ -63,6 +63,16 @@ SEAGRASS_TOKEN=
 # Top speed, as PWM offset from neutral. Vehicle hard limit is 400.
 #SEAGRASS_MAX_OFFSET=250
 #SEAGRASS_STEER_OFFSET=150
+
+# ---- Object detection (see SETUP.md 5e) ------------------------------------
+# Needs a model first:  ./scripts/fetch-model.sh
+#DETECT_MODEL=/home/pi/Sea-Grass-Drone/server/vision/models/yolox_nano.onnx
+#DETECT_LABELS=/home/pi/Sea-Grass-Drone/server/vision/models/coco.txt
+# Inference rate. Lower it if the Pi cannot keep up beside the MJPEG encoder.
+#DETECT_FPS=5
+# Underwater colour correction. Set 0 for dry bench testing — in air it skews
+# the colour statistics the model was trained on.
+#DETECT_UNDERWATER=1
 EOF
   )
   fail "first run: created template $ENV_FILE

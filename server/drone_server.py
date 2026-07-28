@@ -732,46 +732,113 @@ async def record_stop():
 _DETECTOR_SCRIPT = os.path.join(os.path.dirname(__file__), "vision", "detector.py")
 detector_proc: "asyncio.subprocess.Process | None" = None
 latest_detections = {"boxes": [], "ts": 0}
+# Explicit liveness, because asyncio.Process.returncode is NOT one: it stays
+# None until the child is reaped, so a detector that exited instantly (the
+# normal case when the model file is missing) still read as running, `state`
+# kept reporting detect=true, and the UI toggle latched on for a corpse.
+detector_alive = False
+# Last few stderr lines, so a failure can be reported with the detector's own
+# words instead of a generic "it didn't start".
+detector_last_error: "list[str]" = []
+# How long to wait before deciding a spawn failed. A config or missing-model
+# exit happens in well under this; a healthy detector is still loading its
+# model. Deliberately NOT proc.wait() — that would block the message handler
+# for as long as the detector runs, i.e. forever on success.
+_DETECTOR_STARTUP_GRACE_S = 0.4
 
 
 def detector_running() -> bool:
-    return detector_proc is not None and detector_proc.returncode is None
+    return detector_proc is not None and detector_alive
 
 
-async def start_detector():
-    global detector_proc
+async def _drain_detector_stderr(proc):
+    """Relay the detector's stderr into the server log.
+
+    This used to be DEVNULL, which threw away the only thing that ever
+    explained a silent failure: detector.py prints an actionable line for a
+    missing model, missing labels or a bad env value and then exits, and all of
+    it went straight to the bit bucket. The operator saw an AI button that did
+    nothing at all.
+    """
+    while True:
+        line = await proc.stderr.readline()
+        if not line:
+            return
+        text = line.decode(errors="replace").rstrip()
+        if not text:
+            continue
+        print(text if text.startswith("Detector:") else f"Detector: {text}")
+        detector_last_error.append(text)
+        del detector_last_error[:-5]
+
+
+async def start_detector() -> "tuple[bool, str]":
+    """Spawn the detector. Returns (ok, detail) — detail is empty when ok."""
+    global detector_proc, detector_alive
     if detector_running():
-        return
+        return True, ""
+    detector_last_error.clear()
     try:
         detector_proc = await asyncio.create_subprocess_exec(
             "python3", _DETECTOR_SCRIPT,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
             env={**os.environ, "DETECT_FRAME": DETECT_FRAME_PATH},
         )
-        print(f"Detector started (pid {detector_proc.pid})")
-        asyncio.create_task(_read_detections(detector_proc))
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — python3 missing, script gone, etc.
+        detector_alive = False
         print(f"Failed to start detector: {exc}")
+        return False, str(exc)
+
+    detector_alive = True
+    print(f"Detector started (pid {detector_proc.pid})")
+    asyncio.create_task(_drain_detector_stderr(detector_proc))
+    asyncio.create_task(_read_detections(detector_proc))
+
+    # Give it long enough to fall over on a bad config, then check. Catching it
+    # here is what lets the failure reach the operator at the moment they press
+    # the button, rather than as an AI toggle that lights up and does nothing.
+    await asyncio.sleep(_DETECTOR_STARTUP_GRACE_S)
+    if detector_proc is not None and detector_proc.returncode is not None:
+        detail = detector_last_error[-1] if detector_last_error else \
+            f"detector exited with code {detector_proc.returncode}"
+        return False, detail
+    return True, ""
 
 
 async def _read_detections(proc):
     """Consume the detector's stdout JSON lines into latest_detections."""
-    global latest_detections
-    while proc.returncode is None:
-        line = await proc.stdout.readline()
-        if not line:
-            break
-        try:
-            latest_detections = json.loads(line)
-        except json.JSONDecodeError:
-            continue
+    global latest_detections, detector_alive
+    try:
+        while True:
+            line = await proc.stdout.readline()
+            if not line:
+                break
+            try:
+                latest_detections = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+    finally:
+        # EOF means the child is finishing, whatever the reason. Reap it so the
+        # exit code is real, then mark it dead and drop the last detections —
+        # leaving them up would keep boxes on screen for a detector that no
+        # longer exists.
+        code = await proc.wait()
+        if proc is detector_proc:
+            detector_alive = False
+            latest_detections = {"boxes": [], "ts": 0}
+            # Positive codes only: a negative one is the signal from our own
+            # terminate() in stop_detector, and reporting a clean shutdown as an
+            # error trains people to ignore the line that matters.
+            if code > 0:
+                print(f"Detector exited with code {code}")
 
 
 async def stop_detector():
-    global detector_proc, latest_detections
+    global detector_proc, latest_detections, detector_alive
     latest_detections = {"boxes": [], "ts": 0}
-    if not detector_running():
+    detector_alive = False
+    if detector_proc is None or detector_proc.returncode is not None:
         detector_proc = None
         return
     detector_proc.terminate()
@@ -1696,7 +1763,13 @@ async def client_handler(ws):
                     await record_stop()
                 await state()
             elif mtype == "detect_on":
-                await start_detector()
+                ok, detail = await start_detector()
+                if not ok:
+                    # Say why, in the detector's own words. Without this the
+                    # button lights up, nothing happens, and the reason (almost
+                    # always a missing model file) is invisible from the UI.
+                    await send({"type": "notice", "level": "error",
+                                "message": f"Detector failed to start — {detail}"})
                 await state()
             elif mtype == "detect_off":
                 await stop_detector()
@@ -1817,6 +1890,17 @@ async def main():
     asyncio.create_task(mission_recorder_loop())
     # Reconnect the Pixhawk automatically if its USB link drops.
     asyncio.create_task(pixhawk_supervisor_loop())
+    # Camera up with the server, not on operator demand. It used to start only
+    # when a browser opened the Control page and stop when that page closed,
+    # which the detector cannot live with: the JPEG frame tap lives inside
+    # camera_stream.py, so nothing was being detected at any moment nobody
+    # happened to be watching the feed — the exact moments an autonomous vehicle
+    # most needs to be looking. Also means the stream is already up when an
+    # operator connects instead of taking a few seconds to appear.
+    #
+    # The cost is real and deliberate: the camera now draws power and CPU for
+    # the whole session. start_camera() blocks on Popen, hence the thread.
+    await asyncio.to_thread(start_camera)
     print(f"Auto-record: {'ON' if autorecord_enabled else 'off'}")
     async with websockets.serve(client_handler, WS_HOST, WS_PORT):
         print(f"Seagrass drone server listening on ws://{WS_HOST}:{WS_PORT}")

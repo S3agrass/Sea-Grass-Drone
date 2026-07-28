@@ -109,6 +109,9 @@ export default function CameraView() {
   const [fullscreen, setFullscreen] = useState(false);
 
   const videoRef = useRef(null);
+  // The MJPEG <img> needs a ref too. It had none, which is half of why
+  // detections were invisible on the camera path that actually runs.
+  const imgRef = useRef(null);
   const canvasRef = useRef(null);
 
   // When the camera subprocess starts/stops on the Pi, or the stream URL
@@ -155,16 +158,23 @@ export default function CameraView() {
   }, [feedState, type, streamUrl]);
 
   // Detection overlay — draw normalized bounding boxes onto a canvas sized to
-  // the displayed video. Boxes arrive as fractions (0-1) of the full source
-  // frame; the video is shown with object-fit: cover, so we replicate that
+  // the displayed feed. Boxes arrive as fractions (0-1) of the full source
+  // frame; the feed is shown with object-fit: cover, so we replicate that
   // scale/crop here to keep boxes aligned with what the operator sees.
+  //
+  // Works over BOTH elements. It used to be mounted for WebRTC only, while the
+  // Pi actually serves MJPEG (repo-root camera_stream.py, :8000/stream.mjpg) —
+  // so on real hardware the canvas never existed and no detection could ever be
+  // seen, however well the detector was working. The maths needed no change:
+  // `.camera-feed img` and `.camera-feed video` carry identical CSS, so the
+  // cover-replication below is already right for both.
   useEffect(() => {
     const canvas = canvasRef.current;
-    const video = videoRef.current;
-    if (!canvas || !video) return;
+    const media = type === "mjpeg" ? imgRef.current : videoRef.current;
+    if (!canvas || !media) return;
 
     const draw = () => {
-      const rect = video.getBoundingClientRect();
+      const rect = media.getBoundingClientRect();
       if (canvas.width !== rect.width || canvas.height !== rect.height) {
         canvas.width = rect.width;
         canvas.height = rect.height;
@@ -175,8 +185,10 @@ export default function CameraView() {
       if (!detectActive) return;
 
       // Replicate object-fit: cover — scale to fill, centre, crop the overflow.
-      const vw = video.videoWidth || rect.width;
-      const vh = video.videoHeight || rect.height;
+      // <video> reports videoWidth, <img> naturalWidth, and an <img> reports 0
+      // until its first frame decodes — hence both fallbacks.
+      const vw = media.videoWidth || media.naturalWidth || rect.width;
+      const vh = media.videoHeight || media.naturalHeight || rect.height;
       const scale = Math.max(rect.width / vw, rect.height / vh);
       const dispW = vw * scale;
       const dispH = vh * scale;
@@ -202,12 +214,16 @@ export default function CameraView() {
     };
 
     draw();
-    // Re-fit and redraw when the video's displayed size changes (window resize,
+    // Re-fit and redraw when the displayed size changes (window resize,
     // fullscreen toggle).
     const ro = new ResizeObserver(draw);
-    ro.observe(video);
+    ro.observe(media);
     return () => ro.disconnect();
-  }, [detections, detectActive, fullscreen]);
+    // type/feedState/retryKey matter because the <img> is keyed on
+    // `${retryKey}-${wantFeed}` and so is REMOUNTED on a retry — without them
+    // the observer would stay attached to a detached node and the overlay would
+    // quietly stop updating.
+  }, [detections, detectActive, fullscreen, type, feedState, retryKey]);
 
   // Wall clock — current time overlaid on the feed, ticking once a second.
   useEffect(() => {
@@ -254,14 +270,17 @@ export default function CameraView() {
         />
       )}
 
-      {/* Detection bounding-box overlay — drawn over the live video */}
-      {type === "webrtc" && (
+      {/* Detection bounding-box overlay — drawn over whichever feed is live.
+          Mounted for MJPEG as well as WebRTC: the Pi serves MJPEG, so gating
+          this on webrtc meant boxes were never drawn on real hardware. */}
+      {(type === "webrtc" || type === "mjpeg") && (
         <canvas ref={canvasRef} className="detection-overlay" />
       )}
 
       {/* Legacy MJPEG img element */}
       {type === "mjpeg" && wantFeed && (
         <img
+          ref={imgRef}
           key={`${retryKey}-${wantFeed}`}
           src={streamUrl}
           alt="Live camera feed"

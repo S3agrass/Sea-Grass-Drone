@@ -195,6 +195,63 @@ All optional — defaults work for most setups:
 | `CAM_FPS` | `30` | Frame rate |
 | `CAM_BITRATE` | `2000` | H.264 bitrate in kbps |
 
+### 5e. Object detection (YOLOX)
+
+The detector (`server/vision/detector.py`) reads the JPEG frame that
+`camera_stream.py` continuously drops on disk, runs a YOLOX ONNX model over it,
+and streams boxes to the browser. The AI button on the Control page starts and
+stops it.
+
+**You must fetch a model first.** It is a ~3.5 MB binary and is deliberately not
+in git (`.gitignore` excludes `server/vision/models/*.onnx`), so a fresh clone
+has no detector at all:
+
+```bash
+pip install -r server/requirements.txt   # onnxruntime, opencv-python-headless, numpy
+./scripts/fetch-model.sh                 # -> server/vision/models/yolox_nano.onnx
+```
+
+**Check it before wiring anything up.** Run it by hand against any photo — this
+prints to your terminal, where the server would otherwise route it to the log:
+
+```bash
+DETECT_UNDERWATER=0 DETECT_FRAME=/path/to/photo.jpg python3 server/vision/detector.py
+```
+
+Expect a banner naming the model and output shape, then one JSON line per
+frame. Ctrl-C to stop.
+
+> **The stock model is a test instrument, not the product.** It is trained on
+> COCO — 80 land classes, `person`, `car`, `bottle` — and will not recognise
+> anything marine. Its job is to prove camera → frame tap → inference →
+> WebSocket → overlay in one go. Point the camera at yourself, see a box, and
+> the whole path is confirmed. Swap in a trained model by setting
+> `DETECT_MODEL`; nothing else changes. See `training/README.md`.
+
+| Variable | Default | Description |
+|---|---|---|
+| `DETECT_MODEL` | `server/vision/models/yolox_nano.onnx` | ONNX model path |
+| `DETECT_LABELS` | `server/vision/models/coco.txt` | One class name per line, order = class index |
+| `DETECT_FPS` | `5` | Max inference rate. Drop to 2–3 if the Pi can't keep up |
+| `DETECT_SIZE` | `416` | Model input square. Must match the export |
+| `DETECT_CONF` | `0.35` | Confidence threshold |
+| `DETECT_UNDERWATER` | `1` | Colour filter. **Set 0 for dry testing** — it corrects a blue-green cast that isn't there in air |
+| `DETECT_DECODE` | `1` | Set 0 only for a model exported *with* `decode_in_inference` |
+| `DETECT_STALE_S` | `3.0` | Clear boxes after this long with no fresh frame |
+
+Put any overrides in `~/.seagrass-env`; systemd reads it via `EnvironmentFile`.
+
+**Troubleshooting.** Detection failures now surface as a toast in the UI and a
+`Detector:` line in `journalctl -fu drone-server`. The usual causes:
+
+- *"model not found"* — run `./scripts/fetch-model.sh`.
+- *Boxes are tiny and bunched in the top-left corner* — the model was exported
+  with the decode already baked in. Set `DETECT_DECODE=0`.
+- *No boxes at all, no errors* — check the camera is running
+  (`ps aux | grep camera_stream`); the detector needs its frame tap.
+- *Detection lags badly* — it is CPU-bound on the Pi and shares the core with
+  the MJPEG encoder. Lower `DETECT_FPS`, or `DETECT_SIZE` to 320.
+
 ---
 
 ## 6. Remote access — Tailscale

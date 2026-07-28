@@ -19,11 +19,19 @@ const DroneContext = createContext(null);
 // camera promptly. Only the OFF side is debounced; ON is always immediate.
 const CAMERA_OFF_DEBOUNCE_MS = 400;
 
+// The Pi serves MJPEG from a fixed, known place — camera_stream.py binds
+// ('', 8000) and routes /stream.mjpg — so there is no reason for this to have
+// shipped blank. It did, and a blank camera_url is indistinguishable from a
+// deliberate one: no feed renders, and `shouldCameraBeOn` stays false so the
+// camera never even starts. The operator sees a dead panel with nothing
+// anywhere explaining that a field they have never been shown is empty.
+export const DEFAULT_CAMERA_URL = "http://seagrass.local:8000/stream.mjpg";
+
 const LOCAL_DRONE = {
   id: "local",
   name: "Seagrass One",
   host: "ws://seagrass.local:8765",
-  camera_url: "",
+  camera_url: DEFAULT_CAMERA_URL,
   token: "",
 };
 
@@ -39,9 +47,21 @@ const LIVE_HOST = "seagrass.local";
 function migrateDeadHosts(fleet) {
   let changed = false;
   const migrated = fleet.map((d) => {
-    if (typeof d?.host !== "string" || !d.host.includes(DEAD_HOST)) return d;
-    changed = true;
-    return { ...d, host: d.host.replaceAll(DEAD_HOST, LIVE_HOST) };
+    let next = d;
+    if (typeof d?.host === "string" && d.host.includes(DEAD_HOST)) {
+      changed = true;
+      next = { ...next, host: d.host.replaceAll(DEAD_HOST, LIVE_HOST) };
+    }
+    // Same class of problem as the dead host: a wrong shipped default that
+    // localStorage then pins forever. Filling a BLANK one in is safe because
+    // blank has no behaviour to preserve — it renders no feed and blocks the
+    // camera from starting. Anything the operator actually set, including a
+    // tunnelled or custom address, is left strictly alone.
+    if (!d?.camera_url) {
+      changed = true;
+      next = { ...next, camera_url: DEFAULT_CAMERA_URL };
+    }
+    return next;
   });
   return changed ? migrated : fleet;
 }
@@ -436,8 +456,19 @@ export function DroneProvider({ children }) {
     recordingRef.current = recording;
   }, [recording]);
 
+  // Deliberately NOT gated on `cameraViewing` any more. It used to be, which
+  // meant navigating off the Control page sent camera_off — an automatic kill
+  // switch nobody asked for, and one the detector cannot survive: the JPEG
+  // frame tap lives inside camera_stream.py, so closing the tab stopped
+  // detection too. The camera is now simply on whenever the drone is, matching
+  // the server, which also starts it at boot.
+  //
+  // `cameraViewing` is still tracked and still exported — CameraView sets it,
+  // and knowing whether anyone is actually looking is worth keeping — it just
+  // no longer decides whether the camera runs. The manual toggle still does;
+  // an operator turning it off deliberately is not an automatic anything.
   const shouldCameraBeOn =
-    linkStatus === "connected" && !!activeDrone?.camera_url && cameraViewing;
+    linkStatus === "connected" && !!activeDrone?.camera_url;
   useEffect(() => {
     if (shouldCameraBeOn) {
       clearTimeout(offTimerRef.current); // cancel any pending shutdown

@@ -724,7 +724,11 @@ Only the first authenticated client that sends a command takes the helm. This is
 WHEP supports "trickle ICE" where candidates are sent incrementally, but this requires a second round-trip per candidate. For Tailscale (P2P VPN), all candidates resolve quickly and sending a complete offer in one POST is simpler, more reliable, and adds only ~1-2 seconds of connection setup time.
 
 ### Camera subprocess managed by drone_server.py (not systemd)
-The camera starts/stops on operator demand via WebSocket commands, not at Pi boot. This saves battery and processing power when the camera isn't needed, and gives the operator explicit control. The trade-off is that if `drone_server.py` crashes, the camera also stops — a deliberate choice to keep the two services tightly coupled.
+The camera is a child of `drone_server.py` rather than its own systemd unit, so if the server dies the camera goes with it — deliberate, keeping the two tightly coupled.
+
+It **starts with the server**, not on operator demand. It originally did the latter, to save battery and CPU while nobody was watching, and that stopped being tenable once the detector existed: the JPEG frame tap lives inside `camera_stream.py`, so a camera that only ran while a browser had the Control page open meant nothing was detected at any moment nobody happened to be looking — the moments an autonomous vehicle most needs to be watching. The client side matched, sending `camera_off` when the viewer unmounted; both now keep it running.
+
+The cost is real: the camera draws power and CPU for the whole session. The operator can still switch it off explicitly, and the all-stop kill switch still takes it down with everything else — what went away is anything turning it off *automatically*.
 
 ---
 

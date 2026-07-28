@@ -1,13 +1,15 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { useDrone } from "../context/DroneContext";
+import { useDrone, DEFAULT_CAMERA_URL } from "../context/DroneContext";
 
+// Pre-filled rather than blank: a blank camera_url silently means "no feed and
+// never start the camera", and the Pi's MJPEG address is fixed and known.
 const EMPTY = {
   id: "new",
   name: "",
   host: "ws://seagrass.local:8765",
-  camera_url: "",
+  camera_url: DEFAULT_CAMERA_URL,
   token: "",
 };
 

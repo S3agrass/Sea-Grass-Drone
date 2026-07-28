@@ -183,15 +183,31 @@ describe('DroneContext — debounced camera lifecycle', () => {
     expect(mockLink.cameraOff).not.toHaveBeenCalled();
   });
 
-  it('turns the camera off after a genuine, lasting exit', () => {
+  it('keeps the camera on after the operator navigates away', () => {
+    // This used to assert the opposite, and the opposite was wrong. Viewer
+    // presence deciding whether the camera runs meant closing the Control page
+    // stopped the camera — and with it the JPEG frame tap, and with that all
+    // detection, at precisely the moments nobody was watching. The camera is
+    // now on whenever the drone is; only a deliberate toggle turns it off.
     const getCtx = renderContext();
     connectAndView(getCtx);
 
     act(() => { getCtx().setCameraViewing(false); });
-    act(() => { vi.advanceTimersByTime(100); });
-    expect(mockLink.cameraOff).not.toHaveBeenCalled(); // still within debounce
-    act(() => { vi.advanceTimersByTime(400); });        // past 400ms
-    expect(mockLink.cameraOff).toHaveBeenCalledOnce();
+    act(() => { vi.advanceTimersByTime(5000); }); // well past any debounce
+    expect(mockLink.cameraOff).not.toHaveBeenCalled();
+  });
+
+  it('turns the camera off when the link drops', () => {
+    // Still one automatic off, and it is the right one: with no link there is
+    // no drone to keep a camera on for, and the state has to reset so a
+    // reconnect starts clean rather than believing a camera it cannot see.
+    const getCtx = renderContext();
+    connectAndView(getCtx);
+    mockLink.cameraOn.mockClear();
+
+    act(() => { emitToLink({ type: 'status', status: 'disconnected' }); });
+    act(() => { vi.advanceTimersByTime(1000); });
+    expect(getCtx().cameraActive).toBe(false);
   });
 
   it('never turns the camera off while a recording is in progress', () => {
@@ -205,19 +221,21 @@ describe('DroneContext — debounced camera lifecycle', () => {
     expect(mockLink.cameraOff).not.toHaveBeenCalled();
   });
 
-  it('turns the camera off once a recording ends after the operator has left', () => {
+  it('keeps the camera on across a whole recording and after it ends', () => {
+    // Previously the camera shut down once a recording finished if the operator
+    // had left. Nothing should turn it off now — the recording-in-progress
+    // guard remains in the code for the manual-off path, but viewer presence no
+    // longer starts that path at all.
     const getCtx = renderContext();
     connectAndView(getCtx);
     act(() => { emitToLink({ type: 'message', data: { type: 'state', camera: true, recording: true } }); });
 
     act(() => { getCtx().setCameraViewing(false); });
-    act(() => { vi.advanceTimersByTime(2000); }); // deferred while recording
-    expect(mockLink.cameraOff).not.toHaveBeenCalled();
-
-    // Recording finishes (e.g. auto-record disarm) — next re-check shuts the camera.
+    act(() => { vi.advanceTimersByTime(2000); });
     act(() => { emitToLink({ type: 'message', data: { type: 'state', camera: true, recording: false } }); });
-    act(() => { vi.advanceTimersByTime(1500); });
-    expect(mockLink.cameraOff).toHaveBeenCalledTimes(1);
+    act(() => { vi.advanceTimersByTime(2000); });
+
+    expect(mockLink.cameraOff).not.toHaveBeenCalled();
   });
 
   // Faithful repro of the reported bug: StrictMode double-invokes the viewer's

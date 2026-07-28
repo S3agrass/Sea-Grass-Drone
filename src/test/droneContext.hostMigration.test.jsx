@@ -87,4 +87,43 @@ describe('DroneContext — stale host migration', () => {
     const getCtx = renderContext();
     expect(getCtx().fleet[0].host).toBe('wss://drone.example.com');
   });
+
+  // Same class of fault as the dead host — a wrong shipped default that
+  // localStorage pins forever. A blank camera_url renders no feed AND blocks
+  // the camera from ever starting, with nothing in the UI saying why.
+  it('fills in a blank camera_url with the Pi default', () => {
+    localStorage.setItem('seagrass-fleet', JSON.stringify([
+      { id: 'a', name: 'Seagrass One', host: 'ws://seagrass.local:8765', token: 't', camera_url: '' },
+    ]));
+    const getCtx = renderContext();
+    expect(getCtx().fleet[0].camera_url).toBe('http://seagrass.local:8000/stream.mjpg');
+  });
+
+  it('fills in a camera_url that is missing entirely', () => {
+    localStorage.setItem('seagrass-fleet', JSON.stringify([
+      { id: 'a', name: 'Seagrass One', host: 'ws://seagrass.local:8765', token: 't' },
+    ]));
+    const getCtx = renderContext();
+    expect(getCtx().fleet[0].camera_url).toBe('http://seagrass.local:8000/stream.mjpg');
+  });
+
+  it('never overwrites a camera_url the operator set', () => {
+    // The whole point of only touching blanks: a tunnelled or custom address is
+    // a deliberate choice and repairing it would break a working setup.
+    localStorage.setItem('seagrass-fleet', JSON.stringify([
+      { id: 'a', name: 'Tunnelled', host: 'wss://drone.example.com', token: 't',
+        camera_url: 'https://cam.example.com/feed.mjpg' },
+    ]));
+    const getCtx = renderContext();
+    expect(getCtx().fleet[0].camera_url).toBe('https://cam.example.com/feed.mjpg');
+  });
+
+  it('persists the filled-in camera_url so it survives a reload', () => {
+    localStorage.setItem('seagrass-fleet', JSON.stringify([
+      { id: 'a', name: 'Seagrass One', host: 'ws://seagrass.local:8765', token: 't', camera_url: '' },
+    ]));
+    renderContext();
+    const saved = JSON.parse(localStorage.getItem('seagrass-fleet'));
+    expect(saved[0].camera_url).toBe('http://seagrass.local:8000/stream.mjpg');
+  });
 });

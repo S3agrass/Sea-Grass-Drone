@@ -1,8 +1,18 @@
 # One class name per line — order defines the class index used by the model,
-# the detector, and the overlay. Replace these placeholders with your real
-# underwater classes, then set num_classes in configs/yolox_nano_seagrass.py to
-# match the count. Delete these comment lines before training.
-seagrass
-debris
-fish
+# the detector and the overlay, so it MUST match the category order of the
+# dataset you train on. Set num_classes in configs/yolox_nano_seagrass.py to the
+# count. Lines starting with '#' are ignored by the detector.
+#
+# NOTE: seagrass is deliberately not here. It is continuous ground cover, not a
+# discrete object, and a bounding box around it has no well-defined edges —
+# which is why the published work on it (DeepSeagrass, and "Image Labels Are All
+# You Need for Coarse Seagrass Segmentation", WACV 2024) uses patch
+# classification or segmentation rather than detection. Seagrass coverage needs
+# a second model with a different inference path, not a class in this list.
+#
+# These are placeholders: discrete things worth spotting from an ROV. Replace
+# them with the actual categories of whichever dataset you fine-tune on.
 diver
+fish
+debris
+rope

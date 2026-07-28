@@ -29,10 +29,10 @@ npm run dev            # browser at http://localhost:5173
 
 ## Control mapping
 
-| Key | Action |
+| Joystick | Action |
 |---|---|
-| W / S | Propulsion forward / back |
-| A / D | Steer right / left |
-| Q / E | Buoyancy rise / dive |
-| L / K | Light on / off |
-| Space | Emergency all-stop |
+| LEFT JOYSTICK UP / LEFT JOYSTICK DOWN | Propulsion forward / back |
+| LEFT JOYSTICK RIGHT / LEFT JOYSTICK LEFT | Steer right / left |
+| RIGHT JOYSTICK UP / RIGHT JOYSTICK DOWN | Buoyancy rise / dive |
+| L1 / R1 | Light on and off / Lock Movement |
+| OPTIONS | Emergency all-stop |
