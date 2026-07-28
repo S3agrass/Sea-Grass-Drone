@@ -45,24 +45,47 @@ def coco(cats, images, anns):
 
 def test_rule_order():
     print("\n=== Species containing 'fish' are not swallowed by 'fish' ===")
-    check("cuttlefish", pd.map_category("cuttlefish") == "cuttlefish")
-    check("jellyfish", pd.map_category("jellyfish") == "jellyfish")
-    check("starfish", pd.map_category("starfish") == "starfish")
+    # These three end up in marine_life, but only because their rules come
+    # BEFORE the general "fish" one. Reorder and they silently become fish.
+    check("cuttlefish", pd.map_category("cuttlefish") == "marine_life")
+    check("jellyfish", pd.map_category("jellyfish") == "marine_life")
+    check("starfish", pd.map_category("starfish") == "marine_life")
     check("plain fish still maps to fish", pd.map_category("fish") == "fish")
     check("TrashCan's animal_fish maps to fish",
           pd.map_category("animal_fish") == "fish")
 
 
-def test_name_translation():
-    print("\n=== Source-specific names become readable labels ===")
-    # These reach the operator's screen as box captions, so RUOD's taxonomy is
-    # translated rather than passed through.
-    check("holothurian -> sea_cucumber",
-          pd.map_category("holothurian") == "sea_cucumber")
-    check("echinus -> urchin", pd.map_category("echinus") == "urchin")
-    check("corals -> coral", pd.map_category("corals") == "coral")
+def test_survey_species_collapse():
+    print("\n=== RUOD's aquaculture species collapse into marine_life ===")
+    # RUOD distinguishes ten species because it was built for Chinese fishery
+    # surveys. A seagrass drone acts identically on all of them, and collapsing
+    # rather than dropping is what stops them becoming background.
+    for name in ("holothurian", "echinus", "scallop", "corals", "turtle",
+                 "animal_crab", "animal_shells"):
+        check(f"{name} -> marine_life", pd.map_category(name) == "marine_life")
     check("case and whitespace ignored",
-          pd.map_category("  Holothurian ") == "sea_cucumber")
+          pd.map_category("  Holothurian ") == "marine_life")
+
+
+def test_decision_classes_stay_distinct():
+    print("\n=== The classes the drone acts on are never merged ===")
+    # diver is safety critical and must never collapse into anything.
+    check("diver stays its own class", pd.map_category("diver") == "diver")
+    check("rov stays its own class", pd.map_category("rov") == "rov")
+    check("trash stays its own class", pd.map_category("trash_bottle") == "trash")
+    check("fish is not marine_life", pd.map_category("fish") == "fish")
+    check("all five labels are reachable",
+          {pd.map_category(n) for n in
+           ("diver", "rov", "trash_bag", "animal_fish", "echinus")} == set(pd.LABELS),
+          str(sorted(pd.LABELS)))
+
+
+def test_vegetation_is_not_a_class():
+    print("\n=== Vegetation is left unmapped, not bucketed ===")
+    # TrashCan's `plant` is ground cover, the same reason seagrass and kelp are
+    # absent. Quietly folding it into marine_life would put a box round a
+    # texture and teach the model an edge that does not exist.
+    check("plant is unmapped", pd.map_category("plant") is None)
 
 
 def test_trash_collapses():
@@ -161,7 +184,9 @@ def test_labels_match_the_shipped_list():
 
 if __name__ == "__main__":
     test_rule_order()
-    test_name_translation()
+    test_survey_species_collapse()
+    test_decision_classes_stay_distinct()
+    test_vegetation_is_not_a_class()
     test_trash_collapses()
     test_unmapped_is_reported_not_hidden()
     test_ids_are_reissued_across_sources()

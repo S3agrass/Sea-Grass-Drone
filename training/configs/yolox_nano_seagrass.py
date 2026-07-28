@@ -23,12 +23,21 @@ class Exp(MyExp):
         self.input_size = (416, 416)
         self.test_size = (416, 416)
         self.enable_mixup = False
+        # Mosaic stitches four images per sample on the CPU. A Colab T4 instance
+        # has two vCPUs, so at the default 1.0 the data loader — not the GPU —
+        # sets the pace. 0.3 keeps most of the regularisation benefit at a
+        # fraction of the CPU cost. Raise it on a machine with real cores.
+        self.mosaic_prob = 0.3
+        # no_aug_epochs is YOLOX's tail of augmentation-free epochs. It defaults
+        # to 15, which out of 30 would be half the run; 8 keeps the fine-tuning
+        # tail without dominating a short schedule.
+        self.no_aug_epochs = 8
 
-        # Must equal the number of entries in ../labels.txt. Currently the 12
-        # classes that RUOD + TrashCan between them actually provide; change it
-        # if you change that file, or training silently learns the wrong number
-        # of heads and every class index shifts.
-        self.num_classes = 12
+        # Must equal the number of entries in ../labels.txt, or training learns
+        # the wrong number of heads and every class index shifts.
+        # Five: diver, trash, fish, marine_life, rov. RUOD's ten survey species
+        # are collapsed rather than dropped — see labels.txt for why.
+        self.num_classes = 5
 
         # --- dataset (COCO format) ---
         _here = os.path.dirname(os.path.abspath(__file__))
@@ -45,12 +54,18 @@ class Exp(MyExp):
         # reason — the year is a COCO naming artefact, not a date.
 
         # --- training schedule (tune for your dataset size) ---
-        self.max_epoch = 100
+        # 30, not YOLOX's default 100. Most of the learning happens early, and a
+        # finished 30-epoch model beats a 100-epoch one killed at hour three by a
+        # Colab disconnect. Raise it once a run is known to survive end to end.
+        self.max_epoch = 30
         # 2, not 4: a Colab T4 instance has 2 vCPUs, and PyTorch warns that
         # over-subscribing workers can slow the loader down or freeze it. Raise
         # it on a machine with more cores.
         self.data_num_workers = 2
-        self.eval_interval = 5
+        # Evaluate more often than the default: at 30 epochs a 5-epoch interval
+        # gives six chances to write best_ckpt.pth, so an interrupted run still
+        # leaves a usable model behind rather than only latest_ckpt.
+        self.eval_interval = 3
 
         # experiment name -> YOLOX_outputs/<exp_name>/
         self.exp_name = os.path.splitext(os.path.basename(__file__))[0]

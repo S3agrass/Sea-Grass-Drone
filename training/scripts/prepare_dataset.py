@@ -35,57 +35,62 @@ from collections import Counter
 # Unified label set. Order defines the class index used by the model, the
 # detector and the overlay, so it must match labels.txt exactly.
 LABELS = [
-    "fish",
     "diver",
     "trash",
-    "jellyfish",
-    "turtle",
-    "starfish",
-    "urchin",
-    "sea_cucumber",
-    "scallop",
-    "coral",
-    "cuttlefish",
+    "fish",
+    "marine_life",
     "rov",
 ]
 
 # Substring rules against the lowercased source category name, FIRST MATCH WINS.
 #
-# Order is load-bearing and is the whole reason this is a list and not a dict:
-# "fish" is a substring of cuttlefish, jellyfish, starfish and TrashCan's
-# animal_fish. Put the general rule first and three species collapse into one
-# class without a word of complaint. The specific names therefore come first,
-# and test_dataset_prep.py pins that ordering so it cannot be tidied away.
+# Deliberately COLLAPSING, not filtering. RUOD labels ten species because it was
+# built for Chinese aquaculture surveys — holothurian, echinus, scallop — and a
+# seagrass drone has no use for the distinction. But dropping those classes while
+# keeping their images is the worst of both: every unlabelled sea cucumber
+# becomes BACKGROUND, teaching the model that objects on the seafloor are not
+# worth reporting. Mapping them into one `marine_life` bucket keeps all ~60k
+# annotations working, and fewer classes means the model learns each of the ones
+# that matter from more data rather than less.
+#
+# Order is load-bearing and is why this is a list rather than a dict: "fish" is a
+# substring of cuttlefish, jellyfish and TrashCan's animal_fish. Put the general
+# rule first and the specific species vanish into it silently. test_dataset_prep.py
+# pins the ordering so it cannot be tidied away.
 RULES = [
-    ("cuttlefish", "cuttlefish"),
-    ("jellyfish", "jellyfish"),
-    ("starfish", "starfish"),
-    ("holothurian", "sea_cucumber"),   # RUOD's name for it
-    ("sea cucumber", "sea_cucumber"),
-    ("echinus", "urchin"),             # RUOD's name for it
-    ("urchin", "urchin"),
-    ("scallop", "scallop"),
-    ("turtle", "turtle"),
-    ("coral", "coral"),
-    ("diver", "diver"),
+    # --- swimmers that are not fish: matched before the "fish" rule below ---
+    ("cuttlefish", "marine_life"),
+    ("jellyfish", "marine_life"),
+    ("starfish", "marine_life"),
+    # --- benthic life: RUOD's survey species, all one bucket ---
+    ("holothurian", "marine_life"),    # RUOD's word for sea cucumber
+    ("sea cucumber", "marine_life"),
+    ("echinus", "marine_life"),        # RUOD's word for sea urchin
+    ("urchin", "marine_life"),
+    ("scallop", "marine_life"),
+    ("coral", "marine_life"),
+    ("turtle", "marine_life"),
+    ("shell", "marine_life"),
+    ("crab", "marine_life"),
+    # --- the classes that actually drive decisions ---
+    ("diver", "diver"),                # safety critical: never drive into a person
     ("rov", "rov"),
-    # Every TrashCan rubbish category — trash_bottle, trash_fishing_gear,
-    # trash_plastic and the rest — collapses to one class. The distinctions are
-    # far finer than a nano model can hold, and "there is debris here" is the
-    # actionable fact for an ROV either way.
+    # Every TrashCan rubbish subcategory — trash_bottle, trash_fishing_gear,
+    # trash_plastic and the rest — is one class. Those distinctions are far finer
+    # than a nano model can hold, and "there is debris here" is the actionable
+    # fact for a survey either way.
     ("trash", "trash"),
     ("debris", "trash"),
-    # Last two: only reached by names no more specific rule claimed.
-    ("eel", "fish"),   # an eel is a fish; TrashCan lists them separately
+    # Last: only reached by names no more specific rule claimed.
+    ("eel", "fish"),                   # an eel is a fish; TrashCan lists it apart
     ("fish", "fish"),
 ]
 
-# Rules stop here deliberately. TrashCan also carries animal_crab,
-# animal_shells, animal_etc and plant, and guessing at those would be inventing
-# classes with unknown data behind them — a class with thirty examples trains
-# worse than no class at all. Run with --dry-run first: the UNMAPPED list tells
-# you exactly what the datasets you downloaded actually contain and how much of
-# it, which is the only sound basis for extending this list.
+# Anything still unmatched is reported rather than guessed at — see the UNMAPPED
+# section of the output. TrashCan's `plant` is the notable one, and it belongs
+# nowhere here: vegetation is ground cover, the same reason seagrass and kelp are
+# not classes. Use --drop-unmapped-images if you would rather lose those images
+# than have their plants become background.
 
 
 def map_category(name):
@@ -102,7 +107,7 @@ def load_coco(path):
         return json.load(fh)
 
 
-def merge(sources, drop_unmapped_images=False):
+def merge(sources, drop_unmapped_images=False, limit=0, seed=0):
     """Merge COCO dicts into one with a unified, re-indexed label space.
 
     `sources` is [(name, coco_dict)]. Returns (merged, stats).
@@ -166,6 +171,19 @@ def merge(sources, drop_unmapped_images=False):
                 next_ann_id += 1
                 per_class[label] += 1
 
+    # Subsample AFTER mapping, and take a random slice rather than the first N.
+    # Both datasets are ordered, so the head of the list is one dive site in one
+    # water — training on that teaches the site, not the objects.
+    if limit and len(out_images) > limit:
+        import random
+        keep_ids = set(random.Random(seed).sample(
+            [i["id"] for i in out_images], limit))
+        out_images = [i for i in out_images if i["id"] in keep_ids]
+        out_anns = [a for a in out_anns if a["image_id"] in keep_ids]
+        per_class = Counter()
+        for a in out_anns:
+            per_class[LABELS[a["category_id"]]] += 1
+
     merged = {
         "images": out_images,
         "annotations": out_anns,
@@ -191,6 +209,9 @@ def main():
     ap.add_argument("--symlink", action="store_true",
                     help="link images instead of copying (saves disk, needs the "
                          "source to stay put)")
+    ap.add_argument("--limit", type=int, default=0,
+                    help="keep at most N images (random, seeded). Cuts training "
+                         "time proportionally; 0 = keep everything")
     ap.add_argument("--dry-run", action="store_true",
                     help="report what would be written without touching disk")
     args = ap.parse_args()
@@ -209,7 +230,8 @@ def main():
         sources.append((name, load_coco(ann_path)))
         image_dirs[name] = img_dir
 
-    merged, stats = merge(sources, drop_unmapped_images=args.drop_unmapped_images)
+    merged, stats = merge(sources, drop_unmapped_images=args.drop_unmapped_images,
+                          limit=args.limit)
 
     print(f"\n{stats['images']} images, {len(merged['annotations'])} annotations")
     print("\nper class:")

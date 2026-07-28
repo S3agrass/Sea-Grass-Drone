@@ -1,39 +1,38 @@
 # One class name per line. Order defines the class index used by the model, the
 # detector and the overlay, so it MUST stay in step with LABELS in
 # scripts/prepare_dataset.py (test_dataset_prep.py fails if they drift) and with
-# num_classes in configs/yolox_nano_seagrass.py. Lines starting with '#' are
-# ignored by the detector.
+# num_classes in configs/yolox_nano_seagrass.py.
 #
-# This list is what public underwater detection data actually provides — RUOD
-# (13k images, marine life + divers) and TrashCan (7k images, debris) — rather
-# than a wishlist. Every entry below can be trained today without annotating
-# anything by hand.
+# Five classes, chosen for what a survey drone acts on rather than for what the
+# source datasets happen to distinguish:
+#
+#   diver        safety critical — never drive into a person
+#   trash        the survey target; every TrashCan subcategory collapses here
+#   fish         the most common moving thing in frame
+#   marine_life  everything else alive, in one bucket
+#   rov          another vehicle; rare, but a real obstacle
+#
+# RUOD ships ten species because it was built for Chinese aquaculture surveys —
+# holothurian, echinus, scallop. A seagrass drone does not act differently on a
+# sea cucumber than on a starfish, so they are COLLAPSED into marine_life rather
+# than dropped: an unlabelled object does not become neutral, it becomes
+# background, and would teach the model that things on the seafloor are not worth
+# reporting. Collapsing keeps all ~60k annotations contributing, and fewer
+# classes means each one is learned from more data.
 #
 # NOT here, deliberately:
 #
 #   seagrass, kelp, rocky seabed — continuous ground cover, not discrete
-#   objects. A box round them has no defensible edges: where does one kelp end?
-#   That is why nobody publishes box labels for them, and why the seagrass
-#   literature (DeepSeagrass; "Image Labels Are All You Need for Coarse Seagrass
+#   objects. A box round them has no defensible edges. The seagrass literature
+#   (DeepSeagrass; "Image Labels Are All You Need for Coarse Seagrass
 #   Segmentation", WACV 2024) uses patch classification or segmentation instead.
 #   Seabed cover wants a second model with a different inference path.
 #
-#   inflatables, buoys — genuinely discrete and perfectly detectable, just
-#   absent from every public underwater set. These need your own dive footage.
-#   Add them here, retrain, and bump num_classes; nothing else changes.
-#
-# `trash` deliberately absorbs all of TrashCan's subcategories (trash_bottle,
-# trash_fishing_gear, trash_plastic, and the rest). Those distinctions are finer
-# than a nano model can hold, and "there is debris here" is the actionable fact.
-fish
+#   inflatables, buoys — discrete and perfectly detectable, just absent from
+#   every public underwater set. These need your own dive footage. Add them
+#   here, retrain, bump num_classes; nothing else changes.
 diver
 trash
-jellyfish
-turtle
-starfish
-urchin
-sea_cucumber
-scallop
-coral
-cuttlefish
+fish
+marine_life
 rov
