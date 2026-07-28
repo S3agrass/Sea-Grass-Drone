@@ -379,6 +379,113 @@ heading and position — and the Media page shows that under the thumbnail.
 
 ---
 
+## 6c. Making it work from a deployed (non-local) site
+
+Everything above uses `ws://`/`http://` and Tailscale IPs, which is fine for
+`npm run dev` — that page is itself served over plain HTTP, so there's no
+mismatch. Deploy the frontend somewhere (step 7) and it's served over HTTPS,
+and **browsers block a page loaded over HTTPS from making any insecure
+`ws://`/`http://` request** ("mixed content") — regardless of the fact that
+Tailscale itself already encrypts the traffic underneath; the browser only
+looks at the URL scheme. Without the steps below, the deployed site's camera
+and control connections just silently fail.
+
+Three endpoints need real TLS: the control WebSocket (`:8765`), the camera
+(MediaMTX WHEP, `:8889`), and the media server (`:8000`). They're **not** all
+handled the same way:
+
+- **Control (`:8765`) gets its own direct TLS**, terminated inside
+  `drone_server.py` itself — not proxied through `tailscale serve`. That proxy
+  has open upstream reports of WebSocket connections dropping every 10-40s,
+  which is not a corner to cut on the connection actively driving the vehicle.
+  `tailscale cert` (free) issues a real Let's Encrypt certificate for the
+  device's tailnet name; the server loads it directly, same as any standard
+  `wss://` deployment.
+- **Camera and media (`:8889`, `:8000`) go through `tailscale serve`.** Both are
+  effectively single request/response calls (WHEP's signaling POST, then the
+  actual video is a separate peer-to-peer WebRTC/SRTP flow over the tailnet —
+  not proxied at all; plain `/media` fetches), so the WebSocket-specific
+  flakiness above doesn't apply, and `tailscale serve` auto-renews its own
+  certs with no maintenance.
+
+### One-time: enable HTTPS on the tailnet
+
+[Tailscale admin console](https://login.tailscale.com/admin/dns) → DNS →
+confirm MagicDNS is on → HTTPS Certificates → **Enable HTTPS**. Free, but it
+publishes the device's tailnet name in a public certificate transparency log
+(not its IP or anything else — just the name).
+
+Find the Pi's full tailnet name:
+```bash
+tailscale status   # e.g. seagrass.tailxxxxx.ts.net
+```
+
+### Camera + media: `tailscale serve`
+
+On the Pi, two independent listeners (different tailscale-side ports, since
+both can't own 443):
+```bash
+sudo tailscale serve --bg --https=443 localhost:8889
+sudo tailscale serve --bg --https=8443 localhost:8000
+```
+These persist across reboots on their own — no service file needed. Check
+`sudo tailscale serve status` any time.
+
+### Control: direct TLS in drone_server.py
+
+```bash
+mkdir -p ~/.seagrass-tls
+sudo tailscale cert --cert-file ~/.seagrass-tls/<hostname>.crt \
+                     --key-file  ~/.seagrass-tls/<hostname>.key \
+                     <hostname>   # the tailscale status name, e.g. seagrass.tailxxxxx.ts.net
+sudo chown pi:pi ~/.seagrass-tls/*
+```
+
+Add to `~/.seagrass-env`:
+```bash
+WS_TLS_CERT=/home/pi/.seagrass-tls/<hostname>.crt
+WS_TLS_KEY=/home/pi/.seagrass-tls/<hostname>.key
+TLS_HOSTNAME=<hostname>   # used by the renewal timer below
+```
+```bash
+sudo systemctl restart drone-server
+```
+The startup log should now say `listening on wss://0.0.0.0:8765` instead of `ws://`.
+
+**Certs expire in ~90 days and do not auto-renew** (unlike `tailscale serve`'s
+certs, which Tailscale manages for you) — `tailscale cert` explicitly makes the
+caller responsible for that. Install the renewal timer so this isn't a thing
+that quietly breaks weeks later:
+```bash
+sudo cp scripts/renew-tls-cert.service scripts/renew-tls-cert.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now renew-tls-cert.timer
+```
+It checks daily and only actually renews (and restarts `drone-server`, which is
+the only disruptive part) when the cert is close to expiry — a no-op on ~89 of
+every 90 days.
+
+### In the Fleet UI
+
+- **Drone link:** `wss://<hostname>.ts.net:8765`
+- **Camera stream URL:** `https://<hostname>.ts.net/cam/whep`
+- **Media server URL:** `https://<hostname>.ts.net:8443`
+
+Any device with Tailscale installed and signed into the same tailnet can now
+reach all three from the deployed HTTPS site — not just devices on the same LAN
+as the Pi.
+
+### Later: switching to a public domain
+
+If you outgrow "viewers need Tailscale installed" and get a domain, Cloudflare
+Tunnel replaces the pieces above with a public `https://drone.yourdomain.com`
+URL reachable from any browser — no Tailscale required on the viewing device.
+The control WebSocket becomes reachable from the open internet at that point
+(protected only by `SEAGRASS_TOKEN`, not network isolation), which is the real
+tradeoff for dropping the "must be on the tailnet" requirement.
+
+---
+
 ## 7. Deploy the web UI (Netlify)
 
 ```bash

@@ -1,0 +1,16 @@
+# Renews the Tailscale-issued TLS cert drone-server uses for wss://.
+# Install:
+#   sudo cp scripts/renew-tls-cert.service scripts/renew-tls-cert.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now renew-tls-cert.timer
+# Requires TLS_HOSTNAME in ~/.seagrass-env (see SETUP.md's remote-control
+# section) — the Pi's full tailnet name, e.g. seagrass.tailnet-name.ts.net.
+# Logs: journalctl -u renew-tls-cert
+
+[Unit]
+Description=Renew the drone control server's TLS certificate
+
+[Service]
+Type=oneshot
+EnvironmentFile=/home/pi/.seagrass-env
+ExecStart=/home/pi/Sea-Grass-Drone/scripts/renew-tls-cert.sh

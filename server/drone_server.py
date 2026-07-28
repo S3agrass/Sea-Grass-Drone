@@ -35,6 +35,7 @@ import json
 import math
 import os
 import signal
+import ssl
 import subprocess
 import sys
 import threading
@@ -57,6 +58,20 @@ SERIAL_PORT = os.environ.get("PIXHAWK_PORT", "/dev/ttyACM0")
 BAUD = int(os.environ.get("PIXHAWK_BAUD", "115200"))
 WS_HOST = "0.0.0.0"
 WS_PORT = int(os.environ.get("SEAGRASS_PORT", "8765"))
+# Optional TLS, for driving the vehicle from a page loaded over HTTPS (e.g. a
+# deployed frontend) — browsers refuse a ws:// connection from an https:// page
+# (mixed content), so remote control needs a real wss://.
+#
+# Deliberately terminated HERE rather than behind `tailscale serve`: that proxy
+# fronts plain HTTP reverse-proxying, and its WebSocket path has open upstream
+# reliability reports (connections dropping every 10-40s) — unacceptable for a
+# live control link. `tailscale cert` issues a real Let's Encrypt certificate
+# for the device's tailnet name for free; this server terminates TLS with it
+# directly, so the WS connection is a standard, well-tested TLS+WebSocket
+# server with nothing flaky in between. The cert does not auto-renew — see
+# scripts/renew-tls-cert.sh and its systemd timer.
+WS_TLS_CERT = os.environ.get("WS_TLS_CERT", "")
+WS_TLS_KEY = os.environ.get("WS_TLS_KEY", "")
 TOKEN = os.environ.get("SEAGRASS_TOKEN", "")  # empty = auth disabled (LAN only!)
 if not TOKEN:
     raise SystemExit("SEAGRASS_TOKEN must be set — export it before running this script.")
@@ -2016,6 +2031,27 @@ async def pixhawk_supervisor_loop():
         await asyncio.sleep(1.0)
 
 
+def _build_ws_ssl_context():
+    """Build the TLS context for the control WebSocket, or None to serve plain
+    ws:// (LAN-only setups, or when a cert simply isn't configured yet).
+
+    A missing/unreadable cert at the configured path fails loudly rather than
+    silently falling back to plain ws://: that fallback would look identical to
+    "TLS isn't configured" while actually meaning "TLS was expected and broke",
+    and a remote operator would only discover it as an unexplained connection
+    failure from their browser with no clue why."""
+    if not WS_TLS_CERT and not WS_TLS_KEY:
+        return None
+    if not WS_TLS_CERT or not WS_TLS_KEY:
+        raise SystemExit(
+            "WS_TLS_CERT and WS_TLS_KEY must both be set (or both unset) — "
+            "got only one."
+        )
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(WS_TLS_CERT, WS_TLS_KEY)
+    return ctx
+
+
 async def main():
     connect_pixhawk()
     # Announce ourselves as a GCS at 1 Hz on a dedicated daemon thread, for the
@@ -2051,8 +2087,10 @@ async def main():
     print(f"Auto-capture: {'ON' if AUTOCAPTURE else 'off'}"
           + (f" (conf >= {AUTOCAPTURE_MIN_CONF}, every {AUTOCAPTURE_COOLDOWN_S:.0f}s)"
              if AUTOCAPTURE else ""))
-    async with websockets.serve(client_handler, WS_HOST, WS_PORT):
-        print(f"Seagrass drone server listening on ws://{WS_HOST}:{WS_PORT}")
+    ssl_ctx = _build_ws_ssl_context()
+    scheme = "wss" if ssl_ctx else "ws"
+    async with websockets.serve(client_handler, WS_HOST, WS_PORT, ssl=ssl_ctx):
+        print(f"Seagrass drone server listening on {scheme}://{WS_HOST}:{WS_PORT}")
         await asyncio.Future()
 
 

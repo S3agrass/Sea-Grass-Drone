@@ -1,0 +1,12 @@
+# Daily check — cheap (a no-op on 89 days out of ~90, see renew-tls-cert.sh),
+# and frequent enough that a missed run or two still leaves days of slack
+# before the cert (90-day Let's Encrypt lifetime) actually expires.
+[Unit]
+Description=Daily check: renew the drone control server's TLS certificate
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target
