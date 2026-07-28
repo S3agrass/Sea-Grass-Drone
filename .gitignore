@@ -35,6 +35,19 @@ __pycache__/
 *.pyc
 server/vision/models/*.onnx
 
+# Training data and artifacts. The prepared dataset is ~3.5GB of JPEGs across
+# ~20k files, and GitHub rejects pushes this size — one `git add -A` would wedge
+# the repo. Nothing here is source: prepare_dataset.py rebuilds all of it from
+# the public RUOD/TrashCan downloads, deterministically. The README.txt files
+# documenting the expected layout are kept.
+training/datasets/*/train2024/*
+training/datasets/*/val2024/*
+training/datasets/*/annotations/*.json
+!training/datasets/*/*/README.txt
+training/yolox_nano.pth
+training/yolox_src/
+training/YOLOX_outputs/
+
 # MAVLink session capture artifacts (runtime, not source)
 *.tlog
 *.tlog.raw

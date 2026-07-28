@@ -8,6 +8,14 @@ is then deployed to the Pi at `server/vision/models/`.
 > **Runs on a dev machine with a GPU — not on the Raspberry Pi.** The Pi only
 > runs inference (`server/vision/detector.py`). Training a model on the Pi CPU
 > is impractically slow.
+>
+> **No CUDA machine?** Use [`colab_train.ipynb`](./colab_train.ipynb) — open it
+> in Google Colab, set the runtime to a T4 GPU, and it installs YOLOX, prepares
+> the dataset, trains, and exports the ONNX for you. A free T4 does ~100 epochs
+> over 15k images in roughly 2–4 hours.
+>
+> An Apple Silicon Mac cannot do this locally: YOLOX has no Metal backend, and
+> even patched, an M3 would take 17+ hours against the T4's 2–4.
 
 Everything here is permissively licensed (YOLOX Apache-2.0, CVAT MIT / Label
 Studio Apache-2.0), so a fine-tuned model and this pipeline can ship inside a
