@@ -73,12 +73,21 @@ PING_PROFILE = os.environ.get("PING_PROFILE", "1") not in ("0", "false", "False"
 # Unset => leave the device auto-ranging (its default).
 _range_env = os.environ.get("PING_RANGE_M", "").strip()
 PING_RANGE_M = float(_range_env) if _range_env else None
-# Unset => leave the device's own ping interval alone. Measured stock behaviour is
-# only ~3 pings/s, which makes the UI echogram visibly chunky; lowering this
-# raises the row rate. Do not go below the round-trip time for a 226-byte profile
-# reply (~20 ms at 115200) or reads start missing.
+# Measured stock behaviour is only ~3 pings/s, which makes the UI echogram
+# visibly chunky and — since the lock and the sonar brake both need
+# _GOOD_MIN_ACCEPTED samples inside _SAMPLE_MAX_AGE_S — puts nearly two seconds
+# between an object appearing and the vehicle reacting to it. That delay was
+# obvious the moment anyone tried to detect something by hand.
+#
+# 80 ms (12.5 pings/s) gets a good lock in ~0.4 s instead. Well clear of the
+# ~20 ms round trip for a 226-byte profile reply at 115200, so reads do not
+# start missing. Set PING_INTERVAL_MS=0 to leave the device's own interval alone.
+_DEFAULT_INTERVAL_MS = 80
 _interval_env = os.environ.get("PING_INTERVAL_MS", "").strip()
-PING_INTERVAL_MS = int(_interval_env) if _interval_env else None
+if _interval_env:
+    PING_INTERVAL_MS = int(_interval_env) or None  # 0 => device default
+else:
+    PING_INTERVAL_MS = _DEFAULT_INTERVAL_MS
 
 # Filter window: at ~10 Hz polling this is ~1.5 s of history — long enough for a
 # stable median, short enough that a genuinely moving target still tracks.

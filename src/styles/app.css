@@ -644,6 +644,25 @@
 .sonar-num { font-size: 13px; font-weight: 700; }
 .sonar-note { font-size: 9px; color: var(--amber); line-height: 1.3; margin-top: 2px; }
 
+/* Every contact the profile resolved, nearest first. Only shown when there is
+   more than one — a single contact is already the `range` row above. */
+.sonar-contacts {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.sonar-contact-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 9px;
+  color: var(--faint);
+}
+.sonar-contact-row.near { color: var(--teal); font-weight: 700; }
+
 /* Sonar brake state. Deliberately the loudest thing in the panel: it is the
    explanation for a throttle that has stopped responding, and an operator who
    misses it will think the vehicle has failed. */

@@ -4,6 +4,7 @@ import {
   sampleToRange,
   rangeToRow,
   decomposeRange,
+  findEchoes,
   peakRange,
   planHalfAngleDeg,
   povBlipStyle,
@@ -232,5 +233,71 @@ describe('povBlipStyle', () => {
   it('returns null outside the display window', () => {
     expect(povBlipStyle(11, 10, 90)).toBeNull();
     expect(povBlipStyle(NaN, 10, 90)).toBeNull();
+  });
+});
+
+describe('findEchoes', () => {
+  // Helper: a profile with Gaussian bumps at the given ranges over a 0-10 m window.
+  const bumps = (specs, len = 200, scanLen = 10) => {
+    const p = new Array(len).fill(8);
+    for (const { at, peak } of specs) {
+      const idx = (at / scanLen) * (len - 1);
+      for (let i = 0; i < len; i += 1) {
+        p[i] = Math.min(255, p[i] + peak * Math.exp(-((i - idx) ** 2) / (2 * 3 ** 2)));
+      }
+    }
+    return p.map(Math.round);
+  };
+
+  it('finds several objects and returns them nearest first', () => {
+    const echoes = findEchoes(bumps([{ at: 2, peak: 120 }, { at: 5, peak: 200 },
+                                     { at: 8, peak: 90 }]), 0, 10);
+    expect(echoes.length).toBe(3);
+    expect(echoes[0].range).toBeCloseTo(2, 0);
+    expect(echoes[1].range).toBeCloseTo(5, 0);
+    expect(echoes[2].range).toBeCloseTo(8, 0);
+  });
+
+  it('reports a near weak object the device would miss for a far strong one', () => {
+    // The whole point: the device's own `distance` picks the STRONGEST return,
+    // which here is the 6 m wall — but the 1.5 m object is what you'd hit.
+    const echoes = findEchoes(bumps([{ at: 1.5, peak: 90 }, { at: 6, peak: 240 }]), 0, 10);
+    expect(echoes[0].range).toBeCloseTo(1.5, 0);
+    expect(echoes[0].amplitude).toBeLessThan(echoes[1].amplitude);
+  });
+
+  it('reports one broad return as a single object, not a cluster', () => {
+    const wide = new Array(200).fill(8);
+    for (let i = 90; i < 115; i += 1) wide[i] = 200; // a plateau ~4.5-5.7 m
+    expect(findEchoes(wide, 0, 10).length).toBe(1);
+  });
+
+  it('ignores dead-zone ringing, which is always the loudest thing', () => {
+    const p = bumps([{ at: 4, peak: 150 }]);
+    for (let i = 0; i < 6; i += 1) p[i] = 255; // transducer ring at ~0-0.3 m
+    const echoes = findEchoes(p, 0, 10);
+    expect(echoes.every((e) => e.range >= PING_MIN_RANGE_M)).toBe(true);
+    expect(echoes[0].range).toBeCloseTo(4, 0);
+  });
+
+  it('finds nothing in a flat noise floor', () => {
+    expect(findEchoes(new Array(200).fill(10), 0, 10)).toEqual([]);
+    expect(findEchoes(null, 0, 10)).toEqual([]);
+    expect(findEchoes([], 0, 10)).toEqual([]);
+  });
+
+  it('caps how many objects it reports', () => {
+    const many = [1, 2, 3, 4, 5, 6, 7, 8].map((at) => ({ at, peak: 150 }));
+    expect(findEchoes(bumps(many), 0, 10, { maxEchoes: 3 }).length).toBe(3);
+  });
+
+  it('scales its threshold to the profile, so gain changes do not hide objects', () => {
+    // Same shape, quarter the amplitude: still found, because the threshold is
+    // relative to the profile's own peak rather than a fixed level.
+    const loud = findEchoes(bumps([{ at: 3, peak: 200 }]), 0, 10);
+    const quiet = findEchoes(bumps([{ at: 3, peak: 60 }]), 0, 10);
+    expect(loud.length).toBe(1);
+    expect(quiet.length).toBe(1);
+    expect(quiet[0].range).toBeCloseTo(loud[0].range, 1);
   });
 });

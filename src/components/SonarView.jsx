@@ -23,6 +23,7 @@ import { useDrone } from "../context/DroneContext";
 import {
   amplitudeToRGB,
   decomposeRange,
+  findEchoes,
   peakRange,
   planHalfAngleDeg,
   povBlipStyle,
@@ -107,6 +108,7 @@ export default function SonarView() {
   const [readout, setReadout] = useState({
     range: null, gated: false, confidence: null, quality: "none",
     scanLengthM: null, gain: null, rows: 0, live: false,
+    echoes: [], // every contact in the profile, nearest first
   });
 
   const canvasRef = useRef(null);
@@ -308,23 +310,40 @@ export default function SonarView() {
       }
       pctx.lineWidth = 1;
 
-      // The contact itself.
+      // Every contact, not just the device's pick — farthest first so a near
+      // one is drawn over the top of anything behind it.
       const p = latestRef.current;
-      const contact = p?.distance_m;
-      if (contact != null) {
+      if (!p) return;
+      const found = findEchoes(p.profile, p.scan_start_m ?? 0, p.scan_length_m ?? maxR);
+      const ranges = found.length ? found.map((e) => e.range)
+                                  : (p.distance_m != null ? [p.distance_m] : []);
+      for (let i = ranges.length - 1; i >= 0; i -= 1) {
+        const contact = ranges[i];
         const r = povRingRadius(contact, maxR, size);
         const style = povBlipStyle(contact, maxR, p.confidence);
-        if (r != null && style) {
-          const hot = contact <= maxR * 0.25; // close enough to matter
+        if (r == null || style == null) continue;
+        const nearest = i === 0;
+        const hot = contact <= maxR * 0.25; // close enough to matter
+        pctx.save();
+        pctx.globalAlpha = style.opacity * (nearest ? 1 : 0.45);
+        pctx.strokeStyle = hot ? "#ffb454" : "#3bd9bb";
+        pctx.shadowColor = pctx.strokeStyle;
+        pctx.shadowBlur = nearest ? 12 : 4;
+        pctx.lineWidth = Math.max(1.5, style.size * size * (nearest ? 1 : 0.5));
+        pctx.beginPath();
+        pctx.arc(cx, cy, Math.max(r, 1), 0, Math.PI * 2);
+        pctx.stroke();
+        pctx.restore();
+
+        // Range label on the ring. Placed above it so a stack of contacts reads
+        // as a list rather than as overlapping text through the middle.
+        if (r > 6) {
           pctx.save();
-          pctx.globalAlpha = style.opacity;
-          pctx.strokeStyle = hot ? "#ffb454" : "#3bd9bb";
-          pctx.shadowColor = pctx.strokeStyle;
-          pctx.shadowBlur = 12;
-          pctx.lineWidth = Math.max(1.5, style.size * size);
-          pctx.beginPath();
-          pctx.arc(cx, cy, Math.max(r, 1), 0, Math.PI * 2);
-          pctx.stroke();
+          pctx.globalAlpha = nearest ? 0.95 : 0.5;
+          pctx.fillStyle = hot ? "#ffb454" : "#3bd9bb";
+          pctx.font = `${nearest ? "700 " : ""}9px ui-monospace, monospace`;
+          pctx.textAlign = "center";
+          pctx.fillText(`${contact.toFixed(2)}`, cx, cy - r + 10);
           pctx.restore();
         }
       }
@@ -365,6 +384,8 @@ export default function SonarView() {
             gain: p.gain ?? null,
             rows: rowsRef.current,
             live: true,
+            echoes: findEchoes(p.profile, p.scan_start_m ?? 0,
+                               p.scan_length_m ?? maxRangeRef.current),
           });
         }
       }
@@ -378,7 +399,7 @@ export default function SonarView() {
         latestRef.current = null;
         setReadout((r) => (r.live
           ? { ...r, live: false, range: null, gated: false, confidence: null,
-              quality: "none" }
+              quality: "none", echoes: [] }
           : r));
       }
 
@@ -508,8 +529,15 @@ export default function SonarView() {
               // Skip an echo beyond the selected display range rather than
               // clamping it onto the wedge's outer edge, where it would read as
               // a real contact at maxRange — same rule as rangeToRow.
-              const echoFwd = readout.range != null && readout.range <= maxRange
-                ? fwdOf(readout.range) : null;
+              // Every detected contact, projected forward. Anything past the
+              // selected display range is dropped rather than clamped onto the
+              // outer arc, where it would read as a real contact at maxRange —
+              // same rule as rangeToRow. Falls back to the single gated reading
+              // when no profile is available (PING_PROFILE=0 or a degraded link).
+              const contacts = (readout.echoes.length
+                ? readout.echoes.map((e) => e.range)
+                : (readout.range != null ? [readout.range] : [])
+              ).filter((r) => r <= maxRange).map((r) => ({ fwd: fwdOf(r) }));
               // Under 2% of the display range the wedge is a sliver and the
               // drawing says nothing useful — better to say so in words.
               const blind = reach < maxRange * 0.02;
@@ -547,30 +575,40 @@ export default function SonarView() {
                   {/* boresight */}
                   <path d={`M${ox} ${oy} L${pt(reach, 0)[0]} ${pt(reach, 0)[1]}`}
                         stroke="var(--faint)" strokeWidth="0.5" strokeDasharray="2 2" />
-                  {/* The contact, drawn as an arc spanning the whole beam: one
-                      fixed beam gives range but NO bearing within the cone, so a
+                  {/* Every contact in the profile, each labelled with its own
+                      distance AHEAD — not the slant range, since forward
+                      distance is what decides whether you hit it.
+
+                      Each is an arc spanning the beam, never a dot: one fixed
+                      beam resolves range but NO bearing within the cone, so a
                       dot would be inventing an angle the vehicle cannot know.
-                      The arc is the honest shape — "somewhere across here". */}
-                  {echoFwd != null && (
-                    <>
-                      {/* water between you and it, so the gap reads as distance */}
-                      <path d={`M${ox} ${oy} L${pt(echoFwd, 0)[0]} ${pt(echoFwd, 0)[1]}`}
-                            stroke={readout.gated ? q.tone : "var(--amber)"}
-                            strokeWidth="0.6" strokeDasharray="1.5 2"
-                            opacity={0.5} />
-                      <path d={arc(echoFwd)} fill="none"
-                            stroke={readout.gated ? q.tone : "var(--amber)"}
-                            strokeWidth="3.5" strokeLinecap="round"
-                            opacity={readout.gated ? 0.95 : 0.55} />
-                      {/* distance AHEAD, not slant range — the number that says
-                          whether you are about to hit it */}
-                      <text x={ox} y={pt(echoFwd, 0)[1] - 5} textAnchor="middle"
-                            fill={readout.gated ? q.tone : "var(--amber)"}
-                            fontSize="9" fontFamily="monospace" fontWeight="700">
-                        {echoFwd.toFixed(2)} m
-                      </text>
-                    </>
-                  )}
+
+                      The nearest is drawn solid and labelled in the lock colour
+                      because it is the one that matters; the rest are dimmed. On
+                      a 45deg mount the farthest is usually the seabed. */}
+                  {contacts.map((c, i) => {
+                    const near = i === 0;
+                    const tone = near ? (readout.gated ? q.tone : "var(--amber)")
+                                      : "var(--faint)";
+                    const [, cy] = pt(c.fwd, 0);
+                    return (
+                      <g key={`${c.fwd.toFixed(2)}-${i}`}>
+                        {near && (
+                          // Lead-in from the vehicle so the gap reads as distance.
+                          <path d={`M${ox} ${oy} L${ox} ${cy}`} stroke={tone}
+                                strokeWidth="0.6" strokeDasharray="1.5 2" opacity="0.5" />
+                        )}
+                        <path d={arc(c.fwd)} fill="none" stroke={tone}
+                              strokeWidth={near ? 3.5 : 2} strokeLinecap="round"
+                              opacity={near ? (readout.gated ? 0.95 : 0.6) : 0.5} />
+                        <text x={ox} y={cy - 4} textAnchor="middle" fill={tone}
+                              fontSize={near ? 9 : 7.5} fontFamily="monospace"
+                              fontWeight={near ? 700 : 400}>
+                          {c.fwd.toFixed(2)} m
+                        </text>
+                      </g>
+                    );
+                  })}
                   {/* the drone */}
                   <circle cx={ox} cy={oy} r="4" fill="var(--ink)" />
                   <path d={`M${ox - 6} ${oy} L${ox + 6} ${oy}`} stroke="var(--ink)"
@@ -607,6 +645,25 @@ export default function SonarView() {
             </div>
             {!readout.gated && readout.range != null && (
               <div className="sonar-note mono">peak echo — below confidence gate</div>
+            )}
+            {/* Exact numbers for every contact. The device only ever reports its
+                own single pick (the STRONGEST return); these come from reading
+                the profile directly, so a near soft object is listed even when a
+                far hard one is louder. "ahead" is the forward projection. */}
+            {readout.echoes.length > 1 && (
+              <div className="sonar-contacts mono">
+                {readout.echoes.map((e, i) => {
+                  const ahead = decomposeRange(e.range, mountDeg, pitchDeg).forward;
+                  return (
+                    <div key={`${e.range}-${i}`}
+                         className={`sonar-contact-row${i === 0 ? " near" : ""}`}>
+                      <span>{i === 0 ? "nearest" : `#${i + 1}`}</span>
+                      <span>{e.range.toFixed(2)} m</span>
+                      <span>{ahead == null ? "—" : `${ahead.toFixed(2)} ahead`}</span>
+                    </div>
+                  );
+                })}
+              </div>
             )}
             {/* Why forward thrust went away. Without this the operator reads an
                 unresponsive throttle as a broken vehicle. */}

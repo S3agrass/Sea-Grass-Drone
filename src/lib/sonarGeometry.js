@@ -147,6 +147,66 @@ export function povBlipStyle(rangeM, maxRangeM, confidence) {
   };
 }
 
+/* Every distinct echo in a profile, NEAREST FIRST.
+ *
+ * The device reports one distance — its own pick, which is the STRONGEST return
+ * rather than the closest. For obstacle work those come apart exactly where it
+ * matters: a hard flat wall at 3 m out-echoes a soft, small or angled object at
+ * 1 m, and the thing at 1 m is the one you are about to hit. The full profile
+ * already contains both; only the summary throws one away.
+ *
+ * A sample counts as a peak when it is a local maximum, sits outside the dead
+ * zone, and clears a threshold set RELATIVE to this profile's own maximum —
+ * relative because the device retunes its gain between pings, so any fixed
+ * amplitude would drift in and out of meaning. `minSeparationM` then suppresses
+ * peaks close to an already-accepted stronger one, since a single wall returns
+ * as a broad hump several samples wide and would otherwise be reported as a
+ * cluster of separate contacts.
+ *
+ * Returns [{ range, amplitude }] sorted by range ascending, at most `maxEchoes`.
+ */
+export function findEchoes(profile, scanStartM = 0, scanLengthM = 0, opts = {}) {
+  const {
+    minRel = 0.35,        // fraction of this profile's peak to count at all
+    minAbs = 25,          // absolute floor, so a flat noisy profile yields nothing
+    minSeparationM = 0.3, // closer than this to a stronger peak = same object
+    maxEchoes = 4,
+  } = opts;
+  if (!profile || profile.length < 3) return [];
+
+  const rangeAt = (i) => sampleToRange(i, profile.length, scanStartM, scanLengthM);
+
+  let peak = 0;
+  for (let i = 0; i < profile.length; i += 1) {
+    if (rangeAt(i) < PING_MIN_RANGE_M) continue; // dead-zone ringing dwarfs everything
+    if (profile[i] > peak) peak = profile[i];
+  }
+  if (peak <= 0) return [];
+  const threshold = Math.max(minAbs, minRel * peak);
+
+  const candidates = [];
+  for (let i = 1; i < profile.length - 1; i += 1) {
+    const r = rangeAt(i);
+    if (r < PING_MIN_RANGE_M) continue;
+    const a = profile[i];
+    if (a < threshold) continue;
+    // `>=` on the left and `>` on the right so a flat-topped plateau yields its
+    // last sample once, rather than either every sample or none of them.
+    if (a >= profile[i - 1] && a > profile[i + 1]) candidates.push({ range: r, amplitude: a });
+  }
+
+  // Strongest first, so when two peaks are within minSeparationM the one that
+  // survives is the more convincing return rather than whichever came first.
+  candidates.sort((x, y) => y.amplitude - x.amplitude);
+  const kept = [];
+  for (const c of candidates) {
+    if (kept.length >= maxEchoes) break;
+    if (kept.some((k) => Math.abs(k.range - c.range) < minSeparationM)) continue;
+    kept.push(c);
+  }
+  return kept.sort((x, y) => x.range - y.range);
+}
+
 /* Peak-amplitude range from a profile, ignoring the dead zone. The device's own
  * `distance` is confidence-gated and often null in air; this is the "brightest
  * thing out there" used to place the cone marker when there is no hard lock. */
