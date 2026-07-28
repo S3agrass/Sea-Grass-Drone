@@ -11,10 +11,42 @@ OUT="${HERE}/../../server/vision/models/seagrass_nano.onnx"
 
 mkdir -p "$(dirname "${OUT}")"
 
+# Check the checkpoint up front. YOLOX's own failure for a missing one is a
+# forty-line loguru traceback ending in FileNotFoundError, which buries the one
+# fact that matters.
+if [ ! -f "${CKPT}" ]; then
+    echo "No checkpoint at: ${CKPT}" >&2
+    echo "  (relative paths resolve from $(pwd))" >&2
+    D="$(dirname "${CKPT}")"
+    if [ -d "${D}" ]; then
+        echo "  ${D} contains:" >&2
+        ls -la "${D}" >&2
+    else
+        echo "  ${D} does not exist — training has not produced output yet." >&2
+        echo "  best_ckpt.pth is only written after the first evaluation pass" >&2
+        echo "  (every eval_interval epochs), so a run that died early leaves none." >&2
+    fi
+    exit 1
+fi
+
+# Deliberately NOT trusting the exit status. yolox.tools.export_onnx wraps main()
+# in loguru's @logger.catch, which logs the traceback and then exits 0 — so a
+# failed export looks exactly like a successful one to `set -e`, and this script
+# used to print "Exported ONNX model -> ..." directly underneath a
+# FileNotFoundError. The artefact existing is the only trustworthy signal.
+rm -f "${OUT}"
 python -m yolox.tools.export_onnx \
   -f "${CONFIG}" \
   -c "${CKPT}" \
-  --output-name "${OUT}"
+  --output-name "${OUT}" || true
 
-echo "Exported ONNX model -> ${OUT}"
+if [ ! -s "${OUT}" ]; then
+    echo >&2
+    echo "Export FAILED — no model at ${OUT}" >&2
+    echo "See the traceback above; yolox swallows the exit code, so this check" >&2
+    echo "is what caught it." >&2
+    exit 1
+fi
+
+echo "Exported ONNX model -> ${OUT} ($(du -h "${OUT}" | cut -f1))"
 echo "Deploy it and labels.txt to the Pi, then set DETECT_MODEL / DETECT_LABELS."
