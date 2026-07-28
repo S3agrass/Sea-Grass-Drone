@@ -201,9 +201,17 @@ export function DroneProvider({ children }) {
   );
 
   /* ---------- fleet loading ---------- */
+  // Gated on `supabaseConfigured` alone, not on Firebase sign-in state. The
+  // Supabase `drones` table has no per-user RLS (see supabase-schema.sql — this
+  // app has no real Supabase session to scope on), so it is already a single
+  // shared fleet. Gating it on `user` as well meant signing out — or using
+  // "Continue without account" (localMode) after having been signed in — swapped
+  // to a second, separate, empty localStorage fleet: drones registered while
+  // signed in looked like they had vanished, when they were still in Supabase
+  // the whole time and the app had just stopped looking there.
   const refreshFleet = useCallback(async () => {
     setFleetLoading(true);
-    if (supabaseConfigured && user) {
+    if (supabaseConfigured) {
       const { data, error } = await supabase
         .from("drones")
         .select("*")
@@ -216,7 +224,7 @@ export function DroneProvider({ children }) {
       setFleet([]);
     }
     setFleetLoading(false);
-  }, [user, localMode]);
+  }, [localMode]);
 
   useEffect(() => {
     refreshFleet();
@@ -224,7 +232,7 @@ export function DroneProvider({ children }) {
 
   const saveDrone = useCallback(
     async (drone) => {
-      if (supabaseConfigured && user) {
+      if (supabaseConfigured) {
         const row = {
           name: drone.name,
           host: drone.host,
@@ -232,13 +240,19 @@ export function DroneProvider({ children }) {
           media_url: drone.media_url ?? "",
           drone_id: drone.drone_id ?? "",
           token: drone.token ?? "",
-          owner: user.id,
+          // Informational only — RLS does not scope by it (see refreshFleet).
+          // Falls back when saving via "Continue without account": the column
+          // is NOT NULL, and there is no Firebase user to read an id from.
+          owner: user?.id ?? "local",
         };
-        if (drone.id && drone.id !== "new") {
-          await supabase.from("drones").update(row).eq("id", drone.id);
-        } else {
-          await supabase.from("drones").insert(row);
-        }
+        const { error } =
+          drone.id && drone.id !== "new"
+            ? await supabase.from("drones").update(row).eq("id", drone.id)
+            : await supabase.from("drones").insert(row);
+        // Previously unchecked: a rejected insert/update (RLS, a bad
+        // constraint) failed exactly like this once before — silently, with
+        // the modal closing and the fleet just staying empty and no clue why.
+        if (error) pushToast("error", `Could not save drone: ${error.message}`);
         await refreshFleet();
       } else {
         setFleet((prev) => {
@@ -251,13 +265,14 @@ export function DroneProvider({ children }) {
         });
       }
     },
-    [user, refreshFleet],
+    [user, refreshFleet, pushToast],
   );
 
   const removeDrone = useCallback(
     async (id) => {
-      if (supabaseConfigured && user) {
-        await supabase.from("drones").delete().eq("id", id);
+      if (supabaseConfigured) {
+        const { error } = await supabase.from("drones").delete().eq("id", id);
+        if (error) pushToast("error", `Could not remove drone: ${error.message}`);
         await refreshFleet();
       } else {
         setFleet((prev) => {
@@ -267,7 +282,7 @@ export function DroneProvider({ children }) {
         });
       }
     },
-    [user, refreshFleet],
+    [refreshFleet, pushToast],
   );
 
   const activeDrone = useMemo(

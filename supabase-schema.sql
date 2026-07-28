@@ -8,7 +8,11 @@
 
 create table if not exists public.drones (
   id uuid primary key default gen_random_uuid(),
-  owner uuid not null references auth.users (id) on delete cascade,
+  -- The app signs in with FIREBASE Auth, not Supabase Auth, so this is a
+  -- Firebase UID stored as plain text — never a Supabase auth.uid(). It cannot
+  -- be a uuid column with `references auth.users(id)`: Firebase UIDs aren't
+  -- UUIDs, and no row for them will ever exist in Supabase's own auth.users.
+  owner text not null,
   name text not null,
   host text not null default 'ws://seagrass-pi.local:8765',
   camera_url text default 'http://seagrass-pi.local:8000/stream.mjpg',
@@ -27,29 +31,52 @@ create table if not exists public.drones (
 alter table public.drones add column if not exists media_url text default '';
 alter table public.drones add column if not exists drone_id text default '';
 
--- Row Level Security: users can only see and manage their own drones.
+-- Existing installs from before this fix: the OLD policies below reference the
+-- owner column directly, and Postgres refuses to change a column's type while
+-- any policy depends on it ("cannot alter type of a column used in a policy
+-- definition") — so those specific policies must be dropped BEFORE the alter,
+-- not after. They're recreated (relaxed, renamed) further down.
+drop policy if exists "Users can view their own drones" on public.drones;
+drop policy if exists "Users can register drones" on public.drones;
+drop policy if exists "Users can update their own drones" on public.drones;
+drop policy if exists "Users can remove their own drones" on public.drones;
+
+-- The column was `uuid references auth.users(id)`, which silently rejected
+-- every insert (auth.uid() is NULL — there is no Supabase session — so a NOT
+-- NULL uuid FK column can never be satisfied). Drop the FK and widen the type;
+-- safe even with zero rows.
+alter table public.drones drop constraint if exists drones_owner_fkey;
+alter table public.drones alter column owner type text using owner::text;
+
+-- Row Level Security. NOT scoped by owner: with no Supabase Auth session,
+-- auth.uid() is always NULL, so a `using (auth.uid() = owner)` predicate (the
+-- original design here) silently matches nothing — every insert is rejected
+-- by RLS and every select returns zero rows, with no error surfaced to the UI.
+-- Same trust model as the media table below: anyone holding the anon key (it
+-- ships in the client bundle) can read/write. Move auth to Supabase before
+-- treating this as a real per-user boundary.
 alter table public.drones enable row level security;
 
-drop policy if exists "Users can view their own drones" on public.drones;
-create policy "Users can view their own drones"
+drop policy if exists "Anyone can view drones" on public.drones;
+create policy "Anyone can view drones"
   on public.drones for select
-  using (auth.uid() = owner);
+  using (true);
 
-drop policy if exists "Users can register drones" on public.drones;
-create policy "Users can register drones"
+drop policy if exists "Anyone can register drones" on public.drones;
+create policy "Anyone can register drones"
   on public.drones for insert
-  with check (auth.uid() = owner);
+  with check (true);
 
-drop policy if exists "Users can update their own drones" on public.drones;
-create policy "Users can update their own drones"
+drop policy if exists "Anyone can update drones" on public.drones;
+create policy "Anyone can update drones"
   on public.drones for update
-  using (auth.uid() = owner)
-  with check (auth.uid() = owner);
+  using (true)
+  with check (true);
 
-drop policy if exists "Users can remove their own drones" on public.drones;
-create policy "Users can remove their own drones"
+drop policy if exists "Anyone can remove drones" on public.drones;
+create policy "Anyone can remove drones"
   on public.drones for delete
-  using (auth.uid() = owner);
+  using (true);
 
 
 -- ---------------------------------------------------------------------------
