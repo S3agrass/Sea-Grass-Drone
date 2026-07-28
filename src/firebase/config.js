@@ -7,7 +7,7 @@ export const firebaseConfigured = Boolean(apiKey);
 
 // When Firebase credentials are absent the app runs in local mode only.
 // Auth sign-in will be unavailable but the rest of the UI works fine.
-const app = firebaseConfigured
+export const app = firebaseConfigured
 	? initializeApp({
 			apiKey,
 			authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
