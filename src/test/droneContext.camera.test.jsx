@@ -87,10 +87,9 @@ describe('DroneContext — cameraActive state', () => {
   });
 });
 
-describe('DroneContext — debounced camera lifecycle', () => {
+describe('DroneContext — camera lifecycle', () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    // A drone with a camera URL, selected + active (localMode reads localStorage).
     localStorage.setItem(
       'seagrass-fleet',
       JSON.stringify([
@@ -104,163 +103,114 @@ describe('DroneContext — debounced camera lifecycle', () => {
     localStorage.clear();
   });
 
-  // Bring the context to: connected + viewing, so the camera should be ON.
-  function connectAndView(getCtx) {
+  // The camera is on whenever there is a connected drone with a stream URL.
+  // Viewer presence used to be part of this and is deliberately not any more —
+  // see the note on shouldCameraBeOn.
+  function connect() {
     act(() => { emitToLink({ type: 'status', status: 'connected' }); });
-    act(() => { getCtx().setCameraViewing(true); });
   }
 
-  it('turns the camera ON instantly when viewing a connected drone with a URL', () => {
-    const getCtx = renderContext();
-    connectAndView(getCtx);
+  it('turns the camera ON as soon as a drone with a URL connects', () => {
+    renderContext();
+    connect();
     expect(mockLink.cameraOn).toHaveBeenCalled();
     expect(mockLink.cameraOff).not.toHaveBeenCalled();
   });
 
-  it('does NOT re-send camera_on when re-renders/state updates leave the logical state unchanged', () => {
+  it('starts the camera even for a fleet entry saved with a blank URL', () => {
+    // The end of the chain that made the feed invisible: a blank camera_url
+    // rendered nothing AND held shouldCameraBeOn false, so the camera never
+    // started either. The load-time migration repairs it, and this asserts the
+    // repair reaches the behaviour rather than just the stored value.
+    localStorage.setItem('seagrass-fleet', JSON.stringify([
+      { id: 'd1', name: 'Sim', host: 'ws://x:8765', camera_url: '', token: '' },
+    ]));
+    const getCtx = renderContext();
+    connect();
+    expect(getCtx().activeDrone.camera_url).toBe('http://seagrass.local:8000/stream.mjpg');
+    expect(mockLink.cameraOn).toHaveBeenCalled();
+  });
+
+  it('does NOT re-send camera_on when re-renders leave the logical state unchanged', () => {
     // Regression for the command storm: state messages (recording toggles,
     // telemetry) re-rendered the provider and re-ran the effect, which re-sent
     // camera_on every time. Sends must be transition-gated.
-    const getCtx = renderContext();
-    connectAndView(getCtx);
-    expect(mockLink.cameraOn).toHaveBeenCalledTimes(1);
+    renderContext();
+    connect();
+    mockLink.cameraOn.mockClear();
 
-    // One act() per message so every state update commits its own render, like
-    // real server messages arriving 0.5s apart (a single act() would batch them
-    // all into one commit and mask the per-render re-fire).
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 10; i += 1) {
       act(() => {
-        emitToLink({
-          type: 'message',
-          data: {
-            type: 'state', armed: true, mode: 'MANUAL', pixhawk: true,
-            camera: true, recording: i % 2 === 0, rec_elapsed_s: i,
-          },
-        });
-      });
-      act(() => {
-        emitToLink({
-          type: 'message',
-          data: { type: 'telemetry', heading: i * 10, groundspeed: 1.5, battery: 80 },
-        });
+        emitToLink({ type: 'message', data: { type: 'state', camera: true, recording: i % 2 === 0 } });
       });
     }
     act(() => { vi.advanceTimersByTime(2000); });
 
-    expect(mockLink.cameraOn).toHaveBeenCalledTimes(1); // still exactly once
+    expect(mockLink.cameraOn).not.toHaveBeenCalled();
     expect(mockLink.cameraOff).not.toHaveBeenCalled();
+    expect(mockLink.connect).not.toHaveBeenCalled(); // no WS teardown/reconnect
   });
 
   it('a telemetry flood causes no reconnects and no extra camera sends', () => {
-    const getCtx = renderContext();
-    connectAndView(getCtx);
+    renderContext();
+    connect();
+    mockLink.cameraOn.mockClear();
 
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 40; i += 1) {
       act(() => {
-        emitToLink({
-          type: 'message',
-          data: { type: 'telemetry', heading: i, groundspeed: 2, battery: 79, lat: 43.6 + i * 1e-5, lon: -79.3 },
-        });
+        emitToLink({ type: 'message', data: { type: 'telemetry', heading: i, depth: i / 10 } });
       });
     }
-    act(() => { vi.advanceTimersByTime(2000); });
+    expect(mockLink.cameraOn).not.toHaveBeenCalled();
+    expect(mockLink.cameraOff).not.toHaveBeenCalled();
+    expect(mockLink.connect).not.toHaveBeenCalled();
+  });
 
-    expect(mockLink.connect).not.toHaveBeenCalled(); // no WS teardown/reconnect
-    expect(mockLink.cameraOn).toHaveBeenCalledTimes(1);
+  it('keeps the camera on for the whole session, viewer or not', () => {
+    // This file used to assert the opposite — that leaving the Control page
+    // turned the camera off. That was the bug: the JPEG frame tap lives inside
+    // camera_stream.py, so closing the page stopped detection along with it, at
+    // exactly the times nobody was watching the feed.
+    renderContext();
+    connect();
+    act(() => { vi.advanceTimersByTime(30000); });
     expect(mockLink.cameraOff).not.toHaveBeenCalled();
   });
 
-  it('does NOT turn the camera off on a rapid off→on (StrictMode/fast-nav)', () => {
-    const getCtx = renderContext();
-    connectAndView(getCtx);
-    mockLink.cameraOn.mockClear();
-
-    act(() => { getCtx().setCameraViewing(false); }); // viewer "unmounts"
-    act(() => { vi.advanceTimersByTime(100); });       // < debounce window
-    act(() => { getCtx().setCameraViewing(true); });   // viewer "remounts"
-    act(() => { vi.advanceTimersByTime(1000); });       // let any timer fire
-
-    expect(mockLink.cameraOff).not.toHaveBeenCalled();
-  });
-
-  it('keeps the camera on after the operator navigates away', () => {
-    // This used to assert the opposite, and the opposite was wrong. Viewer
-    // presence deciding whether the camera runs meant closing the Control page
-    // stopped the camera — and with it the JPEG frame tap, and with that all
-    // detection, at precisely the moments nobody was watching. The camera is
-    // now on whenever the drone is; only a deliberate toggle turns it off.
-    const getCtx = renderContext();
-    connectAndView(getCtx);
-
-    act(() => { getCtx().setCameraViewing(false); });
-    act(() => { vi.advanceTimersByTime(5000); }); // well past any debounce
-    expect(mockLink.cameraOff).not.toHaveBeenCalled();
-  });
-
-  it('turns the camera off when the link drops', () => {
-    // Still one automatic off, and it is the right one: with no link there is
-    // no drone to keep a camera on for, and the state has to reset so a
-    // reconnect starts clean rather than believing a camera it cannot see.
-    const getCtx = renderContext();
-    connectAndView(getCtx);
-    mockLink.cameraOn.mockClear();
-
-    act(() => { emitToLink({ type: 'status', status: 'disconnected' }); });
-    act(() => { vi.advanceTimersByTime(1000); });
-    expect(getCtx().cameraActive).toBe(false);
-  });
-
-  it('never turns the camera off while a recording is in progress', () => {
-    const getCtx = renderContext();
-    connectAndView(getCtx);
+  it('keeps the camera on across a recording and after it ends', () => {
+    renderContext();
+    connect();
     act(() => { emitToLink({ type: 'message', data: { type: 'state', camera: true, recording: true } }); });
-
-    act(() => { getCtx().setCameraViewing(false); });
-    act(() => { vi.advanceTimersByTime(1000); });
-
-    expect(mockLink.cameraOff).not.toHaveBeenCalled();
-  });
-
-  it('keeps the camera on across a whole recording and after it ends', () => {
-    // Previously the camera shut down once a recording finished if the operator
-    // had left. Nothing should turn it off now — the recording-in-progress
-    // guard remains in the code for the manual-off path, but viewer presence no
-    // longer starts that path at all.
-    const getCtx = renderContext();
-    connectAndView(getCtx);
-    act(() => { emitToLink({ type: 'message', data: { type: 'state', camera: true, recording: true } }); });
-
-    act(() => { getCtx().setCameraViewing(false); });
     act(() => { vi.advanceTimersByTime(2000); });
     act(() => { emitToLink({ type: 'message', data: { type: 'state', camera: true, recording: false } }); });
     act(() => { vi.advanceTimersByTime(2000); });
-
     expect(mockLink.cameraOff).not.toHaveBeenCalled();
   });
 
-  // Faithful repro of the reported bug: StrictMode double-invokes the viewer's
-  // mount effect (mount→cleanup→mount), which must NOT churn camera on/off.
-  it('does not flap camera on/off under real React StrictMode', () => {
-    function Viewer() {
-      const { setCameraViewing } = useDrone();
-      // Mirrors CameraView's registration effect.
-      React.useEffect(() => {
-        setCameraViewing(true);
-        return () => setCameraViewing(false);
-      }, [setCameraViewing]);
-      return null;
-    }
+  it('clears camera state when the link drops', () => {
+    // Still one automatic off, and the right one: with no link there is no
+    // drone to hold a camera on for, and the state must reset so a reconnect
+    // starts clean rather than believing in a camera it cannot see.
+    const getCtx = renderContext();
+    connect();
+    act(() => { emitToLink({ type: 'message', data: { type: 'state', camera: true } }); });
+    act(() => { emitToLink({ type: 'status', status: 'disconnected' }); });
+    expect(getCtx().cameraActive).toBe(false);
+  });
+
+  it('sends camera_on exactly once under real React StrictMode', () => {
+    // StrictMode double-invokes effects (mount -> cleanup -> mount). The
+    // transition gate must absorb that rather than emitting a command storm.
+    function Consumer() { useDrone(); return null; }
     render(
       <StrictMode>
-        <DroneProvider>
-          <Viewer />
-        </DroneProvider>
+        <DroneProvider><Consumer /></DroneProvider>
       </StrictMode>,
     );
     act(() => { emitToLink({ type: 'status', status: 'connected' }); });
     act(() => { vi.advanceTimersByTime(1000); });
 
-    expect(mockLink.cameraOn).toHaveBeenCalledTimes(1); // exactly once — no storm
-    expect(mockLink.cameraOff).not.toHaveBeenCalled();  // and never flapped off
+    expect(mockLink.cameraOn).toHaveBeenCalledTimes(1);
+    expect(mockLink.cameraOff).not.toHaveBeenCalled();
   });
 });

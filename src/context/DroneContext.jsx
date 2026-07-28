@@ -165,9 +165,6 @@ export function DroneProvider({ children }) {
   const [recording, setRecording] = useState(false);
   const [recElapsed, setRecElapsed] = useState(0);
   const [autoRecord, setAutoRecordFlag] = useState(false);
-  // Set true while the Control screen's CameraView is mounted — drives the
-  // debounced auto on/off lifecycle below.
-  const [cameraViewing, setCameraViewing] = useState(false);
   const [demoMode, setDemoMode] = useState(
     () => localStorage.getItem("seagrass-demo") === "1",
   );
@@ -456,17 +453,20 @@ export function DroneProvider({ children }) {
     recordingRef.current = recording;
   }, [recording]);
 
-  // Deliberately NOT gated on `cameraViewing` any more. It used to be, which
-  // meant navigating off the Control page sent camera_off — an automatic kill
-  // switch nobody asked for, and one the detector cannot survive: the JPEG
-  // frame tap lives inside camera_stream.py, so closing the tab stopped
-  // detection too. The camera is now simply on whenever the drone is, matching
-  // the server, which also starts it at boot.
+  // On whenever there is a drone to be on for — no longer gated on whether
+  // anyone is looking at it.
   //
-  // `cameraViewing` is still tracked and still exported — CameraView sets it,
-  // and knowing whether anyone is actually looking is worth keeping — it just
-  // no longer decides whether the camera runs. The manual toggle still does;
-  // an operator turning it off deliberately is not an automatic anything.
+  // It used to track a `cameraViewing` flag that CameraView set on mount and
+  // cleared on unmount, so navigating off the Control page sent camera_off: an
+  // automatic kill switch nobody asked for, and one the detector cannot
+  // survive, because the JPEG frame tap lives inside camera_stream.py and
+  // closing the tab therefore stopped detection too. The flag and its setter
+  // are gone rather than left in place unread — nothing consumed them once this
+  // stopped, and keeping them would have re-rendered the whole provider on
+  // every navigation to update state no one looked at.
+  //
+  // The manual toggle still turns it off, and the all-stop kill switch still
+  // takes it down; what went away is anything doing so on its own.
   const shouldCameraBeOn =
     linkStatus === "connected" && !!activeDrone?.camera_url;
   useEffect(() => {
@@ -540,7 +540,6 @@ export function DroneProvider({ children }) {
     recordStop,
     capturePhoto,
     setAutoRecord,
-    setCameraViewing,
     mediaBase,
     linkStatus,
     linkDetail,
