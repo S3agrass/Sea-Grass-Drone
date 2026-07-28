@@ -35,13 +35,21 @@ class Exp(MyExp):
         self.data_dir = os.path.join(_here, "..", "datasets", "seagrass_underwater")
         self.train_ann = "instances_train.json"
         self.val_ann = "instances_val.json"
-        self.name = "train2024"       # image sub-dir for training
-        # (YOLOX reads val images from a dir named after the val ann by default;
-        #  keep val images in val2024/ and adjust here if your layout differs.)
+        # Image directories MUST be train2017/ and val2017/, and there is no
+        # setting here that changes it. YOLOX's COCODataset defaults to
+        # name="train2017" and get_eval_loader passes name="val2017" outright;
+        # the base Exp never forwards `self.name` to either. Setting
+        # self.name = "train2024" therefore looked correct, did nothing, and
+        # training died on "file named .../train2017/x.jpg not found" while the
+        # images sat in train2024/. prepare_dataset.py writes 2017 for this
+        # reason — the year is a COCO naming artefact, not a date.
 
         # --- training schedule (tune for your dataset size) ---
         self.max_epoch = 100
-        self.data_num_workers = 4
+        # 2, not 4: a Colab T4 instance has 2 vCPUs, and PyTorch warns that
+        # over-subscribing workers can slow the loader down or freeze it. Raise
+        # it on a machine with more cores.
+        self.data_num_workers = 2
         self.eval_interval = 5
 
         # experiment name -> YOLOX_outputs/<exp_name>/

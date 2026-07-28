@@ -113,8 +113,8 @@ wget -O yolox_nano.pth <yolox_nano.pth release URL from YOLOX repo>
 
 ```
 datasets/seagrass_underwater/
-├── train2024/                       # training images
-├── val2024/                         # validation images
+├── train2017/                       # training images (YOLOX hardcodes 2017)
+├── val2017/                         # validation images
 └── annotations/
     ├── instances_train.json         # COCO-format boxes
     └── instances_val.json
@@ -150,8 +150,8 @@ starting point (transfer learning) rather than training from scratch.
 
 ```bash
 # copy the exported model and label list to the Pi
-scp ../server/vision/models/seagrass_nano.onnx pi@seagrass-pi.local:~/Sea-Grass-Drone/server/vision/models/
-scp labels.txt pi@seagrass-pi.local:~/Sea-Grass-Drone/server/vision/models/seagrass.txt
+scp ../server/vision/models/seagrass_nano.onnx pi@seagrass.local:~/Sea-Grass-Drone/server/vision/models/
+scp labels.txt pi@seagrass.local:~/Sea-Grass-Drone/server/vision/models/seagrass.txt
 ```
 
 Point the detector at them (e.g. in the systemd unit or shell):

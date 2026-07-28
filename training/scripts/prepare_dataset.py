@@ -232,7 +232,13 @@ def main():
         print("\n(dry run — nothing written)")
         return
 
-    img_out = os.path.join(root, f"{args.split}2024")
+    # 2017, not 2024. YOLOX's COCODataset hardcodes name="train2017" and
+    # get_eval_loader passes name="val2017"; the Exp's `self.name` is never
+    # forwarded to either, so setting it does nothing and training dies with
+    # "file named .../train2017/x.jpg not found" while the images sit in a
+    # directory named after the year you actually built them. Matching YOLOX's
+    # expectation is far less fragile than overriding its data loaders.
+    img_out = os.path.join(root, f"{args.split}2017")
     ann_out = os.path.join(root, "annotations")
     os.makedirs(img_out, exist_ok=True)
     os.makedirs(ann_out, exist_ok=True)
