@@ -27,6 +27,11 @@ const CAMERA_OFF_DEBOUNCE_MS = 400;
 // anywhere explaining that a field they have never been shown is empty.
 export const DEFAULT_CAMERA_URL = "http://seagrass.local:8000/stream.mjpg";
 
+// Port camera_stream.py binds for /media, /photo and /record — the same server
+// that serves /stream.mjpg. Used to derive mediaBase when the camera URL points
+// somewhere else (MediaMTX's WebRTC endpoint on :8889 is the documented setup).
+const MEDIA_PORT = "8000";
+
 const LOCAL_DRONE = {
   id: "local",
   name: "Seagrass One",
@@ -224,6 +229,8 @@ export function DroneProvider({ children }) {
           name: drone.name,
           host: drone.host,
           camera_url: drone.camera_url,
+          media_url: drone.media_url ?? "",
+          drone_id: drone.drone_id ?? "",
           token: drone.token ?? "",
           owner: user.id,
         };
@@ -506,11 +513,26 @@ export function DroneProvider({ children }) {
 
   // Base URL of the Pi's media server (photos/recordings live on the SD card and
   // are fetched/deleted directly from it, not proxied through the control WS).
-  // Derived from the camera stream URL's origin — same host/port serves both.
+  //
+  // This used to be the camera stream URL's ORIGIN, on the assumption that one
+  // host/port serves both. It does not: the recommended camera URL points at
+  // MediaMTX (:8889/cam/whep), which has no /media route, so every listing 404'd
+  // and the Media page showed its error state permanently. The media endpoints
+  // live in camera_stream.py on :8000. So: take an explicit media_url when set,
+  // otherwise keep the camera's HOST but use the media port.
   const mediaBase = useMemo(() => {
+    if (activeDrone?.media_url) {
+      try {
+        return new URL(activeDrone.media_url).origin;
+      } catch {
+        return null;
+      }
+    }
     if (!activeDrone?.camera_url) return null;
     try {
-      return new URL(activeDrone.camera_url).origin;
+      const url = new URL(activeDrone.camera_url);
+      url.port = MEDIA_PORT;
+      return url.origin;
     } catch {
       return null;
     }

@@ -40,6 +40,8 @@ server/vision/models/*.onnx
 # the repo. Nothing here is source: prepare_dataset.py rebuilds all of it from
 # the public RUOD/TrashCan downloads, deterministically. The README.txt files
 # documenting the expected layout are kept.
+training/datasets/*/train2017/*
+training/datasets/*/val2017/*
 training/datasets/*/train2024/*
 training/datasets/*/val2024/*
 training/datasets/*/annotations/*.json
@@ -47,6 +49,13 @@ training/datasets/*/annotations/*.json
 training/yolox_nano.pth
 training/yolox_src/
 training/YOLOX_outputs/
+# Dataset archives. The rules above only cover the unpacked directories, so a
+# zip made for a Drive upload sat outside them and got committed — 3.7GB against
+# GitHub's 100MB per-file limit, which does not fail fast, it just retries the
+# push forever.
+training/*.zip
+training/*.tar
+training/*.tar.gz
 
 # MAVLink session capture artifacts (runtime, not source)
 *.tlog

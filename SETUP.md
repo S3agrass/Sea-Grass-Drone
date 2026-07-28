@@ -35,12 +35,12 @@ VITE_FIREBASE_APP_ID=1:123:web:abc
 
 ---
 
-## 3. Supabase (optional — cloud fleet registry)
+## 3. Supabase (cloud fleet registry + captured media)
 
-Without Supabase, drone configs are saved in `localStorage` on the device (local mode). To share a fleet across devices/users, set up Supabase:
+Without Supabase, drone configs are saved in `localStorage` on the device (local mode) and captured photos stay on the Pi's SD card only. Set it up to share a fleet across devices and to back up media — see [step 6b](#6b-media-backup-to-supabase) for the media half:
 
-1. Create a project at [supabase.com](https://supabase.com).
-2. SQL Editor → run `supabase-schema.sql` (creates the `drones` table with Row Level Security).
+1. Create a project at [supabase.com](https://supabase.com) (free tier, no card).
+2. SQL Editor → run `supabase-schema.sql` (creates the `drones` and `media` tables with Row Level Security, plus the `media` storage bucket).
 3. Project Settings → API → copy URL and anon key.
 4. Add to `.env`:
 ```
@@ -276,9 +276,106 @@ Install the Tailscale client from [tailscale.com/download](https://tailscale.com
 When registering the drone, set:
 - **Drone link:** `ws://100.64.0.1:8765`
 - **Camera stream URL:** `http://100.64.0.1:8889/cam/whep`
+- **Media server URL:** leave blank (defaults to the camera host on `:8000`)
+- **Drone ID:** matches `DRONE_ID` on the Pi, or blank to show the whole fleet's media
 - **Access token:** matches `SEAGRASS_TOKEN` on the Pi
 
 The stream will now work from anywhere the operator has Tailscale running.
+
+> The camera URL points at MediaMTX on `:8889`, but photos and recordings are
+> served by `camera_stream.py` on `:8000`. The Media page derives the media host
+> from the camera host with the port swapped, which is why the media field can
+> stay blank — set it only if the media server runs somewhere else entirely.
+
+---
+
+## 6b. Media backup to Supabase
+
+Captures are written to the Pi's SD card first, because a dive has no operator
+connected and often no network link at all. `media_uploader.py` drains them to
+the cloud whenever the vehicle has connectivity again — typically on surfacing.
+Nothing is deleted from the card; the cloud is a backup.
+
+**Why Supabase and not Firebase.** Cloud Storage for Firebase has required the
+paid Blaze plan since September 2024 — on the free Spark plan you get no buckets
+at all and calls return 402/403. Supabase's free tier includes 1 GB of file
+storage with no credit card. Firebase keeps auth and hosting; only the media
+bytes moved.
+
+**Photos only, by default.** At the default `REC_BITRATE` of 4 Mbit/s a recording
+is roughly **1.8 GB per hour**, so video cannot fit a 1 GB allowance. The
+uploader ships photos (`UPLOAD_TYPES=photo`) and leaves recordings on the card,
+where they stay browsable from the Media page whenever the drone is powered on.
+Recordings are *skipped, not discarded* — set `UPLOAD_TYPES=photo,video` on a
+paid tier and everything already on the card uploads.
+
+### One-time Supabase setup
+
+1. Create a project at [supabase.com](https://supabase.com) (no card required).
+2. SQL Editor → New query → paste all of `supabase-schema.sql` → Run. This
+   creates the `drones` and `media` tables, their RLS policies, and the `media`
+   storage bucket.
+3. Project settings → API. Copy into `.env` (and into Netlify's env vars):
+   ```
+   VITE_SUPABASE_URL=https://xxxxxxxx.supabase.co
+   VITE_SUPABASE_ANON_KEY=eyJ...
+   ```
+4. Optional: Database → Replication → enable realtime for `public.media`, so the
+   Media page fills in live as a surfacing drone drains its backlog. Without it
+   the page still works, it just needs a manual refresh.
+
+> **Access note.** The app signs in with Firebase, not Supabase, so the browser
+> only ever holds the anon key and the media policies grant read to `anon`.
+> Captures are effectively *unlisted* rather than access-controlled — anyone with
+> the anon key (it ships in the client bundle) could read them. Fine for survey
+> footage; move auth to Supabase before storing anything sensitive.
+
+### On the Pi
+
+Add to `~/.seagrass-env` — the **service_role** key, not the anon key. It
+bypasses RLS, which is what lets the drone write rows no browser may write, so
+it must never reach the web bundle:
+
+```bash
+SUPABASE_URL=https://xxxxxxxx.supabase.co
+SUPABASE_SERVICE_KEY=eyJ...
+DRONE_ID=seagrass-one
+# UPLOAD_TYPES=photo,video   # only on a paid tier
+```
+
+Then install the uploader service (no new Python packages — it uses urllib):
+
+```bash
+cd ~/Sea-Grass-Drone && git pull
+sudo cp scripts/media-uploader.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now media-uploader
+sudo systemctl restart drone-server    # picks up the sidecar writing
+journalctl -fu media-uploader
+```
+
+A healthy start prints `Media uploader starting — dir=… drone=… bucket=media
+types=photo`. A successful upload prints `Uploaded photo-… -> seagrass-one/…`.
+
+> Free Supabase projects pause after ~1 week with no activity. Restore is one
+> click in the dashboard, but a paused project means uploads fail and retry —
+> which is exactly what the queue is built for, so nothing is lost.
+
+### Autonomous capture (optional, off by default)
+
+With the detector running, the vehicle can photograph what it finds on its own.
+Add to `~/.seagrass-env` and restart `drone-server`:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `DETECT_AUTOCAPTURE` | `0` | `1` to enable |
+| `DETECT_AUTOCAPTURE_MIN_CONF` | `0.6` | Confidence a detection must clear |
+| `DETECT_AUTOCAPTURE_COOLDOWN_S` | `15` | Minimum gap between captures |
+
+The cooldown matters: the detector emits several frames a second, and without it
+one fish lingering in view becomes hundreds of near-identical JPEGs.
+
+Each capture records what triggered it — detector label, confidence, depth,
+heading and position — and the Media page shows that under the thumbnail.
 
 ---
 

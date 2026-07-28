@@ -21,5 +21,10 @@ const app = firebaseConfigured
 
 export const auth = app ? getAuth(app) : null;
 
+// Captured photos/recordings are NOT stored here. Cloud Storage for Firebase has
+// required the paid Blaze plan since September 2024; media lives in Supabase
+// Storage instead (src/lib/mediaStore.js, server/media_uploader.py). Firebase
+// keeps auth and hosting only.
+
 // Optional
 // export const analytics = getAnalytics(app);

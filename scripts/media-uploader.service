@@ -1,0 +1,27 @@
+# Seagrass media uploader — drains captured photos to Supabase Storage.
+# Install:
+#   sudo cp ~/Sea-Grass-Drone/scripts/media-uploader.service /etc/systemd/system/
+#   sudo systemctl enable --now media-uploader
+# Requires ~/.seagrass-env to set SUPABASE_URL and SUPABASE_SERVICE_KEY (and
+# optionally DRONE_ID, MEDIA_DIR, SUPABASE_BUCKET, UPLOAD_TYPES).
+# Logs: journalctl -fu media-uploader
+#
+# Deliberately independent of drone-server and the camera: the queue must keep
+# draining after a mission ends, and the camera process is killed whenever the
+# camera goes idle.
+
+[Unit]
+Description=Seagrass media uploader
+After=network.target
+
+[Service]
+User=pi
+EnvironmentFile=/home/pi/.seagrass-env
+ExecStart=/usr/bin/python3 -u /home/pi/Sea-Grass-Drone/server/media_uploader.py
+Restart=always
+# Missing config exits immediately; a slow restart keeps the journal readable
+# rather than looping a config error dozens of times a second.
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

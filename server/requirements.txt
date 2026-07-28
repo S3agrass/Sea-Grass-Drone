@@ -16,3 +16,7 @@ websockets       # async WebSocket server
 onnxruntime               # MIT   — CPU inference engine for the YOLOX ONNX model
 opencv-python-headless>=4.5  # Apache-2.0 — underwater filter + image ops (headless: no GUI deps)
 numpy                     # BSD-3  — array glue for pre/post-processing
+
+# --- media upload ---
+# None: media_uploader.py talks to Supabase over plain HTTP via urllib, so the
+# Pi gains no dependency for it.

@@ -1,11 +1,27 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import TopBar from "../components/TopBar";
 import Toasts from "../components/Toasts";
 import { useDrone } from "../context/DroneContext";
+import {
+  deleteMedia,
+  mediaCloudEnabled,
+  mediaUrl,
+  subscribeMedia,
+} from "../lib/mediaStore";
 
-// Photos and recordings live on the Pi's SD card (they must survive an
-// autonomous run with no operator connected), so this page talks directly to the
-// camera's media server rather than through the control WebSocket.
+// Captures are written to the Pi's SD card first — they must survive an
+// autonomous run with no operator connected — and the drone uploads them to
+// Supabase on its own (server/media_uploader.py) once it has a link again.
+//
+// So a capture can be in one of two places, or both, and which one is a detail
+// of upload timing that no operator should have to reason about. This page reads
+// both and shows ONE list: the SD card while the drone is powered on, the cloud
+// always. Cloud copies win for playback, because they keep working after the
+// drone is switched off and put away.
+//
+// Recordings are normally "On drone only": the uploader ships photos by default
+// because video does not fit a 1 GB free tier. That is worth showing plainly
+// rather than hiding, so an operator knows which captures are backed up.
 
 function fmtSize(bytes) {
   if (!bytes) return "0 B";
@@ -18,12 +34,30 @@ function fmtTime(mtime) {
   return new Date(mtime * 1000).toLocaleString();
 }
 
+/** One line describing why an autonomous capture happened, or null. */
+function fmtContext(item) {
+  const c = item.context;
+  if (!c) return null;
+  const bits = [];
+  if (c.label) {
+    const pct = c.confidence != null ? ` ${Math.round(c.confidence * 100)}%` : "";
+    bits.push(`${c.label}${pct}`);
+  }
+  if (c.depth_m != null) bits.push(`${c.depth_m.toFixed(1)} m down`);
+  if (c.heading_deg != null) bits.push(`bearing ${Math.round(c.heading_deg)}°`);
+  return bits.length ? bits.join(" · ") : null;
+}
+
 export default function MediaPage() {
   const { mediaBase, activeDrone, pushToast } = useDrone();
   const token = activeDrone?.token || "";
 
-  const [items, setItems] = useState([]);
-  const [status, setStatus] = useState("idle"); // idle | loading | ready | error
+  const [local, setLocal] = useState([]); // on the drone's SD card
+  const [cloud, setCloud] = useState([]); // uploaded to Supabase
+  const [localStatus, setLocalStatus] = useState("idle"); // idle|loading|ready|error
+  const [cloudReady, setCloudReady] = useState(!mediaCloudEnabled);
+  const [urls, setUrls] = useState({}); // storagePath -> resolved download URL
+  const requested = useRef(new Set()); // storagePaths already asked for
   const [viewing, setViewing] = useState(null); // item open in the lightbox
 
   const authHeaders = useCallback(
@@ -33,18 +67,18 @@ export default function MediaPage() {
 
   const refresh = useCallback(async () => {
     if (!mediaBase) {
-      setStatus("error");
+      setLocalStatus("error");
       return;
     }
-    setStatus("loading");
+    setLocalStatus("loading");
     try {
       const resp = await fetch(`${mediaBase}/media`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
-      setItems(data.media || []);
-      setStatus("ready");
+      setLocal(data.media || []);
+      setLocalStatus("ready");
     } catch {
-      setStatus("error");
+      setLocalStatus("error");
     }
   }, [mediaBase]);
 
@@ -52,21 +86,100 @@ export default function MediaPage() {
     refresh();
   }, [refresh]);
 
-  async function remove(item) {
-    if (!mediaBase) return;
-    if (!window.confirm(`Delete ${item.name}? This cannot be undone.`)) return;
-    try {
-      const resp = await fetch(`${mediaBase}/media/${encodeURIComponent(item.name)}`, {
-        method: "DELETE",
-        headers: authHeaders(),
-      });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      setItems((prev) => prev.filter((m) => m.name !== item.name));
-      if (viewing?.name === item.name) setViewing(null);
-    } catch {
-      pushToast?.("error", `Could not delete ${item.name}`);
+  // Live subscription rather than a one-shot read: a drone that has just
+  // surfaced drains its backlog over minutes, and the grid should fill in as
+  // that happens instead of waiting for someone to hit Refresh.
+  useEffect(() => {
+    if (!mediaCloudEnabled) return undefined;
+    return subscribeMedia(
+      activeDrone?.drone_id || null,
+      (list) => {
+        setCloud(list);
+        setCloudReady(true);
+      },
+      () => setCloudReady(true),
+    );
+  }, [activeDrone]);
+
+  // Merge by filename. A capture that exists in both places is one item, not
+  // two; the cloud record wins because it carries the capture context and
+  // outlives the drone being switched off.
+  const items = useMemo(() => {
+    const byName = new Map();
+    for (const item of local) {
+      byName.set(item.name, { ...item, onDrone: true });
     }
+    for (const item of cloud) {
+      const existing = byName.get(item.name);
+      byName.set(item.name, { ...existing, ...item, onDrone: Boolean(existing) });
+    }
+    return [...byName.values()].sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
+  }, [local, cloud]);
+
+  // Storage URLs are resolved lazily and cached: getDownloadURL is a network
+  // round-trip per object, so re-resolving on every render would hammer it.
+  //
+  // In-flight requests are tracked in a ref, not in state. Marking them in
+  // `urls` would make this effect depend on its own output, and every resolved
+  // URL would re-run it — with a cleanup that cancelled the requests still in
+  // flight from the previous run. Those paths were already recorded as started,
+  // so nothing ever retried them and no cloud media would play at all.
+  useEffect(() => {
+    for (const item of items) {
+      const path = item.storagePath;
+      if (!path || requested.current.has(path)) continue;
+      requested.current.add(path);
+      mediaUrl(path)
+        ?.then((url) => setUrls((prev) => ({ ...prev, [path]: url })))
+        .catch(() => requested.current.delete(path)); // let a retry happen
+    }
+  }, [items]);
+
+  /** Best playable URL for an item: cloud first, drone as the fallback. */
+  const srcOf = useCallback(
+    (item) => {
+      const cloudUrl = item.storagePath ? urls[item.storagePath] : null;
+      if (cloudUrl) return cloudUrl;
+      if (item.onDrone && mediaBase) return `${mediaBase}/media/${item.name}`;
+      return undefined;
+    },
+    [urls, mediaBase],
+  );
+
+  async function remove(item) {
+    if (!window.confirm(`Delete ${item.name}? This cannot be undone.`)) return;
+    // Delete means delete: remove both copies, so a capture cannot reappear on
+    // the next upload cycle after the operator thought it was gone.
+    let failed = false;
+    if (item.onDrone && mediaBase) {
+      try {
+        const resp = await fetch(`${mediaBase}/media/${encodeURIComponent(item.name)}`, {
+          method: "DELETE",
+          headers: authHeaders(),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        setLocal((prev) => prev.filter((m) => m.name !== item.name));
+      } catch {
+        failed = true;
+      }
+    }
+    if (item.cloud) {
+      try {
+        await deleteMedia(item);
+        setCloud((prev) => prev.filter((m) => m.name !== item.name));
+      } catch {
+        failed = true;
+      }
+    }
+    if (failed) pushToast?.("error", `Could not delete ${item.name}`);
+    else if (viewing?.name === item.name) setViewing(null);
   }
+
+  const loading = localStatus === "loading" || !cloudReady;
+  // The drone being unreachable is only an error when there is nothing else to
+  // show — with uploaded captures on screen it is just a powered-off vehicle.
+  const showDroneError = localStatus === "error" && items.length === 0;
+  const empty = !loading && !showDroneError && items.length === 0;
 
   return (
     <div className="app-shell">
@@ -76,23 +189,23 @@ export default function MediaPage() {
           <div>
             <h1 className="settings-title">Media</h1>
             <div className="settings-muted">
-              Photos and recordings stored on {activeDrone?.name || "the drone"}.
+              Photos and recordings from {activeDrone?.name || "the drone"}.
             </div>
           </div>
-          <button className="btn" onClick={refresh} disabled={status === "loading"}>
-            {status === "loading" ? "Loading…" : "↻ Refresh"}
+          <button className="btn" onClick={refresh} disabled={localStatus === "loading"}>
+            {localStatus === "loading" ? "Loading…" : "↻ Refresh"}
           </button>
         </div>
 
-        {status === "error" && (
+        {showDroneError && (
           <div className="media-empty">
             {mediaBase
-              ? "Couldn't reach the drone's media store. Check the camera stream URL and that the drone is powered on."
+              ? "Couldn't reach the drone's media store, and nothing has been uploaded yet. Check the camera stream URL and that the drone is powered on."
               : "No camera stream URL configured — add one in Settings to browse media."}
           </div>
         )}
 
-        {status === "ready" && items.length === 0 && (
+        {empty && (
           <div className="media-empty">
             No photos or recordings yet. Capture some from the Control screen.
           </div>
@@ -100,42 +213,46 @@ export default function MediaPage() {
 
         {items.length > 0 && (
           <div className="media-grid">
-            {items.map((item) => (
-              <div className="media-card" key={item.name}>
-                <button
-                  className="media-thumb"
-                  onClick={() => setViewing(item)}
-                  title="View"
-                >
-                  {item.type === "photo" ? (
-                    <img src={`${mediaBase}${item.url}`} alt={item.name} loading="lazy" />
-                  ) : (
-                    <>
-                      <video src={`${mediaBase}${item.url}`} preload="metadata" muted />
-                      <span className="media-play">▶</span>
-                    </>
-                  )}
-                </button>
-                <div className="media-meta mono">
-                  <div className="media-name">{item.name}</div>
-                  <div className="media-sub">
-                    {fmtTime(item.mtime)} · {fmtSize(item.size)}
+            {items.map((item) => {
+              const src = srcOf(item);
+              const context = fmtContext(item);
+              return (
+                <div className="media-card" key={item.name}>
+                  <button
+                    className="media-thumb"
+                    onClick={() => setViewing(item)}
+                    title="View"
+                  >
+                    {item.type === "photo" ? (
+                      <img src={src} alt={item.name} loading="lazy" />
+                    ) : (
+                      <>
+                        <video src={src} preload="metadata" muted />
+                        <span className="media-play">▶</span>
+                      </>
+                    )}
+                  </button>
+                  <div className="media-meta mono">
+                    <div className="media-name">{item.name}</div>
+                    <div className="media-sub">
+                      {fmtTime(item.mtime)} · {fmtSize(item.size)}
+                    </div>
+                    {context && <div className="media-sub">{context}</div>}
+                    <div className="media-sub">
+                      {item.cloud ? "☁ Backed up" : "On drone only"}
+                    </div>
+                  </div>
+                  <div className="media-actions">
+                    <a className="btn" href={src} download={item.name}>
+                      ↓ Download
+                    </a>
+                    <button className="btn btn-danger" onClick={() => remove(item)}>
+                      ✕ Delete
+                    </button>
                   </div>
                 </div>
-                <div className="media-actions">
-                  <a
-                    className="btn"
-                    href={`${mediaBase}${item.url}`}
-                    download={item.name}
-                  >
-                    ↓ Download
-                  </a>
-                  <button className="btn btn-danger" onClick={() => remove(item)}>
-                    ✕ Delete
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -144,9 +261,9 @@ export default function MediaPage() {
         <div className="camera-modal" onClick={() => setViewing(null)}>
           <div className="media-viewer" onClick={(e) => e.stopPropagation()}>
             {viewing.type === "photo" ? (
-              <img src={`${mediaBase}${viewing.url}`} alt={viewing.name} />
+              <img src={srcOf(viewing)} alt={viewing.name} />
             ) : (
-              <video src={`${mediaBase}${viewing.url}`} controls autoPlay />
+              <video src={srcOf(viewing)} controls autoPlay />
             )}
             <button className="camera-close btn" onClick={() => setViewing(null)}>
               ✕ Close

@@ -74,6 +74,33 @@ export default function SettingsPage() {
                 />
               </label>
               <label className="field">
+                <span className="eyebrow">Media server URL (optional)</span>
+                <input
+                  className="mono"
+                  value={form.media_url || ""}
+                  placeholder="http://seagrass.local:8000"
+                  onChange={(e) => setForm({ ...form, media_url: e.target.value })}
+                />
+                <span className="field-help">
+                  Where photos and recordings are browsed from. Leave blank to use
+                  the camera host on port <span className="mono">8000</span> — set it
+                  only if the media server runs somewhere else.
+                </span>
+              </label>
+              <label className="field">
+                <span className="eyebrow">Drone ID (optional)</span>
+                <input
+                  className="mono"
+                  value={form.drone_id || ""}
+                  placeholder="Must match DRONE_ID on the drone"
+                  onChange={(e) => setForm({ ...form, drone_id: e.target.value })}
+                />
+                <span className="field-help">
+                  Tags uploaded media so the Media page shows only this drone's
+                  captures. Leave blank to show everything in the fleet.
+                </span>
+              </label>
+              <label className="field">
                 <span className="eyebrow">Access token</span>
                 <input
                   className="mono"

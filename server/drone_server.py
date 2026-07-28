@@ -642,6 +642,11 @@ def stop_camera():
 # server-side (e.g. auto-record on arm during an unattended autonomous run).
 CAMERA_HTTP = os.environ.get("CAMERA_HTTP", "http://127.0.0.1:8000")
 
+# Where camera_stream.py writes photos/recordings. Must match its own MEDIA_DIR
+# (see camera_stream.py) — we write a metadata sidecar next to each capture, and
+# media_uploader.py drains this directory to Firebase.
+MEDIA_DIR = os.environ.get("MEDIA_DIR", os.path.expanduser("~/seagrass-media"))
+
 # Auto-record: when enabled, arming (or entering an autonomous run) starts a
 # recording and disarming stops it — so a mission with no operator connected is
 # still captured. Persisted to a small state file so it survives disconnects and
@@ -652,6 +657,8 @@ AUTORECORD_STATE = os.environ.get(
 
 recording = False
 rec_started_at = 0.0
+# Filename of the recording in progress, captured from /record/start's response.
+rec_file = None
 
 
 def _load_autorecord() -> bool:
@@ -673,18 +680,28 @@ def _persist_autorecord(on: bool):
         print(f"Could not persist auto-record flag: {exc}")
 
 
-def _camera_post(path: str) -> bool:
+def _camera_post(path: str):
     """POST to the camera's local control endpoint. Runs off the event loop via
-    asyncio.to_thread — urllib is blocking. Returns True on a 2xx response."""
+    asyncio.to_thread — urllib is blocking.
+
+    Returns (ok, body): ok is True on a 2xx response, body is the decoded JSON
+    (or {} if it wasn't JSON). record_start needs the body — it carries the
+    filename the recorder just opened, which is the only place that name is
+    reported: Recorder.stop() clears current_file before returning."""
     req = urllib.request.Request(f"{CAMERA_HTTP}{path}", method="POST")
     if TOKEN:
         req.add_header("Authorization", f"Bearer {TOKEN}")
     try:
         with urllib.request.urlopen(req, timeout=4) as resp:
-            return 200 <= resp.status < 300
+            ok = 200 <= resp.status < 300
+            try:
+                body = json.loads(resp.read().decode("utf-8"))
+            except (ValueError, OSError):
+                body = {}
+            return ok, body if isinstance(body, dict) else {}
     except (urllib.error.URLError, OSError) as exc:
         print(f"Camera control POST {path} failed: {exc}")
-        return False
+        return False, {}
 
 
 def _camera_photo():
@@ -701,26 +718,102 @@ def _camera_photo():
         return None
 
 
+# ---------------- media sidecars (the upload queue) ----------------
+# Every finished capture gets a "<name>.json" sidecar written next to it in
+# MEDIA_DIR. media_uploader.py treats those sidecars as its work queue: a media
+# file with no sidecar is not uploaded.
+#
+# That rule is deliberate and does two jobs at once. It keeps an in-progress
+# recording (whose mp4 is still being written by ffmpeg) out of the queue with no
+# cross-process locking, and it means the queue survives power loss — which is
+# the normal case here, since the vehicle has no network link until it surfaces
+# and may sit with hours of pending uploads.
+#
+# The sidecar also carries the context only THIS process knows: what the detector
+# was seeing, and how deep / which way / where the vehicle was at that instant.
+# That is the difference between "here is a photo" and "here is what the drone
+# thought was worth photographing, 4.2 m down, bearing 137".
+
+# Latest value seen for each telemetry field. read_telemetry() returns only the
+# fields whose MAVLink messages arrived on that pass, so a snapshot taken at
+# capture time needs this accumulator rather than one pass's output.
+latest_telemetry: "dict" = {}
+
+
+def _detection_context():
+    """The highest-confidence current detection, or empty when nothing is up.
+
+    Detections older than a couple of seconds are ignored: a stale box would
+    label a photo with something that has already left the frame."""
+    boxes = latest_detections.get("boxes") or []
+    ts = latest_detections.get("ts") or 0
+    if not boxes or (ts and time.time() - ts > 2.0):
+        return {"label": None, "confidence": None}
+    top = max(boxes, key=lambda b: b.get("conf") or 0)
+    return {"label": top.get("cls"), "confidence": top.get("conf")}
+
+
+def _write_media_sidecar(name: str, trigger: str = "manual"):
+    """Enqueue a capture for upload by recording what was happening when it was
+    taken. Best-effort: a failure here must never take down a capture or a
+    mission, so it logs and moves on."""
+    if not name:
+        return
+    payload = {
+        "name": name,
+        "type": "video" if name.lower().endswith(".mp4") else "photo",
+        "captured_at": time.time(),
+        "trigger": trigger,
+        "uploaded": False,
+        "context": {
+            **_detection_context(),
+            "depth_m": latest_telemetry.get("depth"),
+            "heading_deg": latest_telemetry.get("heading"),
+            "lat": latest_telemetry.get("lat"),
+            "lon": latest_telemetry.get("lon"),
+            "armed": armed,
+        },
+    }
+    path = os.path.join(MEDIA_DIR, f"{name}.json")
+    try:
+        os.makedirs(MEDIA_DIR, exist_ok=True)
+        # Write-then-rename: the uploader polls this directory, and a half-written
+        # sidecar would be read as corrupt and the capture dropped from the queue.
+        tmp = f"{path}.tmp"
+        with open(tmp, "w") as fh:
+            json.dump(payload, fh)
+        os.replace(tmp, path)
+    except OSError as exc:
+        print(f"Could not write media sidecar for {name}: {exc}")
+
+
 async def record_start():
     """Start an SD-card recording. Ensures the camera process is up first — the
     recorder lives inside it — so auto-record works even if the camera was off."""
-    global recording, rec_started_at
+    global recording, rec_started_at, rec_file
     if recording:
         return
     await asyncio.to_thread(start_camera)
-    ok = await asyncio.to_thread(_camera_post, "/record/start")
+    ok, body = await asyncio.to_thread(_camera_post, "/record/start")
     if ok:
         recording = True
         rec_started_at = time.time()
-        print("Recording started")
+        # Remembered so record_stop can enqueue the finished mp4 — the stop
+        # response no longer names it.
+        rec_file = body.get("current_file")
+        print(f"Recording started ({rec_file or 'unknown file'})")
 
 
 async def record_stop():
-    global recording
+    global recording, rec_file
     if not recording:
         return
     await asyncio.to_thread(_camera_post, "/record/stop")
     recording = False
+    # Only now is the mp4 finalised by ffmpeg, so only now is it safe to queue.
+    if rec_file:
+        _write_media_sidecar(rec_file, trigger="auto" if autorecord_enabled else "manual")
+        rec_file = None
     print("Recording stopped")
 
 
@@ -806,6 +899,52 @@ async def start_detector() -> "tuple[bool, str]":
     return True, ""
 
 
+# ---------------- autonomous capture ----------------
+# The point of the whole media pipeline: on a dive with no operator watching, the
+# vehicle photographs what its detector finds so there is something to review
+# afterwards. The capture lands on the SD card, gets a sidecar naming what
+# triggered it, and uploads itself once the vehicle surfaces.
+#
+# OFF by default. This makes an autonomous vehicle take an action nobody asked
+# for, so enabling it should be a deliberate act, and a misconfigured threshold
+# should not be able to fill the SD card on its first sea trial.
+#
+#   DETECT_AUTOCAPTURE           1 to enable.                     default: 0
+#   DETECT_AUTOCAPTURE_MIN_CONF  Confidence a box must clear.     default: 0.6
+#   DETECT_AUTOCAPTURE_COOLDOWN_S  Minimum gap between captures.  default: 15
+AUTOCAPTURE = os.environ.get("DETECT_AUTOCAPTURE", "0") == "1"
+AUTOCAPTURE_MIN_CONF = float(os.environ.get("DETECT_AUTOCAPTURE_MIN_CONF", "0.6"))
+AUTOCAPTURE_COOLDOWN_S = float(os.environ.get("DETECT_AUTOCAPTURE_COOLDOWN_S", "15"))
+
+_last_autocapture = 0.0
+
+
+async def maybe_autocapture():
+    """Photograph the current frame if the detector is confident enough.
+
+    The cooldown is load-bearing, not politeness: the detector emits several
+    frames a second, and a fish that stays in view would otherwise become
+    hundreds of near-identical JPEGs — a full card and an upload backlog that
+    outlasts the mission."""
+    global _last_autocapture
+    if not AUTOCAPTURE:
+        return
+    now = time.time()
+    if now - _last_autocapture < AUTOCAPTURE_COOLDOWN_S:
+        return
+    boxes = latest_detections.get("boxes") or []
+    if not any((b.get("conf") or 0) >= AUTOCAPTURE_MIN_CONF for b in boxes):
+        return
+    # Claim the cooldown before awaiting, so a slow camera POST cannot let a
+    # second detection line slip through and fire a duplicate capture.
+    _last_autocapture = now
+    name = await asyncio.to_thread(_camera_photo)
+    if name:
+        _write_media_sidecar(name, trigger="auto")
+        top = _detection_context()
+        print(f"Auto-captured {name} ({top['label']} {top['confidence']})")
+
+
 async def _read_detections(proc):
     """Consume the detector's stdout JSON lines into latest_detections."""
     global latest_detections, detector_alive
@@ -818,6 +957,7 @@ async def _read_detections(proc):
                 latest_detections = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            await maybe_autocapture()
     finally:
         # EOF means the child is finishing, whatever the reason. Reap it so the
         # exit code is real, then mark it dead and drop the last detections —
@@ -1523,6 +1663,11 @@ async def client_handler(ws):
         while True:
             data, notices = read_telemetry()
             if data:
+                # Accumulate, don't replace: `data` holds only the fields whose
+                # MAVLink messages happened to arrive on this pass, and a media
+                # sidecar written between passes still needs the last known
+                # depth/heading/position.
+                latest_telemetry.update(data)
                 await send({"type": "telemetry", **data})
             if "altitude" in data:
                 step_alt_pid(data["altitude"])
@@ -1747,6 +1892,7 @@ async def client_handler(ws):
                 await asyncio.to_thread(start_camera)
                 name = await asyncio.to_thread(_camera_photo)
                 if name:
+                    _write_media_sidecar(name, trigger="manual")
                     await send({"type": "media_saved", "kind": "photo", "name": name})
                 else:
                     await send({"type": "notice", "level": "warn",
@@ -1902,6 +2048,9 @@ async def main():
     # the whole session. start_camera() blocks on Popen, hence the thread.
     await asyncio.to_thread(start_camera)
     print(f"Auto-record: {'ON' if autorecord_enabled else 'off'}")
+    print(f"Auto-capture: {'ON' if AUTOCAPTURE else 'off'}"
+          + (f" (conf >= {AUTOCAPTURE_MIN_CONF}, every {AUTOCAPTURE_COOLDOWN_S:.0f}s)"
+             if AUTOCAPTURE else ""))
     async with websockets.serve(client_handler, WS_HOST, WS_PORT):
         print(f"Seagrass drone server listening on ws://{WS_HOST}:{WS_PORT}")
         await asyncio.Future()
