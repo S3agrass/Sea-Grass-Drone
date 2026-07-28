@@ -72,6 +72,45 @@ describe('DroneContext — stale host migration', () => {
     expect(d.id).toBe('a');
   });
 
+  it('rewrites the dead host in camera_url too, not just host', () => {
+    // This fixture existed above and only its token was ever asserted, so the
+    // camera_url quietly kept the dead name: the link connected while the feed
+    // showed "Camera error — stream unreachable", which looks like a broken
+    // camera rather than a hostname nothing can resolve.
+    localStorage.setItem('seagrass-fleet', JSON.stringify([
+      {
+        id: 'a', name: 'Seagrass One', host: 'ws://seagrass-pi.local:8765',
+        token: 't', camera_url: 'http://seagrass-pi.local:8000/stream.mjpg',
+      },
+    ]));
+    const getCtx = renderContext();
+    expect(getCtx().fleet[0].camera_url).toBe('http://seagrass.local:8000/stream.mjpg');
+  });
+
+  it('repairs camera_url even when host is already correct', () => {
+    // The two fields drifted apart in exactly this way once host was fixed on
+    // its own, so neither may depend on the other being wrong.
+    localStorage.setItem('seagrass-fleet', JSON.stringify([
+      {
+        id: 'a', name: 'Seagrass One', host: 'ws://seagrass.local:8765',
+        token: 't', camera_url: 'http://seagrass-pi.local:8000/stream.mjpg',
+      },
+    ]));
+    const getCtx = renderContext();
+    expect(getCtx().fleet[0].camera_url).toBe('http://seagrass.local:8000/stream.mjpg');
+    expect(getCtx().fleet[0].host).toBe('ws://seagrass.local:8765');
+  });
+
+  it('persists the camera_url repair so it survives a reload', () => {
+    localStorage.setItem('seagrass-fleet', JSON.stringify([
+      { id: 'a', name: 'S', host: 'ws://seagrass.local:8765', token: 't',
+        camera_url: 'http://seagrass-pi.local:8000/stream.mjpg' },
+    ]));
+    renderContext();
+    const saved = JSON.parse(localStorage.getItem('seagrass-fleet'));
+    expect(saved[0].camera_url).toBe('http://seagrass.local:8000/stream.mjpg');
+  });
+
   it('leaves a correct host untouched', () => {
     localStorage.setItem('seagrass-fleet', JSON.stringify([
       { id: 'a', name: 'Seagrass One', host: 'ws://seagrass.local:8765', token: 't' },

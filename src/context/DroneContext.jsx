@@ -48,16 +48,24 @@ function migrateDeadHosts(fleet) {
   let changed = false;
   const migrated = fleet.map((d) => {
     let next = d;
-    if (typeof d?.host === "string" && d.host.includes(DEAD_HOST)) {
-      changed = true;
-      next = { ...next, host: d.host.replaceAll(DEAD_HOST, LIVE_HOST) };
+    // BOTH address fields, not just `host`. The original repair only touched
+    // `host`, which fixed the control link and left the camera pointed at the
+    // same dead name — so the drone connected fine while the feed sat on
+    // "Camera error — stream unreachable", which reads like a camera fault
+    // rather than a hostname that resolves for nobody.
+    for (const field of ["host", "camera_url"]) {
+      const value = d?.[field];
+      if (typeof value === "string" && value.includes(DEAD_HOST)) {
+        changed = true;
+        next = { ...next, [field]: value.replaceAll(DEAD_HOST, LIVE_HOST) };
+      }
     }
-    // Same class of problem as the dead host: a wrong shipped default that
+    // Same class of problem, different shape: a wrong shipped default that
     // localStorage then pins forever. Filling a BLANK one in is safe because
     // blank has no behaviour to preserve — it renders no feed and blocks the
-    // camera from starting. Anything the operator actually set, including a
-    // tunnelled or custom address, is left strictly alone.
-    if (!d?.camera_url) {
+    // camera from starting. Anything the operator actually set, other than the
+    // dead name handled above, is left strictly alone.
+    if (!next.camera_url) {
       changed = true;
       next = { ...next, camera_url: DEFAULT_CAMERA_URL };
     }
