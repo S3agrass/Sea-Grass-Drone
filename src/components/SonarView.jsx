@@ -22,6 +22,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useDrone } from "../context/DroneContext";
 import {
   amplitudeToRGB,
+  clusterContacts,
   decomposeRange,
   findEchoes,
   mapPointXY,
@@ -68,6 +69,9 @@ const MAP_SIZE = 240;
 // that the picture cannot quietly become fiction.
 const MAP_TTL_MS = 25000;
 const MAP_MAX_POINTS = 1400;
+// Re-cluster at 4 Hz rather than per frame. Grouping is cheap but not free, and
+// objects do not appear and vanish fast enough for 60 Hz to buy anything.
+const MAP_CLUSTER_MS = 250;
 const MAP_VIEWS = ["plan", "pov", "map"];
 
 const QUALITY_TONE = {
@@ -112,6 +116,10 @@ export default function SonarView() {
   });
   const [usePitch, setUsePitch] = useState(true);
   const [paused, setPaused] = useState(false);
+  // Clustered objects mirrored out of the draw loop for the text list. Only the
+  // map view needs it, and only at MAP_CLUSTER_MS, so the 5 Hz point stream
+  // still never reaches React.
+  const [objects, setObjects] = useState([]);
   // "plan" = looking straight down on the vehicle; "pov" = looking out from the
   // transducer itself. Same data, and both are live at once — the toggle only
   // chooses which one occupies the slot.
@@ -139,6 +147,8 @@ export default function SonarView() {
   const lastPingAtRef = useRef(0); // performance.now() of the last profile received
   const mapRef = useRef(null);
   const mapPointsRef = useRef([]); // {bearing, range, conf, t} in absolute degrees
+  const mapObjectsRef = useRef([]); // clustered objects, recomputed at MAP_CLUSTER_MS
+  const mapClusteredAtRef = useRef(0);
   // Yaw mirrored into a ref so the draw loop can read the CURRENT heading every
   // frame without the effect being torn down and restarted twice a second.
   const yawRef = useRef(null);
@@ -384,6 +394,60 @@ export default function SonarView() {
         mctx.fill();
       }
       mapPointsRef.current = live;
+
+      // Distinct objects, labelled with their distance. The raw points are the
+      // evidence; this is the reading of it, and it is what turns a dot cloud
+      // into "there are three things around me, at 2.4, 3.1 and 4.0 m".
+      if (nowMs - mapClusteredAtRef.current > MAP_CLUSTER_MS) {
+        mapClusteredAtRef.current = nowMs;
+        mapObjectsRef.current = clusterContacts(live);
+        setObjects(mapObjectsRef.current);
+      }
+      mctx.textAlign = "center";
+      mctx.textBaseline = "middle";
+      for (let i = 0; i < mapObjectsRef.current.length; i += 1) {
+        const o = mapObjectsRef.current[i];
+        // No bearing means a surface wrapping the vehicle, which has no one
+        // place to pin a marker. Drawn as a ring at its closest approach
+        // instead — the shape of the claim being made.
+        if (o.bearing == null) {
+          const rr = (o.range / maxR) * (rad - 1);
+          mctx.beginPath();
+          mctx.arc(cx, cy, rr, 0, Math.PI * 2);
+          mctx.strokeStyle = o.conf >= 50 ? "rgba(59,217,187,0.5)" : "rgba(255,180,84,0.4)";
+          mctx.lineWidth = 1.2;
+          mctx.setLineDash([4, 3]);
+          mctx.stroke();
+          mctx.setLineDash([]);
+          continue;
+        }
+        const xy = mapPointXY(o.bearing, o.range, maxR, size);
+        if (!xy) continue;
+        const trusted = o.conf >= 50;
+        const nearest = i === 0;
+        const tone = trusted ? "59,217,187" : "255,180,84";
+
+        // Marker on the object itself.
+        mctx.beginPath();
+        mctx.arc(xy.x, xy.y, nearest ? 4 : 3, 0, Math.PI * 2);
+        mctx.strokeStyle = `rgba(${tone},${nearest ? 0.95 : 0.6})`;
+        mctx.lineWidth = nearest ? 1.6 : 1.1;
+        mctx.stroke();
+
+        // Label pushed further out along the same bearing, so it sits clear of
+        // the object's own smear rather than on top of it.
+        const lp = mapPointXY(o.bearing, Math.min(maxR, o.range + maxR * 0.09),
+                              maxR, size)
+                || xy;
+        const text = `${o.range.toFixed(2)}m`;
+        mctx.font = `${nearest ? "700 " : ""}9px ui-monospace, monospace`;
+        const w = mctx.measureText(text).width;
+        mctx.fillStyle = "rgba(4,13,22,0.78)"; // plate, so labels stay legible
+        mctx.fillRect(lp.x - w / 2 - 2, lp.y - 6, w + 4, 12);
+        mctx.fillStyle = `rgba(${tone},${nearest ? 1 : 0.75})`;
+        mctx.fillText(text, lp.x, lp.y);
+      }
+      mctx.textBaseline = "alphabetic";
 
       // Where the beam is pointing right now.
       const yaw = yawRef.current;
@@ -677,6 +741,28 @@ export default function SonarView() {
                   ? "no compass — turn on telemetry to build the map"
                   : "yaw the vehicle to sweep · north up · slant range"}
               </div>
+              {/* Mirrors the labels drawn on the canvas. The canvas answers
+                  "where", this answers "exactly how far, on what bearing" —
+                  which is the thing you can act on. Low-rate state, so it does
+                  not put the 5 Hz point stream through React. */}
+              {objects.length > 0 && (
+                <div className="sonar-objects mono">
+                  {objects.map((o, i) => (
+                    <div key={`${o.bearing?.toFixed(0) ?? "all"}-${o.range.toFixed(2)}`}
+                         className={`sonar-object-row${
+                           i === 0 && o.conf >= 50 ? " near" : ""}${
+                           o.conf < 50 ? " weak" : ""}`}>
+                      <span>{o.bearing == null ? "surface"
+                             : i === 0 ? "nearest" : `#${i + 1}`}</span>
+                      <span>{o.range.toFixed(2)} m</span>
+                      {/* No bearing = it wraps around you; saying "all round"
+                          is honest where a number would not be. */}
+                      <span>{o.bearing == null ? "all round"
+                             : `${o.bearing.toFixed(0)}°`}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           ) : view === "pov" ? (
             <canvas ref={povRef} className="sonar-pov-canvas"

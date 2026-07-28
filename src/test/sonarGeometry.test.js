@@ -3,6 +3,7 @@ import {
   amplitudeToRGB,
   sampleToRange,
   rangeToRow,
+  clusterContacts,
   decomposeRange,
   findEchoes,
   mapPointXY,
@@ -338,5 +339,105 @@ describe('mapPointXY', () => {
     expect(mapPointXY(NaN, 5, 10, 200)).toBeNull();
     expect(mapPointXY(0, 5, 0, 200)).toBeNull();
     expect(mapPointXY(0, 5, 10, 0)).toBeNull();
+  });
+});
+
+describe('clusterContacts', () => {
+  // A sweep past one object: recorded across a full beam width at fixed range.
+  const smear = (bearing, range, span = PING_BEAM_DEG, n = 12, conf = 80) =>
+    Array.from({ length: n }, (_, i) => ({
+      bearing: bearing - span / 2 + (span * i) / (n - 1),
+      range: range + (i % 3) * 0.02, // ranging jitter
+      conf,
+      t: 0,
+    }));
+
+  it('collapses one beam-width smear into a single object', () => {
+    // The case the asymmetric tolerance exists for: 25 deg of arc at 3 m is ONE
+    // thing, even though its endpoints are 1.3 m apart in space.
+    const c = clusterContacts(smear(90, 3));
+    expect(c.length).toBe(1);
+    expect(c[0].range).toBeCloseTo(3, 1);
+    expect(c[0].bearing).toBeCloseTo(90, 0);
+  });
+
+  it('keeps objects at different ranges on the same bearing separate', () => {
+    const c = clusterContacts([...smear(90, 2), ...smear(90, 5)]);
+    expect(c.length).toBe(2);
+    expect(c[0].range).toBeCloseTo(2, 1);
+    expect(c[1].range).toBeCloseTo(5, 1);
+  });
+
+  it('keeps objects at the same range on different bearings separate', () => {
+    const c = clusterContacts([...smear(30, 4), ...smear(200, 4)]);
+    expect(c.length).toBe(2);
+    expect(c.map((x) => Math.round(x.bearing)).sort((a, b) => a - b))
+      .toEqual([30, 200]);
+  });
+
+  it('treats an object straddling north as one object, not two', () => {
+    const c = clusterContacts(smear(0, 3)); // spans ~347 deg through ~12 deg
+    expect(c.length).toBe(1);
+    // Circular mean: a plain average of those bearings would give ~180.
+    const b = c[0].bearing;
+    expect(Math.min(b, 360 - b)).toBeLessThan(3);
+    expect(c[0].span).toBeLessThan(60); // one object, not a wrapping surface
+  });
+
+  it('discards sparse noise that never repeats', () => {
+    const specks = [
+      { bearing: 10, range: 1.2, conf: 5, t: 0 },
+      { bearing: 140, range: 6.7, conf: 3, t: 0 },
+      { bearing: 305, range: 3.3, conf: 8, t: 0 },
+    ];
+    expect(clusterContacts(specks)).toEqual([]);
+    // ...but keeps them alongside a real object, if asked to.
+    expect(clusterContacts([...specks, ...smear(90, 3)]).length).toBe(1);
+  });
+
+  it('returns objects nearest first and caps how many', () => {
+    const many = [6, 5, 4, 3, 2, 1].flatMap((r, i) => smear(i * 60, r));
+    const c = clusterContacts(many, { maxClusters: 3 });
+    expect(c.length).toBe(3);
+    expect(c[0].range).toBeLessThan(c[1].range);
+    expect(c[1].range).toBeLessThan(c[2].range);
+    expect(c[0].range).toBeCloseTo(1, 1);
+  });
+
+  it('reports a wrapping surface by its closest approach, with no bearing', () => {
+    // A tank encloses the vehicle, so it chains into one cluster — correctly,
+    // being one continuous surface. Its MEAN range describes nothing you can
+    // act on, and its near walls sit at opposite bearings whose circular mean
+    // cancels to a direction with nothing in it. Closest approach is the number
+    // that matters; the bearing is withheld rather than invented.
+    const ring = [];
+    for (let b = 0; b < 360; b += 2) {
+      const r = (b * Math.PI) / 180;
+      const e = Math.abs(Math.sin(r)), n = Math.abs(Math.cos(r));
+      ring.push({ bearing: b, conf: 80, t: 0,
+                  range: Math.min(e === 0 ? Infinity : 4 / e,
+                                  n === 0 ? Infinity : 2.5 / n) });
+    }
+    const c = clusterContacts(ring);
+    expect(c.length).toBe(1);
+    expect(c[0].range).toBeCloseTo(2.5, 1);   // the near wall, not the 3.5 mean
+    expect(c[0].bearing).toBeNull();
+    expect(c[0].span).toBeGreaterThan(300);
+  });
+
+  it('gives a compact object a bearing and a beam-width span', () => {
+    const [o] = clusterContacts(smear(90, 3));
+    expect(o.bearing).toBeCloseTo(90, 0);
+    expect(o.span).toBeLessThan(60);
+  });
+
+  it('averages confidence so an unverified object can be shown as such', () => {
+    expect(clusterContacts(smear(90, 3, 25, 12, 20))[0].conf).toBeCloseTo(20, 0);
+  });
+
+  it('handles empty and malformed input', () => {
+    expect(clusterContacts([])).toEqual([]);
+    expect(clusterContacts(null)).toEqual([]);
+    expect(clusterContacts([{ bearing: NaN, range: 3, conf: 90 }])).toEqual([]);
   });
 });

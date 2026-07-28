@@ -133,6 +133,142 @@ export function mapPointXY(bearingDeg, rangeM, maxRangeM, size) {
   };
 }
 
+/* Group accumulated map points into distinct OBJECTS, nearest first.
+ *
+ * The tolerances are deliberately asymmetric, and that asymmetry is the whole
+ * design. Sweeping past a single small object records it across a full beam
+ * width of heading — it enters the cone half a beam before you point at it and
+ * leaves half a beam after — so one object arrives as an arc ~PING_BEAM_DEG
+ * wide at a CONSTANT range. Cluster with one symmetric radius and you must
+ * either choose a radius wide enough to close that arc (which then swallows
+ * genuinely separate objects beside it) or a tight one (which shatters every
+ * object into a string of fragments). Being generous in bearing and strict in
+ * range instead matches how the smearing actually happens.
+ *
+ * Points are binned before grouping so cost tracks occupied cells rather than
+ * point count — the map holds well over a thousand points and this runs inside
+ * the draw loop.
+ *
+ * `minWeight` is the noise floor: reverb sprays isolated returns that never
+ * repeat, while a real surface is re-hit on every ping that crosses it, so
+ * requiring several points per object separates the two without thresholding
+ * amplitude.
+ *
+ * `range` is the cluster's CLOSEST approach, not its mean, and `bearing` points
+ * at that closest point. A compact object makes the two identical, but a wall
+ * chains into one cluster wrapping most of the compass — as it should, being one
+ * continuous surface — and its mean range then describes nothing you can act on
+ * while its nearest point is exactly what you must not hit. `span` reports how
+ * much bearing it covers, which is what separates "an object over there" from
+ * "a surface around me".
+ *
+ * Returns [{ range, bearing, span, count, conf }], nearest first.
+ */
+const CLUSTER_BEARING_BIN_DEG = 5;
+
+/* How much bearing a set of occupied bins covers, measured as 360 minus the
+ * widest gap between them — which is the only definition that behaves for a
+ * cluster wrapping past north. A surface enclosing the vehicle has no gap and
+ * so spans ~360; a compact object spans about one beam width. */
+function bearingSpan(bins) {
+  const sorted = [...bins].sort((a, b) => a - b);
+  if (sorted.length <= 1) return CLUSTER_BEARING_BIN_DEG;
+  let widest = 0;
+  for (let i = 0; i < sorted.length; i += 1) {
+    const next = sorted[(i + 1) % sorted.length];
+    const gap = (((next - sorted[i]) * CLUSTER_BEARING_BIN_DEG) + 360) % 360;
+    if (gap > widest) widest = gap;
+  }
+  return Math.max(CLUSTER_BEARING_BIN_DEG, 360 - widest);
+}
+
+export function clusterContacts(points, opts = {}) {
+  const {
+    rangeToleranceM = 0.4,
+    bearingToleranceDeg = PING_BEAM_DEG,
+    minWeight = 3,
+    maxClusters = 6,
+    wideSpanDeg = 120, // past this it is a surface around you, not an object
+  } = opts;
+  if (!points || points.length === 0) return [];
+
+  const cells = new Map();
+  for (const p of points) {
+    if (!Number.isFinite(p.bearing) || !Number.isFinite(p.range)) continue;
+    const bearing = ((p.bearing % 360) + 360) % 360;
+    const bb = Math.floor(bearing / CLUSTER_BEARING_BIN_DEG);
+    const rb = Math.floor(p.range / rangeToleranceM);
+    const key = `${bb}:${rb}`;
+    let c = cells.get(key);
+    if (!c) {
+      c = { bb, rb, n: 0, confSum: 0, minR: Infinity, minBearing: bearing };
+      cells.set(key, c);
+    }
+    c.n += 1;
+    c.confSum += p.conf || 0;
+    if (p.range < c.minR) { c.minR = p.range; c.minBearing = bearing; }
+  }
+
+  const list = [...cells.values()];
+  // Wrapped bin distance, so an object sitting across the 0/360 seam is one
+  // object and not two.
+  const adjacent = (a, b) => {
+    if (Math.abs(a.rb - b.rb) > 1) return false;
+    const deg = Math.abs((((a.bb - b.bb) * CLUSTER_BEARING_BIN_DEG + 540) % 360) - 180);
+    return deg <= bearingToleranceDeg;
+  };
+
+  const seen = new Array(list.length).fill(false);
+  const out = [];
+  for (let i = 0; i < list.length; i += 1) {
+    if (seen[i]) continue;
+    seen[i] = true;
+    const stack = [i];
+    const members = [];
+    let n = 0, confSum = 0, minR = Infinity;
+    const bins = new Set();
+    while (stack.length) {
+      const j = stack.pop();
+      const c = list[j];
+      members.push(c);
+      n += c.n; confSum += c.confSum;
+      bins.add(c.bb);
+      if (c.minR < minR) minR = c.minR;
+      for (let k = 0; k < list.length; k += 1) {
+        if (!seen[k] && adjacent(c, list[k])) { seen[k] = true; stack.push(k); }
+      }
+    }
+    if (n < minWeight) continue;
+    // Bearing is the circular mean over the cells AT the closest range, not the
+    // single nearest sample. Across a compact object the range is effectively
+    // flat, so picking one minimum is a coin toss between ties and lands on
+    // whichever edge of the smear got binned first; averaging the tied cells
+    // recovers the centre. On a wall only the near cells qualify, so it still
+    // reports where the surface actually comes closest.
+    let sinSum = 0, cosSum = 0, w = 0;
+    for (const c of members) {
+      if (c.minR > minR + rangeToleranceM) continue;
+      const rad = (c.minBearing * Math.PI) / 180;
+      sinSum += Math.sin(rad) * c.n;
+      cosSum += Math.cos(rad) * c.n;
+      w += c.n;
+    }
+    const span = bearingSpan(bins);
+    // A surface wrapping this much of the compass has no single bearing to
+    // report, and averaging one out of it is worse than admitting so: a tank
+    // has near walls at opposite bearings, whose circular mean cancels to a
+    // direction with nothing in it. The closest RANGE stays meaningful — it is
+    // the thing you must not hit — so only the bearing is withheld.
+    const bearing = (w && span <= wideSpanDeg)
+      ? ((Math.atan2(sinSum, cosSum) * 180) / Math.PI + 360) % 360
+      : null;
+    out.push({ range: minR, bearing, span, count: n, conf: confSum / n });
+  }
+
+  out.sort((a, b) => a.range - b.range);
+  return out.slice(0, maxClusters);
+}
+
 /* POV tunnel: range -> ring radius in px, for the head-on submarine view.
  *
  * Perspective, not linear: a ring right at the transducer fills the frame and

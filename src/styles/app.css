@@ -703,6 +703,26 @@
   border: 1px solid var(--line);
 }
 .sonar-map-note { font-size: 8px; color: var(--faint); text-align: center; }
+/* Exact figures for the objects labelled on the canvas. */
+.sonar-objects {
+  width: 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-top: 3px;
+  border-top: 1px solid var(--line);
+}
+.sonar-object-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 9px;
+  color: var(--muted);
+}
+.sonar-object-row.near { color: var(--teal); font-weight: 700; }
+/* Below the confidence gate: amber everywhere else in this panel means
+   "returned something, not verified as an object". Same here. */
+.sonar-object-row.weak { color: var(--amber); opacity: 0.75; }
 
 /* --- POV tunnel --- */
 /* Square bitmap (POV_SIZE in SonarView.jsx) so the rings stay circular without
