@@ -24,6 +24,7 @@ import {
   amplitudeToRGB,
   decomposeRange,
   findEchoes,
+  mapPointXY,
   peakRange,
   planHalfAngleDeg,
   povBlipStyle,
@@ -54,6 +55,20 @@ const POV_MAX_PULSES = 6;
 // feed would otherwise read as "there is definitely something 1.2 m ahead" long
 // after the sonar stopped saying anything at all.
 const PROFILE_STALE_MS = 3000;
+
+// Accumulation map. The vehicle IS the scanning mechanism: one fixed beam plus
+// a compass gives (bearing, range) per ping, and yawing sweeps that into a plan
+// of the surroundings — the same picture a mechanically-scanned head produces,
+// built over seconds instead of in one sweep.
+const MAP_SIZE = 240;
+// Points expire because nothing here tracks POSITION — only heading. The map is
+// therefore only true while the vehicle pivots in place, and every point is a
+// claim about where something was relative to a spot the vehicle has since
+// drifted off. 25 s is long enough to sweep a wide arc by hand and short enough
+// that the picture cannot quietly become fiction.
+const MAP_TTL_MS = 25000;
+const MAP_MAX_POINTS = 1400;
+const MAP_VIEWS = ["plan", "pov", "map"];
 
 const QUALITY_TONE = {
   good: { label: "LOCK", tone: "var(--teal)" },
@@ -100,9 +115,10 @@ export default function SonarView() {
   // "plan" = looking straight down on the vehicle; "pov" = looking out from the
   // transducer itself. Same data, and both are live at once — the toggle only
   // chooses which one occupies the slot.
-  const [view, setView] = useState(() => (
-    localStorage.getItem(VIEW_KEY) === "pov" ? "pov" : "plan"
-  ));
+  const [view, setView] = useState(() => {
+    const saved = localStorage.getItem(VIEW_KEY);
+    return MAP_VIEWS.includes(saved) ? saved : "plan";
+  });
 
   // Low-rate mirror of the latest ping, for the text/SVG side of the panel.
   const [readout, setReadout] = useState({
@@ -121,6 +137,11 @@ export default function SonarView() {
   const maxRangeRef = useRef(maxRange);
   const pulsesRef = useRef([]); // POV pulse rings in flight: array of start times
   const lastPingAtRef = useRef(0); // performance.now() of the last profile received
+  const mapRef = useRef(null);
+  const mapPointsRef = useRef([]); // {bearing, range, conf, t} in absolute degrees
+  // Yaw mirrored into a ref so the draw loop can read the CURRENT heading every
+  // frame without the effect being torn down and restarted twice a second.
+  const yawRef = useRef(null);
 
   // Mirror the controls into refs — the draw loop reads them every frame and
   // must not be torn down and restarted each time one changes.
@@ -130,6 +151,9 @@ export default function SonarView() {
   useEffect(() => { localStorage.setItem(MOUNT_KEY, String(mountDeg)); }, [mountDeg]);
   useEffect(() => { localStorage.setItem(RANGE_KEY, String(maxRange)); }, [maxRange]);
   useEffect(() => { localStorage.setItem(VIEW_KEY, view); }, [view]);
+  // Works for the live link and for demo mode alike: this component already
+  // re-renders on telemetry (it reads pitch), so mirroring costs nothing extra.
+  useEffect(() => { yawRef.current = telemetry.yaw; }, [telemetry.yaw]);
 
   /* ---------- ingest: real profiles straight off the link ---------- */
   useEffect(() => {
@@ -158,7 +182,23 @@ export default function SonarView() {
     if (!demoMode) return undefined;
     let target = 3.2;
     const id = setInterval(() => {
-      target += Math.random() * 0.5 - 0.25;
+      // Range to the wall of a virtual rectangular tank, along whatever bearing
+      // the (simulated) vehicle is pointing. Ranging a real room rather than
+      // wandering randomly is what makes the accumulation map previewable: a
+      // random walk sweeps into a fuzzy ring, whereas this draws the room.
+      const yaw = yawRef.current;
+      if (yaw != null && Number.isFinite(yaw)) {
+        const rad = (yaw * Math.PI) / 180;
+        const east = Math.abs(Math.sin(rad));
+        const north = Math.abs(Math.cos(rad));
+        const halfW = 4.0;   // metres to the east/west walls
+        const halfH = 2.5;   // metres to the north/south walls
+        const wall = Math.min(east === 0 ? Infinity : halfW / east,
+                              north === 0 ? Infinity : halfH / north);
+        target = wall + (Math.random() * 0.12 - 0.06); // ranging noise
+      } else {
+        target += Math.random() * 0.5 - 0.25;
+      }
       target = Math.max(0.8, Math.min(maxRangeRef.current * 0.85, target));
       const scanLengthM = maxRangeRef.current;
       pendingRef.current.push({
@@ -238,6 +278,150 @@ export default function SonarView() {
       // Scroll one pixel left, then blit the new column at the right edge.
       ctx.drawImage(canvas, -1, 0);
       ctx.putImageData(column, ECHO_COLS - 1, 0);
+    };
+
+    /* ---- accumulation map: turn each ping into world-referenced points ---- */
+    const recordMapPoints = (ping) => {
+      const yaw = yawRef.current;
+      if (yaw == null || !Number.isFinite(yaw)) return; // no compass, no bearing
+      const maxR = maxRangeRef.current;
+      const found = findEchoes(ping.profile, ping.scan_start_m ?? 0,
+                               ping.scan_length_m ?? maxR);
+      const ranges = found.length ? found.map((e) => e.range)
+                                  : (ping.distance_m != null ? [ping.distance_m] : []);
+      if (!ranges.length) return;
+      const conf = ping.confidence ?? 0;
+      const t = performance.now();
+      const pts = mapPointsRef.current;
+      for (const range of ranges) {
+        if (range > maxR) continue;
+        // Bearing is the vehicle's heading: a fixed forward beam looks wherever
+        // the nose does. Mount tilt is ignored on purpose — this is a PLAN view,
+        // and a tilted beam's contact still lies along the same compass bearing,
+        // just nearer than its slant range. The range plotted is the slant range
+        // for that reason; see the caption in the panel.
+        pts.push({ bearing: ((yaw % 360) + 360) % 360, range, conf, t });
+      }
+      // Oldest out first — TTL handles the rest, this only bounds memory when
+      // the vehicle sits still and pings the same bearing for a long time.
+      if (pts.length > MAP_MAX_POINTS) {
+        mapPointsRef.current = pts.slice(pts.length - MAP_MAX_POINTS);
+      }
+    };
+
+    const drawMap = (nowMs) => {
+      const el = mapRef.current;
+      if (!el) return;
+      const mctx = el.getContext("2d");
+      if (!mctx) return; // jsdom / no 2D context
+      if (el.width !== MAP_SIZE) {
+        el.width = MAP_SIZE;
+        el.height = MAP_SIZE;
+      }
+      const size = MAP_SIZE;
+      const cx = size / 2;
+      const cy = size / 2;
+      const rad = size / 2;
+      const maxR = maxRangeRef.current;
+
+      const bg = mctx.createRadialGradient(cx, cy, 0, cx, cy, rad);
+      bg.addColorStop(0, "#08161f");
+      bg.addColorStop(1, "#040d16");
+      mctx.fillStyle = "#040d16";
+      mctx.fillRect(0, 0, size, size);
+      mctx.beginPath();
+      mctx.arc(cx, cy, rad - 1, 0, Math.PI * 2);
+      mctx.fillStyle = bg;
+      mctx.fill();
+
+      // Range rings, labelled in metres so the picture has a scale.
+      mctx.setLineDash([2, 3]);
+      mctx.strokeStyle = "rgba(30,143,124,0.35)";
+      mctx.lineWidth = 1;
+      for (let i = 1; i <= 4; i += 1) {
+        mctx.beginPath();
+        mctx.arc(cx, cy, (rad - 1) * (i / 4), 0, Math.PI * 2);
+        mctx.stroke();
+      }
+      mctx.setLineDash([]);
+      mctx.fillStyle = "rgba(124,151,173,0.75)";
+      mctx.font = "8px ui-monospace, monospace";
+      mctx.textAlign = "left";
+      for (let i = 1; i <= 4; i += 1) {
+        mctx.fillText(`${((maxR * i) / 4).toFixed(0)}m`, cx + 3, cy - (rad - 1) * (i / 4) + 9);
+      }
+
+      // Cardinals — the map is north-up, and without these that isn't obvious.
+      mctx.fillStyle = "rgba(124,151,173,0.9)";
+      mctx.font = "700 9px ui-monospace, monospace";
+      mctx.textAlign = "center";
+      mctx.textBaseline = "middle";
+      for (const [label, deg] of [["N", 0], ["E", 90], ["S", 180], ["W", 270]]) {
+        const p = mapPointXY(deg, maxR * 0.93, maxR, size);
+        mctx.fillStyle = deg === 0 ? "rgba(59,217,187,0.95)" : "rgba(124,151,173,0.8)";
+        mctx.fillText(label, p.x, p.y);
+      }
+      mctx.textBaseline = "alphabetic";
+
+      // Accumulated contacts. Age fades them out, confidence sets how solid they
+      // look, and overlapping returns compound — so a wall the beam crossed
+      // repeatedly builds into a solid arc while noise stays as isolated specks.
+      const pts = mapPointsRef.current;
+      const live = [];
+      for (const p of pts) {
+        const age = (nowMs - p.t) / MAP_TTL_MS;
+        if (age >= 1) continue;
+        live.push(p);
+        const xy = mapPointXY(p.bearing, p.range, maxR, size);
+        if (!xy) continue;
+        const trust = Math.max(0, Math.min(1, p.conf / 100));
+        const alpha = (1 - age) ** 1.6 * (0.18 + 0.62 * trust);
+        mctx.beginPath();
+        mctx.arc(xy.x, xy.y, 1.4 + 1.4 * (1 - age), 0, Math.PI * 2);
+        mctx.fillStyle = trust >= 0.5
+          ? `rgba(59,217,187,${alpha})`
+          : `rgba(255,180,84,${alpha * 0.8})`;
+        mctx.fill();
+      }
+      mapPointsRef.current = live;
+
+      // Where the beam is pointing right now.
+      const yaw = yawRef.current;
+      if (yaw != null && Number.isFinite(yaw)) {
+        const half = PING_BEAM_DEG / 2;
+        const a0 = ((yaw - half - 90) * Math.PI) / 180;
+        const a1 = ((yaw + half - 90) * Math.PI) / 180;
+        const wedge = mctx.createRadialGradient(cx, cy, 0, cx, cy, rad);
+        wedge.addColorStop(0, "rgba(59,217,187,0.30)");
+        wedge.addColorStop(1, "rgba(59,217,187,0.02)");
+        mctx.beginPath();
+        mctx.moveTo(cx, cy);
+        mctx.arc(cx, cy, rad - 1, a0, a1);
+        mctx.closePath();
+        mctx.fillStyle = wedge;
+        mctx.fill();
+
+        // Vehicle: a nose-on arrow, so heading is readable at a glance.
+        const r = (yaw * Math.PI) / 180;
+        mctx.save();
+        mctx.translate(cx, cy);
+        mctx.rotate(r);
+        mctx.beginPath();
+        mctx.moveTo(0, -7);
+        mctx.lineTo(4.5, 5);
+        mctx.lineTo(0, 2.5);
+        mctx.lineTo(-4.5, 5);
+        mctx.closePath();
+        mctx.fillStyle = "#e9f2f8";
+        mctx.fill();
+        mctx.restore();
+      } else {
+        mctx.beginPath();
+        mctx.arc(cx, cy, 3.5, 0, Math.PI * 2);
+        mctx.fillStyle = "var(--faint)";
+        mctx.fillStyle = "#4d6a82";
+        mctx.fill();
+      }
     };
 
     /* ---- POV tunnel ----
@@ -363,6 +547,7 @@ export default function SonarView() {
           if (pulsesRef.current.length < POV_MAX_PULSES) {
             pulsesRef.current.push(performance.now());
           }
+          recordMapPoints(ping);
         }
 
         const now = performance.now();
@@ -405,7 +590,10 @@ export default function SonarView() {
 
       // Outside the queue check: the pulses have to keep travelling between
       // pings, or the tunnel freezes for 200ms at a time and reads as broken.
+      // The map likewise has to keep ageing its points and tracking the heading
+      // while the vehicle turns, whether or not a ping happened this frame.
       drawPov(t);
+      drawMap(t);
     };
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
@@ -451,11 +639,13 @@ export default function SonarView() {
           </label>
           <button
             type="button"
-            className={`sonar-toggle mono ${view === "pov" ? "on" : ""}`}
-            onClick={() => setView((v) => (v === "pov" ? "plan" : "pov"))}
-            title="Plan: looking down on the vehicle. POV: looking out along the beam."
+            className={`sonar-toggle mono ${view !== "plan" ? "on" : ""}`}
+            onClick={() => setView((v) => MAP_VIEWS[(MAP_VIEWS.indexOf(v) + 1) % MAP_VIEWS.length])}
+            title={"plan: looking down on the vehicle. "
+                 + "pov: looking out along the beam. "
+                 + "map: contacts accumulated as you turn, north up."}
           >
-            {view === "pov" ? "pov" : "plan"}
+            {view}
           </button>
           <button
             type="button"
@@ -477,8 +667,18 @@ export default function SonarView() {
 
       <div className="sonar-body">
         {/* ---- where the echo is, right now: plan view or POV tunnel ---- */}
-        <div className="sonar-cone">
-          {view === "pov" ? (
+        <div className={`sonar-cone${view === "map" ? " map" : ""}`}>
+          {view === "map" ? (
+            <div className="sonar-map-wrap">
+              <canvas ref={mapRef} className="sonar-map-canvas"
+                      role="img" aria-label="Sonar accumulation map" />
+              <div className="sonar-map-note mono">
+                {telemetry.yaw == null
+                  ? "no compass — turn on telemetry to build the map"
+                  : "yaw the vehicle to sweep · north up · slant range"}
+              </div>
+            </div>
+          ) : view === "pov" ? (
             <canvas ref={povRef} className="sonar-pov-canvas"
                     role="img" aria-label="Sonar POV view" />
           ) : (

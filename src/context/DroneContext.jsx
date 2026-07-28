@@ -339,7 +339,11 @@ export function DroneProvider({ children }) {
     const pidSetpoint = 12.0;
     let phase = 0; // drives a slow, believable attitude wobble
     const id = setInterval(() => {
-      heading = (heading + (Math.random() * 6 - 3) + 360) % 360;
+      // A steady yaw with wobble on top, rather than a random walk. The walk
+      // averaged out to no net rotation, which left the sonar accumulation map
+      // — whose whole premise is that turning sweeps the beam — with nothing to
+      // preview. ~7.8 deg/s puts a full circle just under a minute.
+      heading = (heading + 7 + (Math.random() * 2 - 1) + 360) % 360;
       altitude = altitude + (Math.random() * 0.6 - 0.3); // drift ±0.3 m
       const climb = Number((Math.random() * 0.8 - 0.4).toFixed(2));
       // Gentle rolling/pitching swell rather than random jitter, so the

@@ -5,6 +5,7 @@ import {
   rangeToRow,
   decomposeRange,
   findEchoes,
+  mapPointXY,
   peakRange,
   planHalfAngleDeg,
   povBlipStyle,
@@ -299,5 +300,43 @@ describe('findEchoes', () => {
     expect(loud.length).toBe(1);
     expect(quiet.length).toBe(1);
     expect(quiet[0].range).toBeCloseTo(loud[0].range, 1);
+  });
+});
+
+describe('mapPointXY', () => {
+  // 200px canvas, 10 m range: centre (100,100), edge radius 100px.
+  it('puts north up, east right, south down and west left', () => {
+    expect(mapPointXY(0, 10, 10, 200)).toEqual({ x: 100, y: 0 });
+    const e = mapPointXY(90, 10, 10, 200);
+    expect(e.x).toBeCloseTo(200, 6); expect(e.y).toBeCloseTo(100, 6);
+    const s = mapPointXY(180, 10, 10, 200);
+    expect(s.x).toBeCloseTo(100, 6); expect(s.y).toBeCloseTo(200, 6);
+    const w = mapPointXY(270, 10, 10, 200);
+    expect(w.x).toBeCloseTo(0, 6); expect(w.y).toBeCloseTo(100, 6);
+  });
+
+  it('puts a zero-range contact on the vehicle itself', () => {
+    expect(mapPointXY(123, 0, 10, 200)).toEqual({ x: 100, y: 100 });
+  });
+
+  it('scales linearly with range, unlike the POV view', () => {
+    // A map is a map: 5 m must sit exactly halfway out on a 10 m scale.
+    const half = mapPointXY(0, 5, 10, 200);
+    expect(half.y).toBeCloseTo(50, 6);
+  });
+
+  it('wraps bearings past 360 the same as their base angle', () => {
+    const a = mapPointXY(45, 7, 10, 200);
+    const b = mapPointXY(405, 7, 10, 200);
+    expect(a.x).toBeCloseTo(b.x, 6);
+    expect(a.y).toBeCloseTo(b.y, 6);
+  });
+
+  it('returns null outside the display range or for degenerate args', () => {
+    expect(mapPointXY(0, 11, 10, 200)).toBeNull();
+    expect(mapPointXY(0, -1, 10, 200)).toBeNull();
+    expect(mapPointXY(NaN, 5, 10, 200)).toBeNull();
+    expect(mapPointXY(0, 5, 0, 200)).toBeNull();
+    expect(mapPointXY(0, 5, 10, 0)).toBeNull();
   });
 });

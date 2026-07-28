@@ -689,6 +689,21 @@
   text-align: center;
 }
 
+/* --- accumulation map --- */
+/* Stacked rather than side-by-side: the map wants to be big enough to read a
+   sweep on, which leaves no room for the readout beside it in a 250px column. */
+.sonar-cone.map { flex-direction: column; align-items: stretch; }
+.sonar-map-wrap { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.sonar-map-canvas {
+  width: 240px;
+  height: 240px;
+  display: block;
+  border-radius: 50%;
+  background: var(--abyss);
+  border: 1px solid var(--line);
+}
+.sonar-map-note { font-size: 8px; color: var(--faint); text-align: center; }
+
 /* --- POV tunnel --- */
 /* Square bitmap (POV_SIZE in SonarView.jsx) so the rings stay circular without
    an aspect correction in the draw code; sized here to the cone slot it

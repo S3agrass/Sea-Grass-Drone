@@ -119,10 +119,9 @@ describe('SonarView', () => {
     expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(4);
   });
 
-  it('swaps the plan view for the POV canvas and persists the choice', () => {
+  it('cycles plan -> pov -> map -> plan and persists the choice', () => {
     render(<SonarView />);
     expect(screen.getByLabelText('Sonar beam cone')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Sonar POV view')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByText('plan'));
     expect(screen.getByLabelText('Sonar POV view')).toBeInTheDocument();
@@ -130,6 +129,11 @@ describe('SonarView', () => {
     expect(localStorage.getItem('seagrass-sonar-view')).toBe('pov');
 
     fireEvent.click(screen.getByText('pov'));
+    expect(screen.getByLabelText('Sonar accumulation map')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Sonar POV view')).not.toBeInTheDocument();
+    expect(localStorage.getItem('seagrass-sonar-view')).toBe('map');
+
+    fireEvent.click(screen.getByText('map'));
     expect(screen.getByLabelText('Sonar beam cone')).toBeInTheDocument();
     expect(localStorage.getItem('seagrass-sonar-view')).toBe('plan');
   });
@@ -138,6 +142,34 @@ describe('SonarView', () => {
     localStorage.setItem('seagrass-sonar-view', 'pov');
     render(<SonarView />);
     expect(screen.getByLabelText('Sonar POV view')).toBeInTheDocument();
+  });
+
+  it('restores a saved map view', () => {
+    localStorage.setItem('seagrass-sonar-view', 'map');
+    render(<SonarView />);
+    expect(screen.getByLabelText('Sonar accumulation map')).toBeInTheDocument();
+  });
+
+  it('falls back to the plan view for an unrecognised saved view', () => {
+    localStorage.setItem('seagrass-sonar-view', 'nonsense');
+    render(<SonarView />);
+    expect(screen.getByLabelText('Sonar beam cone')).toBeInTheDocument();
+  });
+
+  it('says the map cannot build without a compass', () => {
+    // Bearing comes from yaw alone; with no heading every ping would pile onto
+    // the same spoke and the picture would be a lie rather than merely empty.
+    localStorage.setItem('seagrass-sonar-view', 'map');
+    mockCtx.telemetry = { pitch: 0, yaw: null };
+    render(<SonarView />);
+    expect(screen.getByText(/no compass/i)).toBeInTheDocument();
+  });
+
+  it('prompts you to yaw once a heading is available', () => {
+    localStorage.setItem('seagrass-sonar-view', 'map');
+    mockCtx.telemetry = { pitch: 0, yaw: 137.5 };
+    render(<SonarView />);
+    expect(screen.getByText(/yaw the vehicle to sweep/i)).toBeInTheDocument();
   });
 
   it('keeps the echogram mounted while the POV view is showing', () => {

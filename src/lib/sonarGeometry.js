@@ -110,6 +110,29 @@ export function planHalfAngleDeg(effectiveMountDeg, beamDeg = PING_BEAM_DEG) {
   return Math.min(89, (Math.atan2(lateral, forward) * 180) / Math.PI);
 }
 
+/* Accumulation map: an absolute bearing + range -> canvas pixel, NORTH UP.
+ *
+ * North up rather than heading up, because this view's whole point is that
+ * points PERSIST while the vehicle turns. Heading up would spin the accumulated
+ * world around the screen every time the pilot yawed, destroying the one thing
+ * the map is for; north up leaves the picture still and rotates the boat inside
+ * it, which is also what every chart plotter does.
+ *
+ * Screen convention: bearing 0 (north) is up, 90 (east) is right — hence sin on
+ * x and MINUS cos on y, since canvas y grows downward.
+ */
+export function mapPointXY(bearingDeg, rangeM, maxRangeM, size) {
+  if (!Number.isFinite(bearingDeg) || !Number.isFinite(rangeM)) return null;
+  if (!(maxRangeM > 0) || !(size > 0)) return null;
+  if (rangeM < 0 || rangeM > maxRangeM) return null;
+  const r = (rangeM / maxRangeM) * (size / 2);
+  const rad = (bearingDeg * Math.PI) / 180;
+  return {
+    x: size / 2 + r * Math.sin(rad),
+    y: size / 2 - r * Math.cos(rad),
+  };
+}
+
 /* POV tunnel: range -> ring radius in px, for the head-on submarine view.
  *
  * Perspective, not linear: a ring right at the transducer fills the frame and
