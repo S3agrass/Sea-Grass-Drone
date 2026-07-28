@@ -587,9 +587,13 @@ export default function SonarView() {
                       because it is the one that matters; the rest are dimmed. On
                       a 45deg mount the farthest is usually the seabed. */}
                   {contacts.map((c, i) => {
-                    const near = i === 0;
-                    const tone = near ? (readout.gated ? q.tone : "var(--amber)")
-                                      : "var(--faint)";
+                    // Only promote the nearest to "this is the one" when there
+                    // is a confidence lock behind it. Without one these are
+                    // amplitude peaks, which in a reverberant space are folded
+                    // multipath as often as they are objects.
+                    const near = i === 0 && readout.gated;
+                    const tone = i === 0 ? (readout.gated ? q.tone : "var(--amber)")
+                                         : "var(--faint)";
                     const [, cy] = pt(c.fwd, 0);
                     return (
                       <g key={`${c.fwd.toFixed(2)}-${i}`}>
@@ -649,14 +653,27 @@ export default function SonarView() {
             {/* Exact numbers for every contact. The device only ever reports its
                 own single pick (the STRONGEST return); these come from reading
                 the profile directly, so a near soft object is listed even when a
-                far hard one is louder. "ahead" is the forward projection. */}
+                far hard one is louder. "ahead" is the forward projection.
+
+                findEchoes() reads the RAW profile and applies no confidence
+                gating, so without the banner below this list renders reverb as
+                crisp monospace metres — which is how a Ping2 in a 0.46 m box
+                came to report a contact at 1.19 m, a folded multipath return
+                roughly three traversals long. Amplitude peaks are real peaks;
+                whether they are real OBJECTS is what confidence answers, and
+                only `gated` carries that. */}
             {readout.echoes.length > 1 && (
-              <div className="sonar-contacts mono">
+              <div className={`sonar-contacts mono${readout.gated ? "" : " unverified"}`}>
+                {!readout.gated && (
+                  <div className="sonar-contacts-warn">
+                    unverified — no confidence lock
+                  </div>
+                )}
                 {readout.echoes.map((e, i) => {
                   const ahead = decomposeRange(e.range, mountDeg, pitchDeg).forward;
                   return (
                     <div key={`${e.range}-${i}`}
-                         className={`sonar-contact-row${i === 0 ? " near" : ""}`}>
+                         className={`sonar-contact-row${i === 0 && readout.gated ? " near" : ""}`}>
                       <span>{i === 0 ? "nearest" : `#${i + 1}`}</span>
                       <span>{e.range.toFixed(2)} m</span>
                       <span>{ahead == null ? "—" : `${ahead.toFixed(2)} ahead`}</span>

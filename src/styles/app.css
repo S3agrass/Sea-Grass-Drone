@@ -663,6 +663,17 @@
 }
 .sonar-contact-row.near { color: var(--teal); font-weight: 700; }
 
+/* No confidence lock: these are amplitude peaks, and in a reverberant space a
+   peak is folded multipath as often as it is an object. Rendering them at full
+   strength turns "1.19 m" into a fact when it is a guess. */
+.sonar-contacts.unverified { opacity: 0.6; }
+.sonar-contacts-warn {
+  font-size: 8px;
+  color: var(--amber);
+  letter-spacing: 0.03em;
+  padding-bottom: 1px;
+}
+
 /* Sonar brake state. Deliberately the loudest thing in the panel: it is the
    explanation for a throttle that has stopped responding, and an operator who
    misses it will think the vehicle has failed. */
