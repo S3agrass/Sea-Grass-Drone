@@ -48,12 +48,39 @@ wget -O yolox_nano.pth <yolox_nano.pth release URL from YOLOX repo>
 > exactly what `train.sh` consumes — drop them into the layout below and skip
 > steps 1–3:
 >
-> | Dataset | Size | Notes |
+> | Dataset | Size | Classes |
 > |---|---|---|
-> | **RUOD** | 9,800 train / 4,200 test | 10 categories, the broadest of these |
-> | **DUO** | 7,782 images | 4 classes (holothurian, echinus, scallop, starfish) |
-> | **URPC2019** | 5 categories | Natural seafloor imagery |
-> | **Roboflow Universe** | varies | Search "underwater"; exports COCO directly in the browser |
+> | **[RUOD](https://github.com/xiaoDetection/RUOD)** | 13,112 images / 71,935 boxes | holothurian, echinus, scallop, starfish, fish, corals, diver, cuttlefish, turtle, jellyfish |
+> | **[TrashCan](https://arxiv.org/pdf/2007.08097)** | 7,212 images | trash (many subtypes), rov, animals — from JAMSTEC deep-sea footage |
+> | **[Shallow-water debris](https://www.nature.com/articles/s41597-024-03759-2)** | — | Marine debris in shallow water — a closer environmental match than TrashCan |
+> | **[Roboflow Universe](https://universe.roboflow.com/search?q=class%3Aunderwater)** | varies | Search "underwater"; exports COCO directly in the browser |
+>
+> **`scripts/prepare_dataset.py` merges them for you.** These datasets disagree
+> on everything — RUOD calls a sea cucumber `holothurian`, TrashCan splits
+> rubbish across a dozen `trash_*` categories, and both number their category
+> ids from 1 with no relation to each other. The script unifies the label space,
+> re-issues image and annotation ids (merging two files that both start at id 1
+> otherwise attaches boxes to the wrong images, and every box still lands on a
+> real photo so the damage is invisible), and writes the layout below.
+>
+> ```bash
+> # Look before you write — reports what the datasets actually contain
+> python3 scripts/prepare_dataset.py --dry-run --split train \
+>     --source ruod:/data/RUOD/annotations/instances_train.json:/data/RUOD/train \
+>     --source trashcan:/data/trashcan/instances_train.trashcan.json:/data/trashcan/train
+> ```
+>
+> Read the **UNMAPPED** section of that output before going further. Anything
+> listed there became *background*, which does not mean "ignored" — it actively
+> teaches the model that a sea urchin is nothing worth reporting. Either add a
+> rule to `RULES` in the script, or re-run with `--drop-unmapped-images` to
+> exclude those images instead. Then drop `--dry-run` and repeat for
+> `--split val`.
+>
+> Keep `labels.txt`, `LABELS` in the script, and `num_classes` in the config in
+> step — `test_dataset_prep.py` fails if the first two drift apart, because a
+> mismatch shifts every class index and the model then reports confident boxes
+> under the wrong names.
 >
 > **Expect a domain gap.** A model trained on someone else's water, camera and
 > species will underperform in yours — different turbidity, different colour

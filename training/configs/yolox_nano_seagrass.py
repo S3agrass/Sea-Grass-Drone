@@ -24,8 +24,11 @@ class Exp(MyExp):
         self.test_size = (416, 416)
         self.enable_mixup = False
 
-        # --- CHANGE THIS to len(labels.txt) ---
-        self.num_classes = 4
+        # Must equal the number of entries in ../labels.txt. Currently the 12
+        # classes that RUOD + TrashCan between them actually provide; change it
+        # if you change that file, or training silently learns the wrong number
+        # of heads and every class index shifts.
+        self.num_classes = 12
 
         # --- dataset (COCO format) ---
         _here = os.path.dirname(os.path.abspath(__file__))
