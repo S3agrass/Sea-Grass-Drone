@@ -133,6 +133,52 @@ export function mapPointXY(bearingDeg, rangeM, maxRangeM, size) {
   };
 }
 
+/* Sector memory: the compass split into slots, each holding only what the beam
+ * last saw at that bearing.
+ *
+ * This is how a contact disappears when it stops being there instead of
+ * loitering until a timer expires. Each ping is a fresh statement about ONE
+ * bearing and it REPLACES that slot — so a sweep finding nothing empties the
+ * slot exactly as a sweep finding something overwrites it, while every other
+ * bearing is untouched, which is what lets the picture behind you persist.
+ *
+ * A slot per bearing, rather than an accumulating list culled by proximity: the
+ * obvious version — drop nearby points, then append what was just seen — eats
+ * itself. Points land at whatever heading the vehicle held at that instant, so
+ * the cull radius has to exceed the per-ping heading step or nothing is ever
+ * removed, and the moment it does exceed it, each ping deletes the points the
+ * previous few just laid down. Tested it: a full sweep past an object left the
+ * map completely empty. Slots have no such coupling — a slot is only ever
+ * rewritten by an observation of that same bearing.
+ *
+ * 2 degrees is well under the beam width, so one object still spans several
+ * slots and the clustering above sees the arc it expects.
+ */
+export const MAP_SECTORS = 180;
+
+export function sectorIndex(bearingDeg, sectors = MAP_SECTORS) {
+  if (!Number.isFinite(bearingDeg) || !(sectors > 0)) return null;
+  const b = ((bearingDeg % 360) + 360) % 360;
+  return Math.min(sectors - 1, Math.floor((b / 360) * sectors));
+}
+
+/* Flatten live slots into points for drawing and clustering. The TTL is the
+ * backstop for the error slots cannot catch: nothing tracks POSITION, so a slot
+ * never re-swept goes on asserting where something sat relative to a spot the
+ * vehicle may since have left. */
+export function sectorMemoryToPoints(sectors, nowMs, ttlMs) {
+  const out = [];
+  if (!sectors) return out;
+  for (const s of sectors) {
+    if (!s || !s.ranges) continue;
+    if (nowMs - s.t > ttlMs) continue;
+    for (const range of s.ranges) {
+      out.push({ bearing: s.bearing, range, conf: s.conf, t: s.t });
+    }
+  }
+  return out;
+}
+
 /* Group accumulated map points into distinct OBJECTS, nearest first.
  *
  * The tolerances are deliberately asymmetric, and that asymmetry is the whole

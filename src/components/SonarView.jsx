@@ -27,6 +27,9 @@ import {
   findEchoes,
   mapPointXY,
   peakRange,
+  sectorIndex,
+  sectorMemoryToPoints,
+  MAP_SECTORS,
   planHalfAngleDeg,
   povBlipStyle,
   povRingRadius,
@@ -62,13 +65,18 @@ const PROFILE_STALE_MS = 3000;
 // of the surroundings — the same picture a mechanically-scanned head produces,
 // built over seconds instead of in one sweep.
 const MAP_SIZE = 240;
-// Points expire because nothing here tracks POSITION — only heading. The map is
-// therefore only true while the vehicle pivots in place, and every point is a
-// claim about where something was relative to a spot the vehicle has since
-// drifted off. 25 s is long enough to sweep a wide arc by hand and short enough
-// that the picture cannot quietly become fiction.
-const MAP_TTL_MS = 25000;
-const MAP_MAX_POINTS = 1400;
+// Removal is primarily by SECTOR REFRESH — sweep a bearing again and whatever
+// the beam now reports replaces what was there, so a contact that has gone
+// disappears the moment you look back at it rather than when a timer says so.
+//
+// This TTL is the backstop for the other way the map can go wrong: nothing here
+// tracks POSITION, only heading, so every point is a claim about where
+// something sat relative to a spot the vehicle may since have drifted off. That
+// error grows whether or not the bearing is ever re-swept, so it needs its own
+// expiry. 60 s because a full hand-flown sweep is slower than it sounds — at
+// the demo's ~7.8 deg/s a circle takes 46 s — and a TTL shorter than one sweep
+// would erase the picture faster than it could be built.
+const MAP_TTL_MS = 60000;
 // Re-cluster at 4 Hz rather than per frame. Grouping is cheap but not free, and
 // objects do not appear and vanish fast enough for 60 Hz to buy anything.
 const MAP_CLUSTER_MS = 250;
@@ -146,7 +154,9 @@ export default function SonarView() {
   const pulsesRef = useRef([]); // POV pulse rings in flight: array of start times
   const lastPingAtRef = useRef(0); // performance.now() of the last profile received
   const mapRef = useRef(null);
-  const mapPointsRef = useRef([]); // {bearing, range, conf, t} in absolute degrees
+  // One slot per bearing holding only the beam's LAST look at it, so re-sweeping
+  // a bearing replaces what was there and finding nothing erases it.
+  const mapSectorsRef = useRef(new Array(MAP_SECTORS).fill(null));
   const mapObjectsRef = useRef([]); // clustered objects, recomputed at MAP_CLUSTER_MS
   const mapClusteredAtRef = useRef(0);
   // Yaw mirrored into a ref so the draw loop can read the CURRENT heading every
@@ -294,29 +304,28 @@ export default function SonarView() {
     const recordMapPoints = (ping) => {
       const yaw = yawRef.current;
       if (yaw == null || !Number.isFinite(yaw)) return; // no compass, no bearing
+      // Bearing is the vehicle's heading: a fixed forward beam looks wherever
+      // the nose does. Mount tilt is ignored on purpose — this is a PLAN view,
+      // and a tilted beam's contact still lies along the same compass bearing,
+      // just nearer than its slant range. The range plotted is the slant range
+      // for that reason; see the caption in the panel.
+      const bearing = ((yaw % 360) + 360) % 360;
       const maxR = maxRangeRef.current;
       const found = findEchoes(ping.profile, ping.scan_start_m ?? 0,
                                ping.scan_length_m ?? maxR);
       const ranges = found.length ? found.map((e) => e.range)
                                   : (ping.distance_m != null ? [ping.distance_m] : []);
-      if (!ranges.length) return;
-      const conf = ping.confidence ?? 0;
-      const t = performance.now();
-      const pts = mapPointsRef.current;
-      for (const range of ranges) {
-        if (range > maxR) continue;
-        // Bearing is the vehicle's heading: a fixed forward beam looks wherever
-        // the nose does. Mount tilt is ignored on purpose — this is a PLAN view,
-        // and a tilted beam's contact still lies along the same compass bearing,
-        // just nearer than its slant range. The range plotted is the slant range
-        // for that reason; see the caption in the panel.
-        pts.push({ bearing: ((yaw % 360) + 360) % 360, range, conf, t });
-      }
-      // Oldest out first — TTL handles the rest, this only bounds memory when
-      // the vehicle sits still and pings the same bearing for a long time.
-      if (pts.length > MAP_MAX_POINTS) {
-        mapPointsRef.current = pts.slice(pts.length - MAP_MAX_POINTS);
-      }
+
+      // This ping REPLACES whatever was believed about this bearing. Assigning
+      // null on an empty result is the whole feature: a look that finds nothing
+      // has to erase the slot, or a contact that has gone would sit on the map
+      // until its timer expired.
+      const idx = sectorIndex(bearing);
+      if (idx == null) return;
+      const visible = ranges.filter((r) => r <= maxR);
+      mapSectorsRef.current[idx] = visible.length
+        ? { bearing, ranges: visible, conf: ping.confidence ?? 0, t: performance.now() }
+        : null;
     };
 
     const drawMap = (nowMs) => {
@@ -376,12 +385,9 @@ export default function SonarView() {
       // Accumulated contacts. Age fades them out, confidence sets how solid they
       // look, and overlapping returns compound — so a wall the beam crossed
       // repeatedly builds into a solid arc while noise stays as isolated specks.
-      const pts = mapPointsRef.current;
-      const live = [];
-      for (const p of pts) {
+      const live = sectorMemoryToPoints(mapSectorsRef.current, nowMs, MAP_TTL_MS);
+      for (const p of live) {
         const age = (nowMs - p.t) / MAP_TTL_MS;
-        if (age >= 1) continue;
-        live.push(p);
         const xy = mapPointXY(p.bearing, p.range, maxR, size);
         if (!xy) continue;
         const trust = Math.max(0, Math.min(1, p.conf / 100));
@@ -393,7 +399,6 @@ export default function SonarView() {
           : `rgba(255,180,84,${alpha * 0.8})`;
         mctx.fill();
       }
-      mapPointsRef.current = live;
 
       // Distinct objects, labelled with their distance. The raw points are the
       // evidence; this is the reading of it, and it is what turns a dot cloud
