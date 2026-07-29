@@ -28,6 +28,12 @@ Environment variables:
                       default: /tmp/seagrass-camera-snapshot.jpg
     SEAGRASS_TOKEN    Shared secret for mutating endpoints (photo/delete).
                       Empty = LAN-trust mode (matches drone_server.py).
+    TURN_KEY_ID           Cloudflare Realtime TURN key ID.
+    TURN_KEY_API_TOKEN    Its secret — never sent to the browser; kept here,
+                           server-side, to mint short-lived credentials per
+                           /turn-credentials request. Both unset = no TURN
+                           (browser falls back to STUN-only, which doesn't
+                           traverse most home routers' NAT for inbound video).
 
 Run standalone (for testing without drone_server.py):
     python3 server/media_server.py
@@ -37,6 +43,8 @@ import json
 import os
 import shutil
 import time
+import urllib.error
+import urllib.request
 from http import server
 from urllib.parse import unquote
 
@@ -44,6 +52,39 @@ MEDIA_HTTP_PORT = int(os.environ.get("MEDIA_HTTP_PORT", "8000"))
 MEDIA_DIR = os.environ.get("MEDIA_DIR", os.path.expanduser("~/seagrass-media"))
 SNAPSHOT_FRAME = os.environ.get("SNAPSHOT_FRAME", "/tmp/seagrass-camera-snapshot.jpg")
 TOKEN = os.environ.get("SEAGRASS_TOKEN", "")
+
+# Cloudflare Realtime TURN — see module docstring. Short-lived (1 hour) so a
+# leaked credential from a single /turn-credentials response is only useful
+# for about as long as the viewing session it was minted for.
+TURN_KEY_ID = os.environ.get("TURN_KEY_ID", "")
+TURN_KEY_API_TOKEN = os.environ.get("TURN_KEY_API_TOKEN", "")
+TURN_TTL_S = 3600
+
+# Used when TURN isn't configured (or its API call fails) — STUN only helps
+# the browser discover its own public address; it does not traverse a router
+# that blocks unsolicited inbound UDP, so this is a degraded-but-not-broken
+# fallback rather than a real fix.
+_STUN_FALLBACK = {"iceServers": [{"urls": "stun:stun.l.google.com:19302"}]}
+
+
+def _fetch_turn_credentials():
+    if not (TURN_KEY_ID and TURN_KEY_API_TOKEN):
+        return _STUN_FALLBACK
+    req = urllib.request.Request(
+        f"https://rtc.live.cloudflare.com/v1/turn/keys/{TURN_KEY_ID}/credentials/generate-ice-servers",
+        method="POST",
+        data=json.dumps({"ttl": TURN_TTL_S}).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {TURN_KEY_API_TOKEN}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        print(f"TURN credential fetch failed, falling back to STUN-only: {exc}")
+        return _STUN_FALLBACK
 
 os.makedirs(MEDIA_DIR, exist_ok=True)
 
@@ -137,6 +178,8 @@ class MediaHandler(server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/health':
             self._send_json({"status": "ok"})
+        elif self.path == '/turn-credentials':
+            self._send_json(_fetch_turn_credentials())
         elif self.path == '/media':
             self._send_json({"media": list_media()})
         elif self.path.startswith('/media/'):

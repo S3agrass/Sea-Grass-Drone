@@ -13,10 +13,27 @@ function streamType(url) {
 // WHEP (WebRTC-HTTP Egress Protocol) client for MediaMTX.
 // POSTs an SDP offer to the WHEP URL; MediaMTX replies with an SDP answer;
 // the browser then plays the H.264 stream in a <video> element.
-async function connectWHEP(url, videoEl, signal) {
-  const pc = new RTCPeerConnection({
-    iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-  });
+async function connectWHEP(url, videoEl, signal, mediaBase) {
+  // TURN credentials come from the Pi's media_server.py, not hardcoded here —
+  // they're short-lived (Cloudflare Realtime, 1h TTL) and its secret never
+  // reaches the browser. Falls back to STUN-only if mediaBase is unknown or
+  // the fetch fails; that still works on networks whose NAT/firewall allows
+  // direct inbound UDP, just not the common home-router case this exists for.
+  let iceServers = [{ urls: "stun:stun.l.google.com:19302" }];
+  if (mediaBase) {
+    try {
+      const resp = await fetch(`${mediaBase}/turn-credentials`, { signal });
+      const data = await resp.json();
+      if (Array.isArray(data.iceServers) && data.iceServers.length) {
+        iceServers = data.iceServers;
+      }
+    } catch {
+      // network hiccup or aborted — proceed with the STUN-only default above
+    }
+  }
+  if (signal.aborted) return null;
+
+  const pc = new RTCPeerConnection({ iceServers });
 
   // Wire up video track → <video> element as soon as the first track arrives.
   pc.ontrack = (e) => {
@@ -69,6 +86,7 @@ export default function CameraView() {
     activeDrone,
     linkStatus,
     cameraActive,
+    mediaBase,
     detectActive,
     detections,
     detectOn,
@@ -121,7 +139,7 @@ export default function CameraView() {
     const controller = new AbortController();
     let pc = null;
 
-    connectWHEP(streamUrl, videoRef.current, controller.signal)
+    connectWHEP(streamUrl, videoRef.current, controller.signal, mediaBase)
       .then((conn) => {
         if (!conn) return; // aborted
         pc = conn;
@@ -144,7 +162,7 @@ export default function CameraView() {
       pc?.close();
       if (videoRef.current) videoRef.current.srcObject = null;
     };
-  }, [feedState, type, streamUrl]);
+  }, [feedState, type, streamUrl, mediaBase]);
 
   // Detection overlay — draw normalized bounding boxes onto a canvas sized to
   // the displayed feed. Boxes arrive as fractions (0-1) of the full source
