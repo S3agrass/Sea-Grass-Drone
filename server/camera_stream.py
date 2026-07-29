@@ -65,6 +65,14 @@ DETECT_FRAME = os.environ.get("DETECT_FRAME", "")
 DETECT_TAP_SIZE = int(os.environ.get("DETECT_TAP_SIZE", "320"))
 DETECT_TAP_FPS = int(os.environ.get("DETECT_TAP_FPS", "5"))
 
+# Photo-capture tap: this pipeline only ever pushes H.264 to MediaMTX, so there
+# is no encoded-JPEG-per-frame to reuse for a snapshot the way the MJPEG script
+# does. Instead a second low-fps tee branch continuously overwrites a single
+# full-resolution JPEG file, which media_server.py's /photo endpoint copies out
+# on request. Set SNAPSHOT_FRAME="" to disable (saves the extra tee branch).
+SNAPSHOT_FRAME = os.environ.get("SNAPSHOT_FRAME", "/tmp/seagrass-camera-snapshot.jpg")
+SNAPSHOT_FPS = float(os.environ.get("SNAPSHOT_FPS", "1"))
+
 RTSP_SINK = f"rtsp://{MEDIAMTX_HOST}:{MEDIAMTX_RTSP_PORT}/{STREAM_NAME}"
 
 # GStreamer pipeline:
@@ -79,10 +87,11 @@ RTSP_SINK = f"rtsp://{MEDIAMTX_HOST}:{MEDIAMTX_RTSP_PORT}/{STREAM_NAME}"
 def build_gst_cmd():
     """Build the GStreamer pipeline.
 
-    Without DETECT_FRAME it is a single H.264 branch to MediaMTX (unchanged
-    original behaviour). With DETECT_FRAME set, a `tee` fans the camera source
-    into that same H.264 branch plus a low-res JPEG branch whose `multifilesink
-    max-files=1` continuously overwrites one file — the detector's frame slot.
+    With neither DETECT_FRAME nor SNAPSHOT_FRAME set, it is a single H.264
+    branch to MediaMTX (unchanged original behaviour). Otherwise a `tee` fans
+    the camera source into that same H.264 branch plus one JPEG branch per tap
+    requested, each `multifilesink max-files=1` continuously overwriting a
+    single file — the detector's frame slot and/or the photo-capture slot.
     """
     src = [
         "libcamerasrc", "!",
@@ -95,23 +104,31 @@ def build_gst_cmd():
         "rtspclientsink", f"location={RTSP_SINK}", "protocols=tcp",
     ]
 
-    if not DETECT_FRAME:
+    taps = []
+    if DETECT_FRAME:
+        taps.append([
+            "videorate", "!", f"video/x-raw,framerate={DETECT_TAP_FPS}/1", "!",
+            "videoscale", "!",
+            f"video/x-raw,width={DETECT_TAP_SIZE},height={DETECT_TAP_SIZE}", "!",
+            "videoconvert", "!",
+            "jpegenc", "!",
+            "multifilesink", f"location={DETECT_FRAME}", "max-files=1",
+        ])
+    if SNAPSHOT_FRAME:
+        taps.append([
+            "videorate", "!", f"video/x-raw,framerate={SNAPSHOT_FPS}/1", "!",
+            "videoconvert", "!",
+            "jpegenc", "!",
+            "multifilesink", f"location={SNAPSHOT_FRAME}", "max-files=1",
+        ])
+
+    if not taps:
         return ["gst-launch-1.0", "-e", *src, *h264_branch]
 
-    # tee → (queue → H.264 → MediaMTX) and (queue → scale → JPEG slot file)
-    return [
-        "gst-launch-1.0", "-e",
-        *src,
-        "tee", "name=t",
-        "t.", "!", "queue", "!", *h264_branch,
-        "t.", "!", "queue", "!",
-        "videorate", "!", f"video/x-raw,framerate={DETECT_TAP_FPS}/1", "!",
-        "videoscale", "!",
-        f"video/x-raw,width={DETECT_TAP_SIZE},height={DETECT_TAP_SIZE}", "!",
-        "videoconvert", "!",
-        "jpegenc", "!",
-        "multifilesink", f"location={DETECT_FRAME}", "max-files=1",
-    ]
+    cmd = ["gst-launch-1.0", "-e", *src, "tee", "name=t", "t.", "!", "queue", "!", *h264_branch]
+    for branch in taps:
+        cmd += ["t.", "!", "queue", "!", *branch]
+    return cmd
 
 
 def main():
@@ -121,6 +138,8 @@ def main():
         print(
             f"Detection tap: {DETECT_TAP_SIZE}x{DETECT_TAP_SIZE}@{DETECT_TAP_FPS}fps  →  {DETECT_FRAME}"
         )
+    if SNAPSHOT_FRAME:
+        print(f"Snapshot tap: {SNAPSHOT_FPS}fps  →  {SNAPSHOT_FRAME}")
     gst_cmd = build_gst_cmd()
     try:
         subprocess.run(gst_cmd, check=True)

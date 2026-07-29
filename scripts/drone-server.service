@@ -21,6 +21,7 @@ ExecStartPre=-/bin/sh -c 'lsof -t "${PIXHAWK_PORT:-/dev/ttyACM0}" | xargs -r kil
 # from a real hardware fault until you go looking for a stray process by hand.
 # Same fix as the Pixhawk line above: clear it before every start.
 ExecStartPre=-/bin/sh -c 'pkill -9 -f "python3.*camera_stream.py" || true'
+ExecStartPre=-/bin/sh -c 'pkill -9 -f "python3.*media_server.py" || true'
 ExecStart=/usr/bin/python3 -u /home/pi/Sea-Grass-Drone/server/drone_server.py
 Restart=always
 RestartSec=3

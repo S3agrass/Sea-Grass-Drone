@@ -598,14 +598,60 @@ def step_sonar_brake():
 
 
 # ---------------- camera subprocess ----------------
-# The repo-root camera_stream.py (Picamera2 -> MJPEG on :8000) is the camera
-# path that actually runs on this Pi. server/camera_stream.py is the WebRTC/
-# GStreamer stack, which needs GStreamer + MediaMTX installed; point this there
-# once that toolchain is in place.
-_CAMERA_SCRIPT = os.path.normpath(
-    os.path.join(os.path.dirname(__file__), "..", "camera_stream.py")
-)
+# server/camera_stream.py: GStreamer -> MediaMTX, streamed to browsers over
+# WebRTC/WHEP. Needed for the deployed (non-Tailscale) site — the repo-root
+# camera_stream.py's MJPEG-over-HTTP (multipart/x-mixed-replace, no
+# Content-Length, body ends only on connection close) has no valid framing
+# under HTTP/2 and gets a hard 501 from any HTTP/2-terminating proxy
+# (Cloudflare Tunnel included), independent of any DNS/cert configuration.
+# Recording is not carried over to this path yet — see media_server.py's
+# module docstring for why and what's missing.
+_CAMERA_SCRIPT = os.path.join(os.path.dirname(__file__), "camera_stream.py")
 camera_proc: subprocess.Popen | None = None
+
+# media_server.py: photo capture, media listing/serving. Independent of the
+# camera process (unlike the legacy MJPEG script, which bundled both) so the
+# Media page keeps working whether or not the camera pipeline is currently
+# running, and needs its own start/stop tied to the server's own lifetime.
+_MEDIA_SCRIPT = os.path.join(os.path.dirname(__file__), "media_server.py")
+media_proc: subprocess.Popen | None = None
+MEDIA_LOG_PATH = "/tmp/seagrass-media-server.log"
+
+
+def media_server_running() -> bool:
+    return media_proc is not None and media_proc.poll() is None
+
+
+def start_media_server():
+    global media_proc
+    if media_server_running():
+        return
+    try:
+        log = open(MEDIA_LOG_PATH, "w")
+        media_proc = subprocess.Popen(
+            ["python3", _MEDIA_SCRIPT],
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
+        log.close()
+        print(f"Media server started (pid {media_proc.pid})")
+    except Exception as exc:  # noqa: BLE001
+        print(f"Failed to start media server: {exc}")
+
+
+def stop_media_server():
+    global media_proc
+    if not media_server_running():
+        media_proc = None
+        return
+    media_proc.terminate()
+    try:
+        media_proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        media_proc.kill()
+        media_proc.wait()
+    media_proc = None
+    print("Media server stopped")
 
 # Shared frame slot: camera_stream.py's detection tap writes the latest JPEG
 # here, and detector.py reads it. Passing DETECT_FRAME to the camera turns the
@@ -683,16 +729,17 @@ def stop_camera():
 
 
 # ---------------- recording (SD-card capture) ----------------
-# The camera subprocess (camera_stream.py) owns recording: it writes an mp4 to
-# the SD card via a second encoder, independent of any streaming client. We drive
-# it over its local HTTP control endpoint, and mirror its state here so the "state"
-# message can report REC status to the UI even when recording was started
-# server-side (e.g. auto-record on arm during an unattended autonomous run).
+# CAMERA_HTTP now reaches media_server.py, not the camera subprocess — see that
+# module's docstring for why recording (/record/start, /record/stop) currently
+# 501s there: the GStreamer/MediaMTX camera path has no second on-Pi encoder to
+# draw an mp4 from, unlike the legacy Picamera2 script's dual-encoder setup.
+# record_start()/record_stop() below still degrade gracefully (ok=False just
+# means `recording` never flips true), so this is a capability gap, not a bug.
 CAMERA_HTTP = os.environ.get("CAMERA_HTTP", "http://127.0.0.1:8000")
 
-# Where camera_stream.py writes photos/recordings. Must match its own MEDIA_DIR
-# (see camera_stream.py) — we write a metadata sidecar next to each capture, and
-# media_uploader.py drains this directory to Firebase.
+# Where media_server.py writes photos (and would write recordings, if that were
+# implemented) — must match its own MEDIA_DIR. We write a metadata sidecar next
+# to each capture, and media_uploader.py drains this directory to Supabase.
 MEDIA_DIR = os.environ.get("MEDIA_DIR", os.path.expanduser("~/seagrass-media"))
 
 # Auto-record: when enabled, arming (or entering an autonomous run) starts a
@@ -1917,6 +1964,7 @@ async def client_handler(ws):
                     do_disarm()
                 await stop_detector()
                 stop_camera()
+                stop_media_server()
                 await state()
                 print("KILL SWITCH: all stop + disarm, shutting server down")
                 os._exit(0)
@@ -2121,6 +2169,7 @@ async def main():
     # The cost is real and deliberate: the camera now draws power and CPU for
     # the whole session. start_camera() blocks on Popen, hence the thread.
     await asyncio.to_thread(start_camera)
+    start_media_server()
     print(f"Auto-record: {'ON' if autorecord_enabled else 'off'}")
     print(f"Auto-capture: {'ON' if AUTOCAPTURE else 'off'}"
           + (f" (conf >= {AUTOCAPTURE_MIN_CONF}, every {AUTOCAPTURE_COOLDOWN_S:.0f}s)"
