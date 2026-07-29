@@ -74,17 +74,6 @@ describe('DroneContext — cameraActive state', () => {
     expect(getCtx().cameraActive).toBe(false);
   });
 
-  it('cameraOn() calls link.cameraOn()', () => {
-    const getCtx = renderContext();
-    act(() => { getCtx().cameraOn(); });
-    expect(mockLink.cameraOn).toHaveBeenCalledOnce();
-  });
-
-  it('cameraOff() calls link.cameraOff()', () => {
-    const getCtx = renderContext();
-    act(() => { getCtx().cameraOff(); });
-    expect(mockLink.cameraOff).toHaveBeenCalledOnce();
-  });
 });
 
 describe('DroneContext — camera lifecycle', () => {
@@ -103,18 +92,39 @@ describe('DroneContext — camera lifecycle', () => {
     localStorage.clear();
   });
 
-  // The camera is on whenever there is a connected drone with a stream URL.
-  // Viewer presence used to be part of this and is deliberately not any more —
-  // see the note on shouldCameraBeOn.
-  function connect() {
+  // The camera is on once the Pixhawk is connected on a connected drone with a
+  // stream URL — not merely once the operator's WebSocket link is up. Viewer
+  // presence was never part of this and still isn't — see the note on
+  // shouldCameraBeOn.
+  function connect({ pixhawk = true } = {}) {
     act(() => { emitToLink({ type: 'status', status: 'connected' }); });
+    if (pixhawk) {
+      act(() => { emitToLink({ type: 'message', data: { type: 'state', pixhawk: true } }); });
+    }
   }
 
-  it('turns the camera ON as soon as a drone with a URL connects', () => {
+  it('turns the camera ON once the Pixhawk connects on a drone with a URL', () => {
     renderContext();
     connect();
     expect(mockLink.cameraOn).toHaveBeenCalled();
     expect(mockLink.cameraOff).not.toHaveBeenCalled();
+  });
+
+  it('does NOT turn the camera on while the link is up but the Pixhawk is not', () => {
+    // The whole point of gating on pixhawkOk rather than just linkStatus: the
+    // server process being reachable says nothing about whether there is a
+    // vehicle to film anything from yet.
+    renderContext();
+    connect({ pixhawk: false });
+    expect(mockLink.cameraOn).not.toHaveBeenCalled();
+  });
+
+  it('turns the camera on when the Pixhawk connects after the link already was', () => {
+    renderContext();
+    connect({ pixhawk: false });
+    expect(mockLink.cameraOn).not.toHaveBeenCalled();
+    act(() => { emitToLink({ type: 'message', data: { type: 'state', pixhawk: true } }); });
+    expect(mockLink.cameraOn).toHaveBeenCalled();
   });
 
   it('starts the camera even for a fleet entry saved with a blank URL', () => {
@@ -141,7 +151,7 @@ describe('DroneContext — camera lifecycle', () => {
 
     for (let i = 0; i < 10; i += 1) {
       act(() => {
-        emitToLink({ type: 'message', data: { type: 'state', camera: true, recording: i % 2 === 0 } });
+        emitToLink({ type: 'message', data: { type: 'state', pixhawk: true, camera: true, recording: i % 2 === 0 } });
       });
     }
     act(() => { vi.advanceTimersByTime(2000); });
@@ -180,9 +190,9 @@ describe('DroneContext — camera lifecycle', () => {
   it('keeps the camera on across a recording and after it ends', () => {
     renderContext();
     connect();
-    act(() => { emitToLink({ type: 'message', data: { type: 'state', camera: true, recording: true } }); });
+    act(() => { emitToLink({ type: 'message', data: { type: 'state', pixhawk: true, camera: true, recording: true } }); });
     act(() => { vi.advanceTimersByTime(2000); });
-    act(() => { emitToLink({ type: 'message', data: { type: 'state', camera: true, recording: false } }); });
+    act(() => { emitToLink({ type: 'message', data: { type: 'state', pixhawk: true, camera: true, recording: false } }); });
     act(() => { vi.advanceTimersByTime(2000); });
     expect(mockLink.cameraOff).not.toHaveBeenCalled();
   });
@@ -208,6 +218,7 @@ describe('DroneContext — camera lifecycle', () => {
       </StrictMode>,
     );
     act(() => { emitToLink({ type: 'status', status: 'connected' }); });
+    act(() => { emitToLink({ type: 'message', data: { type: 'state', pixhawk: true } }); });
     act(() => { vi.advanceTimersByTime(1000); });
 
     expect(mockLink.cameraOn).toHaveBeenCalledTimes(1);

@@ -450,8 +450,6 @@ export function DroneProvider({ children }) {
 
   const headingHoldOn = useCallback(() => link.headingHoldOn(), [link]);
   const headingHoldOff = useCallback(() => link.headingHoldOff(), [link]);
-  const cameraOn = useCallback(() => link.cameraOn(), [link]);
-  const cameraOff = useCallback(() => link.cameraOff(), [link]);
   const detectOn = useCallback(() => link.detectOn(), [link]);
   const detectOff = useCallback(() => link.detectOff(), [link]);
   const recordStart = useCallback(() => link.recordStart(), [link]);
@@ -459,9 +457,9 @@ export function DroneProvider({ children }) {
   const capturePhoto = useCallback(() => link.photo(), [link]);
   const setAutoRecord = useCallback((on) => link.setAutoRecord(on), [link]);
 
-  // Debounced, recording-safe camera lifecycle. The camera should be on whenever
-  // the operator is viewing it (CameraView mounted) on a connected drone that has a
-  // stream URL — giving instant footage — and off shortly after they leave.
+  // Debounced, recording-safe camera lifecycle. Fully automatic — there is no
+  // manual on/off control in the UI. See shouldCameraBeOn below for what it's
+  // gated on and why.
   //
   // Commands are TRANSITION-GATED: camera_on is sent only when the desired state
   // genuinely flips off→on (appliedRef), never merely because the effect re-ran.
@@ -483,22 +481,21 @@ export function DroneProvider({ children }) {
     recordingRef.current = recording;
   }, [recording]);
 
-  // On whenever there is a drone to be on for — no longer gated on whether
-  // anyone is looking at it.
+  // On once the Pixhawk is actually connected — not merely once the operator's
+  // WebSocket link is up. There is no manual camera button; requiring pixhawkOk
+  // is the only gate standing between "server process started" and "camera
+  // hardware starts drawing power and CPU," so it should mean something.
   //
-  // It used to track a `cameraViewing` flag that CameraView set on mount and
-  // cleared on unmount, so navigating off the Control page sent camera_off: an
-  // automatic kill switch nobody asked for, and one the detector cannot
-  // survive, because the JPEG frame tap lives inside camera_stream.py and
-  // closing the tab therefore stopped detection too. The flag and its setter
-  // are gone rather than left in place unread — nothing consumed them once this
-  // stopped, and keeping them would have re-rendered the whole provider on
-  // every navigation to update state no one looked at.
-  //
-  // The manual toggle still turns it off, and the all-stop kill switch still
-  // takes it down; what went away is anything doing so on its own.
+  // Not gated on whether anyone is looking at it, on purpose: the object
+  // detector's JPEG frame tap lives inside camera_stream.py, so a camera that
+  // only ran while a browser had the Control page open meant nothing was
+  // detected at any moment nobody happened to be watching — the exact moments
+  // an autonomous vehicle most needs to be watched. There is no way to turn it
+  // off short of the all-stop kill switch, which also disarms and shuts the
+  // server down — turning the camera off on its own was never a real use case
+  // once the detector depends on it running continuously.
   const shouldCameraBeOn =
-    linkStatus === "connected" && !!activeDrone?.camera_url;
+    linkStatus === "connected" && pixhawkOk && !!activeDrone?.camera_url;
   useEffect(() => {
     if (shouldCameraBeOn) {
       clearTimeout(offTimerRef.current); // cancel any pending shutdown
@@ -567,8 +564,6 @@ export function DroneProvider({ children }) {
     connect,
     disconnect,
     cameraActive,
-    cameraOn,
-    cameraOff,
     detectActive,
     detections,
     detectOn,

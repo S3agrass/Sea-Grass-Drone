@@ -10,8 +10,6 @@ const mockDrone = {
   activeDrone: { camera_url: 'http://100.64.0.1:8889/cam/whep' },
   linkStatus: 'connected',
   cameraActive: false,
-  cameraOn: vi.fn(),
-  cameraOff: vi.fn(),
   detectActive: false,
   detections: [],
   detectOn: vi.fn(),
@@ -34,8 +32,6 @@ let mockCtx;
 beforeEach(() => {
   mockCtx = {
     ...mockDrone,
-    cameraOn: vi.fn(),
-    cameraOff: vi.fn(),
     detectOn: vi.fn(),
     detectOff: vi.fn(),
     recordStart: vi.fn(),
@@ -44,46 +40,6 @@ beforeEach(() => {
     setCameraViewing: vi.fn(),
   };
   vi.clearAllMocks();
-});
-
-describe('CameraView — power toggle', () => {
-  it('shows "Off" toggle when camera is inactive', () => {
-    render(<CameraView />);
-    const btn = screen.getByRole('button', { name: /off/i });
-    expect(btn).toBeInTheDocument();
-    expect(btn).not.toBeDisabled();
-  });
-
-  it('calls cameraOn when toggle is clicked while off', () => {
-    render(<CameraView />);
-    fireEvent.click(screen.getByRole('button', { name: /off/i }));
-    expect(mockCtx.cameraOn).toHaveBeenCalledOnce();
-  });
-
-  it('shows "On" toggle when camera is active', () => {
-    mockCtx.cameraActive = true;
-    render(<CameraView />);
-    expect(screen.getByRole('button', { name: /on/i })).toBeInTheDocument();
-  });
-
-  it('calls cameraOff when toggle is clicked while on', () => {
-    mockCtx.cameraActive = true;
-    render(<CameraView />);
-    fireEvent.click(screen.getByRole('button', { name: /on/i }));
-    expect(mockCtx.cameraOff).toHaveBeenCalledOnce();
-  });
-
-  it('disables toggle when drone is not connected', () => {
-    mockCtx.linkStatus = 'disconnected';
-    render(<CameraView />);
-    expect(screen.getByRole('button', { name: /off/i })).toBeDisabled();
-  });
-
-  it('disables toggle when no camera URL is set', () => {
-    mockCtx.activeDrone = { camera_url: '' };
-    render(<CameraView />);
-    expect(screen.getByRole('button', { name: /off/i })).toBeDisabled();
-  });
 });
 
 describe('CameraView — placeholder states', () => {

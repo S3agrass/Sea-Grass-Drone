@@ -69,8 +69,6 @@ export default function CameraView() {
     activeDrone,
     linkStatus,
     cameraActive,
-    cameraOn,
-    cameraOff,
     detectActive,
     detections,
     detectOn,
@@ -347,24 +345,11 @@ export default function CameraView() {
       <div className="panel-head">
         <span className="eyebrow">Camera · Arducam</span>
         <div className="camera-head-actions">
-          {/* Camera power toggle — only meaningful when drone is connected */}
-          <button
-            className={`toggle camera-power ${cameraActive ? "on" : ""}`}
-            onClick={cameraActive ? cameraOff : cameraOn}
-            disabled={!connected || noUrl}
-            title={
-              !connected
-                ? "Connect to drone first"
-                : noUrl
-                ? "Configure a camera URL in Fleet settings"
-                : cameraActive
-                ? "Turn camera off"
-                : "Turn camera on"
-            }
-          >
-            <span className="toggle-knob" />
-            {cameraActive ? "On" : "Off"}
-          </button>
+          {/* No manual camera power control — the camera is fully automatic,
+              on whenever the Pixhawk is connected (see shouldCameraBeOn in
+              DroneContext.jsx). The detector depends on it running
+              continuously, so there was never a real use case for turning it
+              off on its own short of the all-stop kill switch. */}
 
           {/* Object detection toggle — needs the camera running to have frames */}
           <button
@@ -375,7 +360,7 @@ export default function CameraView() {
               !connected
                 ? "Connect to drone first"
                 : !cameraActive
-                ? "Turn the camera on first"
+                ? "Waiting for the Pixhawk to connect — camera starts automatically"
                 : detectActive
                 ? "Turn object detection off"
                 : "Turn object detection on"
