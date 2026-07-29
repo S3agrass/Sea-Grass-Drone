@@ -13,6 +13,14 @@ After=network.target
 User=pi
 EnvironmentFile=/home/pi/.seagrass-env
 ExecStartPre=-/bin/sh -c 'lsof -t "${PIXHAWK_PORT:-/dev/ttyACM0}" | xargs -r kill -9'
+# camera_stream.py is a child this service spawns itself, but an ungraceful
+# exit (a killed SSH session running `drone` interactively, `kill -9` on this
+# service, a crash mid-startup) can leave it running as an orphan, reparented
+# to init instead of dying with its parent. libcamera then refuses every new
+# instance with "Pipeline handler in use by another process" — indistinguishable
+# from a real hardware fault until you go looking for a stray process by hand.
+# Same fix as the Pixhawk line above: clear it before every start.
+ExecStartPre=-/bin/sh -c 'pkill -9 -f "python3.*camera_stream\.py" || true'
 ExecStart=/usr/bin/python3 -u /home/pi/Sea-Grass-Drone/server/drone_server.py
 Restart=always
 RestartSec=3

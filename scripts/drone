@@ -107,6 +107,20 @@ if [[ -n "$stale_pids" ]]; then
   sleep 1
 fi
 
+# Same problem, camera side: camera_stream.py run by hand for debugging (or
+# orphaned by an ungracefully-killed previous session) keeps the hardware
+# claimed, and libcamera refuses every subsequent instance with "Pipeline
+# handler in use by another process" — indistinguishable from a real hardware
+# fault until you go hunting for a stray process manually. Clear it, same as
+# the Pixhawk port above.
+stale_cam_pids=$(pgrep -f "python3.*camera_stream\.py" 2>/dev/null || true)
+if [[ -n "$stale_cam_pids" ]]; then
+  echo "Killing stale camera_stream.py process(es): $stale_cam_pids"
+  # shellcheck disable=SC2086
+  kill -9 $stale_cam_pids 2>/dev/null || true
+  sleep 1
+fi
+
 LOG=$(mktemp -t drone-server-log.XXXXXX)
 python3 -u "$REPO_DIR/server/drone_server.py" >"$LOG" 2>&1 &
 SERVER_PID=$!
