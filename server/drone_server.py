@@ -618,20 +618,53 @@ def camera_running() -> bool:
     return camera_proc is not None and camera_proc.poll() is None
 
 
+# camera_stream.py's own errors used to go to DEVNULL — a real crash (camera
+# busy, hardware fault, missing dependency) was indistinguishable from a clean
+# exit, so "turns off right after turning on" had no diagnosable cause short of
+# running the script by hand. It now logs here instead, truncated on every
+# start (this is a live debug tail, not history — nothing here is needed past
+# the next start_camera() call).
+CAMERA_LOG_PATH = "/tmp/seagrass-camera.log"
+
+# How long to wait before checking whether the process is still alive. Long
+# enough for a hardware/import failure to have already killed it (these fail
+# in well under a second), short enough that a normal start isn't perceptibly
+# delayed — start_camera() already runs off the event loop via to_thread.
+_CAMERA_STARTUP_GRACE_S = 1.0
+
+
 def start_camera():
     global camera_proc
     if camera_running():
         return
     try:
+        log = open(CAMERA_LOG_PATH, "w")
         camera_proc = subprocess.Popen(
             ["python3", _CAMERA_SCRIPT],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log,
+            stderr=subprocess.STDOUT,
             env={**os.environ, "DETECT_FRAME": DETECT_FRAME_PATH},
         )
+        log.close()  # the child inherited its own fd; ours is no longer needed
         print(f"Camera stream started (pid {camera_proc.pid})")
     except Exception as exc:  # noqa: BLE001
         print(f"Failed to start camera: {exc}")
+        return
+
+    time.sleep(_CAMERA_STARTUP_GRACE_S)
+    if camera_proc.poll() is not None:
+        tail = _tail_camera_log()
+        print(f"Camera exited immediately (code {camera_proc.returncode}) — "
+              f"{tail or f'see {CAMERA_LOG_PATH}'}")
+
+
+def _tail_camera_log(n_lines: int = 6) -> str:
+    try:
+        with open(CAMERA_LOG_PATH) as fh:
+            lines = fh.readlines()[-n_lines:]
+        return "".join(lines).strip().replace("\n", " | ")
+    except OSError:
+        return ""
 
 
 def stop_camera():
