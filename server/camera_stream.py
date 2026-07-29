@@ -71,7 +71,7 @@ DETECT_TAP_FPS = int(os.environ.get("DETECT_TAP_FPS", "5"))
 # full-resolution JPEG file, which media_server.py's /photo endpoint copies out
 # on request. Set SNAPSHOT_FRAME="" to disable (saves the extra tee branch).
 SNAPSHOT_FRAME = os.environ.get("SNAPSHOT_FRAME", "/tmp/seagrass-camera-snapshot.jpg")
-SNAPSHOT_FPS = float(os.environ.get("SNAPSHOT_FPS", "1"))
+SNAPSHOT_FPS = int(os.environ.get("SNAPSHOT_FPS", "1"))
 
 RTSP_SINK = f"rtsp://{MEDIAMTX_HOST}:{MEDIAMTX_RTSP_PORT}/{STREAM_NAME}"
 
