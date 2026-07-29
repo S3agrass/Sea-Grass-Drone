@@ -481,21 +481,17 @@ export function DroneProvider({ children }) {
     recordingRef.current = recording;
   }, [recording]);
 
-  // On once the Pixhawk is actually connected — not merely once the operator's
-  // WebSocket link is up. There is no manual camera button; requiring pixhawkOk
-  // is the only gate standing between "server process started" and "camera
-  // hardware starts drawing power and CPU," so it should mean something.
-  //
-  // Not gated on whether anyone is looking at it, on purpose: the object
-  // detector's JPEG frame tap lives inside camera_stream.py, so a camera that
-  // only ran while a browser had the Control page open meant nothing was
-  // detected at any moment nobody happened to be watching — the exact moments
-  // an autonomous vehicle most needs to be watched. There is no way to turn it
-  // off short of the all-stop kill switch, which also disarms and shuts the
-  // server down — turning the camera off on its own was never a real use case
-  // once the detector depends on it running continuously.
+  // On whenever there is a drone to be on for — not gated on Pixhawk state
+  // (tried that; constantly-on is the wanted behavior) and not gated on
+  // whether anyone is looking at it either. The latter is deliberate: the
+  // object detector's JPEG frame tap lives inside camera_stream.py, so a
+  // camera that only ran while a browser had the Control page open meant
+  // nothing was detected at any moment nobody happened to be watching — the
+  // exact moments an autonomous vehicle most needs to be watched. There is no
+  // manual camera button; the only way it goes off is the all-stop kill
+  // switch, which also disarms and shuts the server down.
   const shouldCameraBeOn =
-    linkStatus === "connected" && pixhawkOk && !!activeDrone?.camera_url;
+    linkStatus === "connected" && !!activeDrone?.camera_url;
   useEffect(() => {
     if (shouldCameraBeOn) {
       clearTimeout(offTimerRef.current); // cancel any pending shutdown

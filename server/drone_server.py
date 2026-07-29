@@ -2059,14 +2059,7 @@ async def pixhawk_supervisor_loop():
     while True:
         if not pixhawk_ok:
             await loop.run_in_executor(None, connect_pixhawk)
-            if pixhawk_ok:
-                # The camera is gated on the Pixhawk being connected (see the
-                # matching gate in main()) — a dropout-then-reconnect here is
-                # exactly as much "the Pixhawk connected" as the boot-time
-                # case, so it gets the same treatment. start_camera() is
-                # already a no-op if the camera is somehow still running.
-                await asyncio.to_thread(start_camera)
-            else:
+            if not pixhawk_ok:
                 await asyncio.sleep(PIXHAWK_RETRY_S)
         await asyncio.sleep(1.0)
 
@@ -2112,23 +2105,22 @@ async def main():
     asyncio.create_task(mission_recorder_loop())
     # Reconnect the Pixhawk automatically if its USB link drops.
     asyncio.create_task(pixhawk_supervisor_loop())
-    # Camera up with the Pixhawk, not on operator demand and not unconditionally
-    # at process boot. It used to start only when a browser opened the Control
-    # page and stop when that page closed, which the detector cannot live with:
-    # the JPEG frame tap lives inside camera_stream.py, so nothing was being
-    # detected at any moment nobody happened to be watching the feed — the
-    # exact moments an autonomous vehicle most needs to be looking. But
-    # starting it regardless of Pixhawk state meant a camera running (and
-    # drawing power/CPU) with no vehicle to film anything from, and — the
-    # actual bug this replaced — camera_stream.py boots to life even when
-    # connect_pixhawk() above just failed. If it isn't up yet,
-    # pixhawk_supervisor_loop's retry loop starts it the moment it is.
+    # Camera up with the server, not on operator demand. It used to start only
+    # when a browser opened the Control page and stop when that page closed,
+    # which the detector cannot live with: the JPEG frame tap lives inside
+    # camera_stream.py, so nothing was being detected at any moment nobody
+    # happened to be watching the feed — the exact moments an autonomous vehicle
+    # most needs to be looking. Also means the stream is already up when an
+    # operator connects instead of taking a few seconds to appear.
     #
-    # The cost is real and deliberate: the camera draws power and CPU for the
-    # whole time the Pixhawk is connected, viewer or not. start_camera() blocks
-    # on Popen, hence the thread.
-    if pixhawk_ok:
-        await asyncio.to_thread(start_camera)
+    # Tried gating this on pixhawk_ok too (only run with a vehicle to film), but
+    # constantly-on turned out to be the wanted behavior — simpler, and the
+    # camera being up doesn't depend on guessing whether the Pixhawk will still
+    # be plugged in a moment from now.
+    #
+    # The cost is real and deliberate: the camera now draws power and CPU for
+    # the whole session. start_camera() blocks on Popen, hence the thread.
+    await asyncio.to_thread(start_camera)
     print(f"Auto-record: {'ON' if autorecord_enabled else 'off'}")
     print(f"Auto-capture: {'ON' if AUTOCAPTURE else 'off'}"
           + (f" (conf >= {AUTOCAPTURE_MIN_CONF}, every {AUTOCAPTURE_COOLDOWN_S:.0f}s)"
