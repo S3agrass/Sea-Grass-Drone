@@ -978,13 +978,15 @@
 .camera-modal {
   position: fixed;
   inset: 0;
-  /* Above Leaflet's own pane stack (tiles/overlay/shadow/marker/tooltip/popup
-     panes run 200-700 by Leaflet's own CSS, and aren't reliably isolated from
-     the rest of the page unless the map container establishes its own
-     stacking context) — 300 sat inside that range, so the map's markers and
-     popups could render on top of what's supposed to be a fullscreen overlay.
-     Still below the toast stack (1000) so notifications stay visible over it. */
-  z-index: 900;
+  /* Above Leaflet's own stacking, all of it — panes (tiles/overlay/shadow/
+     marker/tooltip/popup) run 200-700, but its top/bottom control container
+     (zoom buttons, the attribution link) is separately set to z-index:1000 by
+     Leaflet's own CSS, and none of it is reliably isolated from the rest of
+     the page unless the map container establishes its own stacking context.
+     900 cleared the panes but not the controls — the attribution link and
+     zoom buttons still bled through a "fullscreen" camera view. Still below
+     the toast stack (1200) so notifications stay visible over it. */
+  z-index: 1100;
   background: rgba(4, 10, 18, 0.92);
   display: flex;
   align-items: center;
@@ -1241,7 +1243,7 @@
   position: fixed;
   top: 72px;
   right: 20px;
-  z-index: 1000;
+  z-index: 1200; /* above .camera-modal (1100), so toasts stay visible fullscreen */
   display: flex;
   flex-direction: column;
   gap: 8px;
