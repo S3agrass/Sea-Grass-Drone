@@ -978,7 +978,13 @@
 .camera-modal {
   position: fixed;
   inset: 0;
-  z-index: 300;
+  /* Above Leaflet's own pane stack (tiles/overlay/shadow/marker/tooltip/popup
+     panes run 200-700 by Leaflet's own CSS, and aren't reliably isolated from
+     the rest of the page unless the map container establishes its own
+     stacking context) — 300 sat inside that range, so the map's markers and
+     popups could render on top of what's supposed to be a fullscreen overlay.
+     Still below the toast stack (1000) so notifications stay visible over it. */
+  z-index: 900;
   background: rgba(4, 10, 18, 0.92);
   display: flex;
   align-items: center;
