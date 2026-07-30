@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   MapContainer,
   TileLayer,
@@ -33,6 +33,24 @@ const waypointIcon = (i) =>
     html: `<div class="marker-waypoint">${i + 1}</div>`,
     iconSize: [22, 22],
     iconAnchor: [11, 11],
+  });
+
+/** "48 m" up close, "1.24 km" once a leg is long enough that metres are noise. */
+function formatDistance(metres) {
+  if (!Number.isFinite(metres)) return "—";
+  if (metres < 1000) return `${Math.round(metres)} m`;
+  return `${(metres / 1000).toFixed(2)} km`;
+}
+
+/** Midpoint label for one leg of the route. */
+const legIcon = (text) =>
+  L.divIcon({
+    className: "",
+    html: `<div class="leg-label mono">${text}</div>`,
+    // Zero-size icon: the label is centred on the point by a CSS transform
+    // instead, because its width depends on the text and a fixed iconAnchor
+    // would put "1.24 km" and "8 m" in visibly different places.
+    iconSize: [0, 0],
   });
 
 function ClickHandler({ onAddWaypoint }) {
@@ -106,6 +124,25 @@ export default function DroneMap({
 
   const center = dronePos || userPos || FALLBACK_CENTER;
 
+  // Route legs: drone -> wp1 -> wp2 ... Each leg carries its own length and the
+  // midpoint to hang the label on. Leaflet's distanceTo does proper spherical
+  // distance, so this stays honest at any latitude — no flat-earth approximation.
+  const legs = useMemo(() => {
+    const points = dronePos ? [dronePos, ...waypoints] : waypoints;
+    const out = [];
+    for (let i = 1; i < points.length; i++) {
+      const a = L.latLng(points[i - 1]);
+      const b = L.latLng(points[i]);
+      out.push({
+        mid: [(a.lat + b.lat) / 2, (a.lng + b.lng) / 2],
+        metres: a.distanceTo(b),
+      });
+    }
+    return out;
+  }, [dronePos, waypoints]);
+
+  const totalMetres = legs.reduce((sum, leg) => sum + leg.metres, 0);
+
   return (
     <div className="map-wrap">
       <MapContainer
@@ -158,6 +195,19 @@ export default function DroneMap({
             pathOptions={{ color: "#ffb454", weight: 2, dashArray: "6 5", opacity: 0.85 }}
           />
         )}
+
+        {/* Leg lengths, pinned to each segment's midpoint. `interactive={false}`
+            matters: a clickable label would swallow the map click underneath it
+            and silently refuse to drop a waypoint there. */}
+        {legs.map((leg, i) => (
+          <Marker
+            key={`leg-${i}-${leg.mid[0]}-${leg.mid[1]}`}
+            position={leg.mid}
+            icon={legIcon(formatDistance(leg.metres))}
+            interactive={false}
+            zIndexOffset={800}
+          />
+        ))}
       </MapContainer>
 
       {/* floating controls */}
@@ -188,7 +238,11 @@ export default function DroneMap({
           </button>
         )}
       </div>
-      <div className="map-hint mono">Click the map to drop a waypoint</div>
+      <div className="map-hint mono">
+        {legs.length > 0
+          ? `Route ${formatDistance(totalMetres)} · ${legs.length} leg${legs.length === 1 ? "" : "s"}`
+          : "Click the map to drop a waypoint"}
+      </div>
     </div>
   );
 }

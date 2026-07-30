@@ -66,7 +66,31 @@ export default function ControlPage() {
       <div className="deck">
         <aside className="deck-left">
           <ConnectionPanel />
-          <div className="inst-cluster">
+        </aside>
+
+        <main className="deck-map">
+          <DroneMap
+            dronePos={dronePos}
+            trail={trail}
+            waypoints={waypoints}
+            onAddWaypoint={addWaypoint}
+            onClearWaypoints={() => setWaypoints([])}
+            heading={telemetry.heading}
+          />
+        </main>
+
+        <aside className="deck-right">
+          <CameraView />
+          <GamepadControl />
+        </aside>
+
+        {/* Instruments run as a full-width strip rather than down the left
+            rail. Ten of them stacked in a 250px column came to ~1210px of
+            content in ~790px of deck, so the rail always scrolled and you
+            could never see all your telemetry at once. Laid out across the
+            deck's width they fit on screen, and they use room the map had
+            going spare. */}
+        <div className="inst-cluster">
             <Compass heading={telemetry.heading} />
             <DepthMeter depth={telemetry.depth} />
             <SonarGauge
@@ -104,24 +128,7 @@ export default function ControlPage() {
               ok={pid.ok}
             />
             <BatteryMeter level={telemetry.battery} />
-          </div>
-        </aside>
-
-        <main className="deck-map">
-          <DroneMap
-            dronePos={dronePos}
-            trail={trail}
-            waypoints={waypoints}
-            onAddWaypoint={addWaypoint}
-            onClearWaypoints={() => setWaypoints([])}
-            heading={telemetry.heading}
-          />
-        </main>
-
-        <aside className="deck-right">
-          <CameraView />
-          <GamepadControl />
-        </aside>
+        </div>
 
         {/* Full-width strip under the three columns — the echogram needs
             horizontal room for time history, which the 250px rail can't give. */}

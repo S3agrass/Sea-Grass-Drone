@@ -86,6 +86,44 @@ const SONAR_QUALITY = {
   none: { label: "NO LOCK", tone: "var(--red)" },
 };
 
+/* Plain-language verdict under an instrument's numbers.
+   The raw figures stay for anyone who wants them — this says what they *mean*,
+   so someone who is not a controls engineer can read the deck at a glance
+   instead of having to know that "err -2.6° steer 0.12" is fine and
+   "roll 24°" is not. */
+function PlainStatus({ tone, children }) {
+  return (
+    <div className="inst-plain" style={tone ? { color: tone } : undefined}>
+      {children}
+    </div>
+  );
+}
+
+/* Is the vehicle sitting level? Below 5° of roll and pitch reads as balanced —
+   small enough that nothing slides off the deck and the camera stays pointed
+   where you think it is. Past 20° it is worth alarming about. */
+function attitudeSummary(roll, pitch) {
+  if (roll == null && pitch == null) return { text: "No attitude data", tone: "var(--faint)" };
+  const r = roll ?? 0;
+  const p = pitch ?? 0;
+  const LEVEL = 5;
+  if (Math.abs(r) < LEVEL && Math.abs(p) < LEVEL) {
+    return { text: "Balanced", tone: "var(--teal)" };
+  }
+  const parts = [];
+  if (Math.abs(r) >= LEVEL) {
+    parts.push(`leaning ${r > 0 ? "right" : "left"} ${Math.round(Math.abs(r))}°`);
+  }
+  if (Math.abs(p) >= LEVEL) {
+    parts.push(`nose ${p > 0 ? "up" : "down"} ${Math.round(Math.abs(p))}°`);
+  }
+  const text = parts.join(", ");
+  return {
+    text: text.charAt(0).toUpperCase() + text.slice(1),
+    tone: Math.max(Math.abs(r), Math.abs(p)) > 20 ? "var(--red)" : "var(--amber)",
+  };
+}
+
 export function SonarGauge({ distance, raw, confidence, quality = "none", ok = false, maxRange = 30 }) {
   const q = SONAR_QUALITY[ok ? quality : "none"] || SONAR_QUALITY.none;
   const locked = ok && distance != null && quality !== "none";
@@ -125,6 +163,23 @@ export function SonarGauge({ distance, raw, confidence, quality = "none", ok = f
             {ok && confidence != null ? `${Math.round(confPct)}%` : "—"}
           </span>
         </div>
+        {/* "conf 86%" tells you nothing unless you already know what counts as
+            good. Say whether the reading can be trusted instead. */}
+        <PlainStatus
+          tone={
+            !ok ? "var(--faint)"
+              : !locked ? "var(--amber)"
+                : confPct >= 70 ? "var(--teal)"
+                  : confPct >= 40 ? "var(--amber)"
+                    : "var(--red)"
+          }
+        >
+          {!ok ? "Sonar off"
+            : !locked ? "No bottom lock"
+              : confPct >= 70 ? "Strong reading"
+                : confPct >= 40 ? "Fair reading"
+                  : "Weak — may be inaccurate"}
+        </PlainStatus>
         {ok && raw != null && (
           <div className="sonar-raw mono">
             raw {fmt(raw, 1)} m — unfiltered echo
@@ -162,6 +217,11 @@ export function AltitudeMeter({ altitude }) {
         <span className="inst-value mono">{fmt(altitude, 2)}</span>
         <span className="inst-unit mono">m</span>
       </div>
+      {/* Says which of the two height numbers on this deck it is. Barometric
+          altitude and Depth look interchangeable side by side and are not:
+          this one comes off the air-pressure sensor and drifts, Depth is the
+          one to fly by. */}
+      <PlainStatus tone="var(--faint)">Air-pressure height, not depth</PlainStatus>
     </div>
   );
 }
@@ -191,6 +251,19 @@ export function ClimbGauge({ climb, max = 2 }) {
           }}
         />
       </div>
+      {/* Under 0.1 m/s is sensor noise, not movement — calling that "rising"
+          would have the label flickering while the vehicle sits still. */}
+      <PlainStatus
+        tone={
+          climb == null ? "var(--faint)"
+            : Math.abs(climb) < 0.1 ? "var(--teal)"
+              : climb > 0 ? "var(--teal)" : "var(--amber)"
+        }
+      >
+        {climb == null ? "No data"
+          : Math.abs(climb) < 0.1 ? "Holding depth"
+            : climb > 0 ? "Rising" : "Sinking"}
+      </PlainStatus>
     </div>
   );
 }
@@ -259,6 +332,9 @@ export function AttitudeIndicator({ roll, pitch, yaw }) {
           </div>
         </div>
       </div>
+      <PlainStatus tone={attitudeSummary(roll, pitch).tone}>
+        {attitudeSummary(roll, pitch).text}
+      </PlainStatus>
     </div>
   );
 }
@@ -331,6 +407,24 @@ export function HeadingHoldGauge({
             }}
           />
         </div>
+        {/* No direction named on purpose: the sign convention for `error` is
+            the server's, and guessing "left" vs "right" wrong here would be
+            worse than not saying. The magnitude alone answers the real
+            question, which is whether it is settled or still working. */}
+        <PlainStatus
+          tone={
+            state === "OFF" ? "var(--faint)"
+              : state === "MANUAL" ? "var(--amber)"
+                : !ok || error == null || Math.abs(error) < 3 ? "var(--teal)"
+                  : "var(--amber)"
+          }
+        >
+          {state === "OFF" ? "Steering by hand"
+            : state === "MANUAL" ? "Paused — you have the stick"
+              : !ok || error == null ? "Holding heading"
+                : Math.abs(error) < 3 ? "On course"
+                  : `Correcting ${Math.round(Math.abs(error))}°`}
+        </PlainStatus>
         <button
           className={`btn${engaged ? "" : " btn-primary"}`}
           style={{ width: "100%", padding: "7px 8px", fontSize: 12 }}
@@ -393,6 +487,18 @@ export function PIDGauge({ setpoint, measurement, error, output, ok = false }) {
             }}
           />
         </div>
+        {/* The important plain fact about this panel is not the error term, it
+            is that nothing acts on it — drone_server.py is explicit that the
+            output is display-only with no vertical control authority wired.
+            Shown as a permanent note so nobody reads the moving bar as the
+            vehicle holding its own depth. */}
+        <PlainStatus
+          tone={!ok ? "var(--faint)" : Math.abs(error ?? 0) < 0.25 ? "var(--teal)" : "var(--amber)"}
+        >
+          {!ok ? "Not running"
+            : Math.abs(error ?? 0) < 0.25 ? "Depth steady" : "Depth drifting"}
+          <span className="inst-note"> · monitor only, does not steer</span>
+        </PlainStatus>
       </div>
     </div>
   );

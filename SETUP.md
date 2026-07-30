@@ -194,6 +194,28 @@ All optional — defaults work for most setups:
 | `CAM_HEIGHT` | `720` | Capture height in pixels |
 | `CAM_FPS` | `30` | Frame rate |
 | `CAM_BITRATE` | `2000` | H.264 bitrate in kbps |
+| `CAM_UNDERWATER` | `1` | Live-view boost (below). **Set 0 for dry testing** |
+| `CAM_GAMMA` | `1.3` | Midtone lift — the main murky-water knob |
+| `CAM_CONTRAST` | `1.15` | Contrast multiplier |
+| `CAM_SATURATION` | `1.2` | Saturation multiplier |
+
+**Underwater live-view boost.** In murky water the subject sits in the bottom
+third of the histogram and the feed reads as grey soup. `CAM_UNDERWATER` splices
+`gamma` + `videobalance` into the operator's H.264 branch to lift the midtones
+and contrast. It is deliberately much weaker than the detector's filter (5e):
+per-channel white balance and dehazing are NumPy-only and far too slow for every
+720p30 frame, so this trims levels rather than correcting colour. If the
+`videofilter` plugin is missing the boost is dropped and the camera still
+starts — the startup banner says which elements actually loaded.
+
+The detection tap is teed off *ahead* of the boost on purpose, so the detector
+still sees raw frames and estimates its own white balance from unskewed colour.
+
+> **Software is the smallest lever here.** Physics beats filtering: a light
+> close to the subject, or simply flying closer, does more for visibility than
+> anything in this section. A red/magenta lens filter (~$15) helps in clear
+> water at 1–3 m on ambient light — but do not combine it with a lamp, they
+> fight each other.
 
 ### 5e. Object detection (YOLOX)
 
@@ -240,6 +262,35 @@ frame. Ctrl-C to stop.
 | `DETECT_STALE_S` | `3.0` | Clear boxes after this long with no fresh frame |
 
 Put any overrides in `~/.seagrass-env`; systemd reads it via `EnvironmentFile`.
+
+**Tuning the underwater filter.** `server/vision/underwater_filter.py` runs four
+stages on every frame before inference — Shades-of-Gray white balance, dark
+channel dehazing, CLAHE, unsharp mask (~6 ms at 320×320, against 100–300 ms of
+inference). The right settings depend on the water, so tune them against a still
+from the actual dive rather than guessing mid-mission:
+
+```bash
+python3 server/vision/underwater_filter.py frame.jpg -o compare.png   # original | enhanced
+UW_DEHAZE_STRENGTH=0.95 python3 server/vision/underwater_filter.py frame.jpg -o compare.png
+```
+
+| Variable | Default | Description |
+|---|---|---|
+| `UW_WB_NORM` | `6` | White-balance Minkowski norm. `1` = classic gray-world, `0` = skip |
+| `UW_DEHAZE` | `1` | Dark-channel dehazing — the step that cuts through murk |
+| `UW_DEHAZE_STRENGTH` | `0.85` | 0–1. Higher is more aggressive; too high crushes distant detail into noise |
+| `UW_DEHAZE_PATCH` | `15` | Dark-channel patch size in pixels |
+| `UW_CLAHE_CLIP` | `2.0` | CLAHE clip limit, `0` = skip |
+| `UW_SHARPEN` | `0.6` | Unsharp amount, `0` = skip |
+
+> Clear open water wants little dehazing; a silty bay wants a lot. If detections
+> get *worse* after enhancement, drop `UW_DEHAZE_STRENGTH` first — over-dehazing
+> invents texture that the detector reads as objects.
+
+**The biggest lever is not this filter.** A model fine-tuned on underwater
+imagery beats any amount of preprocessing on a COCO model, which has never seen
+a murky-water artifact. If you are still on `coco.txt`, go do
+`training/README.md` before spending time here.
 
 **Troubleshooting.** Detection failures now surface as a toast in the UI and a
 `Detector:` line in `journalctl -fu drone-server`. The usual causes:

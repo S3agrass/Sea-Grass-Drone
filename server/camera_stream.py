@@ -33,6 +33,14 @@ Environment variables (all optional):
     CAM_FPS            Capture frame rate         default: 30
     CAM_BITRATE        H.264 bitrate (kbps)       default: 2000
 
+Live-view underwater boost (see build_gst_cmd) — operator's feed only:
+    CAM_UNDERWATER     Enable the boost           default: 1
+                       Set 0 for dry bench testing, where lifting gamma just
+                       washes out an already well-lit picture.
+    CAM_GAMMA          Midtone lift               default: 1.3
+    CAM_CONTRAST       Contrast multiplier        default: 1.15
+    CAM_SATURATION     Saturation multiplier      default: 1.2
+
 Detection frame tap (all optional — only active when DETECT_FRAME is set):
     DETECT_FRAME       JPEG "latest frame" slot the detector reads
                        (e.g. /tmp/seagrass-detect-frame.jpg). Unset = no tap.
@@ -73,6 +81,20 @@ DETECT_TAP_FPS = int(os.environ.get("DETECT_TAP_FPS", "5"))
 SNAPSHOT_FRAME = os.environ.get("SNAPSHOT_FRAME", "/tmp/seagrass-camera-snapshot.jpg")
 SNAPSHOT_FPS = int(os.environ.get("SNAPSHOT_FPS", "1"))
 
+# Live-view underwater boost. Deliberately NOT the same thing as
+# vision/underwater_filter.py: that one does real per-channel white balance and
+# dehazing in NumPy, which no stock GStreamer element can express and which is
+# far too slow to run on every 720p30 frame on the Pi CPU. What is affordable
+# here is a gamma/contrast/saturation trim, and in murky water — where the
+# subject sits in the bottom third of the histogram — lifting the midtones is
+# most of what makes the difference between "grey soup" and "I can see the
+# bottom". The colour cast stays; correcting it properly is a lens filter or a
+# light, not software.
+UNDERWATER = os.environ.get("CAM_UNDERWATER", "1") not in ("0", "false", "False", "")
+GAMMA = float(os.environ.get("CAM_GAMMA", "1.3"))
+CONTRAST = float(os.environ.get("CAM_CONTRAST", "1.15"))
+SATURATION = float(os.environ.get("CAM_SATURATION", "1.2"))
+
 RTSP_SINK = f"rtsp://{MEDIAMTX_HOST}:{MEDIAMTX_RTSP_PORT}/{STREAM_NAME}"
 
 # GStreamer pipeline:
@@ -84,6 +106,41 @@ RTSP_SINK = f"rtsp://{MEDIAMTX_HOST}:{MEDIAMTX_RTSP_PORT}/{STREAM_NAME}"
 # To use the Pi hardware encoder instead (lower CPU, slightly higher latency):
 #   replace "x264enc tune=zerolatency ..." with:
 #   "v4l2h264enc extra-controls=\"controls,repeat_sequence_header=1\""
+def _has_element(name):
+    """Is this GStreamer element installed?
+
+    The boost is a nice-to-have; the camera is not. A pipeline naming an element
+    that is missing fails to launch at all, so an unusual plugin set on some Pi
+    must degrade to an unenhanced picture, never to a dead feed.
+    """
+    try:
+        return subprocess.run(
+            ["gst-inspect-1.0", "--exists", name], timeout=10
+        ).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def build_underwater_filters():
+    """Elements to splice into the operator's branch, in order.
+
+    Only the H.264 branch gets these. The detection tap is teed off ahead of
+    them on purpose: detector.py runs the far stronger NumPy filter itself, and
+    feeding it a picture already gamma-lifted here would skew the colour
+    statistics that filter's white balance is estimating from.
+    """
+    if not UNDERWATER:
+        return []
+
+    filters = []
+    if GAMMA != 1.0 and _has_element("gamma"):
+        filters += ["gamma", f"gamma={GAMMA}", "!"]
+    if (CONTRAST != 1.0 or SATURATION != 1.0) and _has_element("videobalance"):
+        filters += ["videobalance", f"contrast={CONTRAST}",
+                    f"saturation={SATURATION}", "!"]
+    return filters
+
+
 def build_gst_cmd():
     """Build the GStreamer pipeline.
 
@@ -97,8 +154,14 @@ def build_gst_cmd():
         "libcamerasrc", "!",
         f"video/x-raw,format=NV12,width={WIDTH},height={HEIGHT},framerate={FPS}/1", "!",
     ]
+    # The trailing videoconvert re-negotiates whatever format the filters chose
+    # back into something x264enc takes; without it the pipeline can fail to
+    # link on some plugin versions. It costs nothing when there are no filters.
+    boost = build_underwater_filters()
     h264_branch = [
         "videoconvert", "!",
+        *boost,
+        *(["videoconvert", "!"] if boost else []),
         "x264enc", "tune=zerolatency", f"bitrate={BITRATE}", "speed-preset=ultrafast", "!",
         "video/x-h264,profile=baseline", "!",
         "rtspclientsink", f"location={RTSP_SINK}", "protocols=tcp",
@@ -141,6 +204,13 @@ def main():
     if SNAPSHOT_FRAME:
         print(f"Snapshot tap: {SNAPSHOT_FPS}fps  →  {SNAPSHOT_FRAME}")
     gst_cmd = build_gst_cmd()
+    if UNDERWATER:
+        # Say which of the two actually made it in — a missing videofilter
+        # plugin is silently tolerated above, and "the boost looks weaker than
+        # last dive" is otherwise a very hard thing to notice.
+        active = [w for w in ("gamma", "videobalance") if w in gst_cmd]
+        print(f"Underwater live boost: {', '.join(active) if active else 'none available'}"
+              f"  (gamma={GAMMA} contrast={CONTRAST} saturation={SATURATION})")
     try:
         subprocess.run(gst_cmd, check=True)
     except KeyboardInterrupt:
