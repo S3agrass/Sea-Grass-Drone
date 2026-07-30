@@ -77,6 +77,10 @@ def _fetch_turn_credentials():
         headers={
             "Authorization": f"Bearer {TURN_KEY_API_TOKEN}",
             "Content-Type": "application/json",
+            # Cloudflare's edge blocks requests carrying urllib's default
+            # "Python-urllib/x.y" User-Agent as a bot signature (403, even with
+            # valid credentials) — curl sails through with its own default UA.
+            "User-Agent": "seagrass-drone/1.0",
         },
     )
     try:

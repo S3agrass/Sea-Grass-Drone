@@ -24,7 +24,10 @@ import urllib.error
 import urllib.request
 
 MEDIAMTX_YML = "/mediamtx.yml"
-TTL_S = 30 * 24 * 3600  # 30 days — the weekly timer renews well before expiry
+# Cloudflare Realtime TURN caps credential TTL at 24h (confirmed empirically —
+# 7/14/30-day requests all get a 400 "invalid argument"). The daily timer
+# leaves comfortable slack under that ceiling even if a run or two is missed.
+TTL_S = 86400
 
 TURN_KEY_ID = os.environ.get("TURN_KEY_ID", "")
 TURN_KEY_API_TOKEN = os.environ.get("TURN_KEY_API_TOKEN", "")
@@ -38,6 +41,10 @@ def fetch_ice_servers():
         headers={
             "Authorization": f"Bearer {TURN_KEY_API_TOKEN}",
             "Content-Type": "application/json",
+            # Cloudflare's edge blocks requests carrying urllib's default
+            # "Python-urllib/x.y" User-Agent as a bot signature (403, even with
+            # valid credentials) — curl sails through with its own default UA.
+            "User-Agent": "seagrass-drone/1.0",
         },
     )
     with urllib.request.urlopen(req, timeout=10) as resp:
