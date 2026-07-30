@@ -133,8 +133,15 @@ export default function CameraView() {
   }, [wantFeed, type, retryKey]);
 
   // WebRTC WHEP connection — only runs when camera is active and type is webrtc.
+  // Keyed on wantFeed/type/streamUrl/mediaBase/retryKey — deliberately NOT on
+  // feedState. This effect is what SETS feedState (to "live", "error", etc.),
+  // so depending on its own output meant every setFeedState("live") call
+  // re-triggered this same effect, tearing down the connection that had just
+  // succeeded a moment after establishing it — invisible as a bug until ICE
+  // actually started succeeding (see the WebRTC NAT-traversal fix), at which
+  // point "live" badge showing a permanently blank feed was the symptom.
   useEffect(() => {
-    if (feedState !== "connecting" || type !== "webrtc" || !streamUrl) return;
+    if (!wantFeed || type !== "webrtc" || !streamUrl) return;
 
     const controller = new AbortController();
     let pc = null;
@@ -176,7 +183,7 @@ export default function CameraView() {
       pc?.close();
       if (videoRef.current) videoRef.current.srcObject = null;
     };
-  }, [feedState, type, streamUrl, mediaBase]);
+  }, [wantFeed, type, streamUrl, mediaBase, retryKey]);
 
   // Detection overlay — draw normalized bounding boxes onto a canvas sized to
   // the displayed feed. Boxes arrive as fractions (0-1) of the full source
