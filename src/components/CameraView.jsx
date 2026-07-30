@@ -143,7 +143,13 @@ export default function CameraView() {
       .then((conn) => {
         if (!conn) return; // aborted
         pc = conn;
+        // Temporary diagnostics — logs straight to the Console tab so ICE/DTLS
+        // state is visible without digging through about:webrtc. Safe to
+        // remove once the WebRTC NAT-traversal issue is confirmed fixed.
+        console.log("[camera] initial iceConnectionState:", pc.iceConnectionState);
+        console.log("[camera] initial connectionState:", pc.connectionState);
         pc.oniceconnectionstatechange = () => {
+          console.log("[camera] iceConnectionState ->", pc.iceConnectionState);
           if (
             pc.iceConnectionState === "failed" ||
             pc.iceConnectionState === "disconnected"
@@ -151,9 +157,17 @@ export default function CameraView() {
             setFeedState("error");
           }
         };
+        pc.onconnectionstatechange = () => {
+          console.log("[camera] connectionState ->", pc.connectionState);
+        };
+        pc.ontrack = ((orig) => (e) => {
+          console.log("[camera] ontrack fired:", e.track.kind, e.streams[0]);
+          orig?.(e);
+        })(pc.ontrack);
         setFeedState("live");
       })
       .catch((err) => {
+        console.log("[camera] connectWHEP failed:", err);
         if (err.name !== "AbortError") setFeedState("error");
       });
 
