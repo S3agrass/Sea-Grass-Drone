@@ -1,8 +1,7 @@
 import { createContext, useContext, useEffect, useState } from "react";
-import { onAuthStateChanged } from "firebase/auth";
 
-import { auth } from "../firebase/config";
-import { login, register, logout } from "../firebase/auth";
+import { supabase, supabaseConfigured } from "../lib/supabase";
+import { login, register, logout } from "../lib/auth";
 
 const AuthContext = createContext(null);
 
@@ -15,15 +14,32 @@ export function AuthProvider({ children }) {
 	);
 
 	useEffect(() => {
-		if (!auth) {
+		if (!supabaseConfigured) {
 			setLoading(false);
 			return;
 		}
-		const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
-			setUser(firebaseUser);
+
+		// Two steps, both needed. getSession() resolves the session already in
+		// storage, which is what restores the login across a page refresh;
+		// onAuthStateChange does not reliably fire for a session that was
+		// present before it was subscribed, so relying on it alone would bounce
+		// a signed-in user back to the login screen on every reload.
+		let active = true;
+		supabase.auth.getSession().then(({ data }) => {
+			if (!active) return;
+			setUser(data.session?.user ?? null);
 			setLoading(false);
 		});
-		return unsubscribe;
+
+		const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+			setUser(session?.user ?? null);
+			setLoading(false);
+		});
+
+		return () => {
+			active = false;
+			sub.subscription.unsubscribe();
+		};
 	}, []);
 
 	const signIn = login;

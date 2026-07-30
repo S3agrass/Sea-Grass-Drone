@@ -201,30 +201,40 @@ export function DroneProvider({ children }) {
   );
 
   /* ---------- fleet loading ---------- */
-  // Gated on `supabaseConfigured` alone, not on Firebase sign-in state. The
-  // Supabase `drones` table has no per-user RLS (see supabase-schema.sql — this
-  // app has no real Supabase session to scope on), so it is already a single
-  // shared fleet. Gating it on `user` as well meant signing out — or using
-  // "Continue without account" (localMode) after having been signed in — swapped
-  // to a second, separate, empty localStorage fleet: drones registered while
-  // signed in looked like they had vanished, when they were still in Supabase
-  // the whole time and the app had just stopped looking there.
+  // Two stores, and which one is in play depends on how you got in:
+  //   signed in            -> Supabase, scoped to you
+  //   "Continue without
+  //    account" (localMode) -> localStorage, this browser only
+  //
+  // The cloud branch is gated on `user` as well as `supabaseConfigured`. It used
+  // not to be, because back then the drones table had no working per-user RLS —
+  // auth.uid() was NULL under Firebase auth, so the policies were `using (true)`
+  // and the fleet was simply shared by everyone. Now that auth is Supabase's,
+  // auth.uid() is real and RLS returns only rows you own, so querying while
+  // signed out is guaranteed to come back empty and there is no reason to ask.
+  //
+  // Note there is no .eq("owner", ...) below, deliberately. The filtering is the
+  // database's job: a client-side filter would look identical in the UI while
+  // leaving every row readable to anyone who bothered to call the REST endpoint
+  // directly with the anon key, which ships in this bundle.
+  const useCloudFleet = supabaseConfigured && !!user && !localMode;
+
   const refreshFleet = useCallback(async () => {
     setFleetLoading(true);
-    if (supabaseConfigured) {
+    if (useCloudFleet) {
       const { data, error } = await supabase
         .from("drones")
         .select("*")
         .order("created_at", { ascending: true });
       if (!error && data) setFleet(data);
       else setFleet([]);
-    } else if (localMode) {
+    } else if (localMode || !supabaseConfigured) {
       setFleet(loadLocalFleet());
     } else {
       setFleet([]);
     }
     setFleetLoading(false);
-  }, [localMode]);
+  }, [useCloudFleet, localMode]);
 
   useEffect(() => {
     refreshFleet();
@@ -232,7 +242,7 @@ export function DroneProvider({ children }) {
 
   const saveDrone = useCallback(
     async (drone) => {
-      if (supabaseConfigured) {
+      if (useCloudFleet) {
         const row = {
           name: drone.name,
           host: drone.host,
@@ -240,10 +250,13 @@ export function DroneProvider({ children }) {
           media_url: drone.media_url ?? "",
           drone_id: drone.drone_id ?? "",
           token: drone.token ?? "",
-          // Informational only — RLS does not scope by it (see refreshFleet).
-          // Falls back when saving via "Continue without account": the column
-          // is NOT NULL, and there is no Firebase user to read an id from.
-          owner: user?.id ?? "local",
+          // Load-bearing now, not informational: the insert policy checks
+          // `auth.uid() = owner`, so a row claiming anyone else is rejected by
+          // Postgres rather than quietly written. `user.id` is the Supabase
+          // user's uuid — under Firebase this read `user?.id` on an object whose
+          // property is `uid`, so it silently wrote the string "local" for every
+          // account, which is part of why nothing was ever attributable.
+          owner: user.id,
         };
         const { error } =
           drone.id && drone.id !== "new"
@@ -265,12 +278,12 @@ export function DroneProvider({ children }) {
         });
       }
     },
-    [user, refreshFleet, pushToast],
+    [user, useCloudFleet, refreshFleet, pushToast],
   );
 
   const removeDrone = useCallback(
     async (id) => {
-      if (supabaseConfigured) {
+      if (useCloudFleet) {
         const { error } = await supabase.from("drones").delete().eq("id", id);
         if (error) pushToast("error", `Could not remove drone: ${error.message}`);
         await refreshFleet();
@@ -282,7 +295,7 @@ export function DroneProvider({ children }) {
         });
       }
     },
-    [refreshFleet, pushToast],
+    [useCloudFleet, refreshFleet, pushToast],
   );
 
   const activeDrone = useMemo(
