@@ -53,10 +53,12 @@ export function AuthProvider({ children }) {
 		await logout();
 	};
 
-	const enterLocalMode = () => {
-		sessionStorage.setItem("seagrass-local-mode", "1");
-		setLocalMode(true);
-	};
+	// No enterLocalMode any more: "Continue without account" is gone from the
+	// login screen, so nothing may put a session INTO local mode. The flag is
+	// still read above and still honoured by DroneContext, which keeps a tab
+	// that entered local mode before this change working on its local fleet
+	// until it closes — sessionStorage does not outlive the tab, so the state
+	// retires itself rather than stranding anyone mid-session.
 
 	const value = {
 		user,
@@ -66,7 +68,6 @@ export function AuthProvider({ children }) {
 		signIn,
 		signUp,
 		signOut,
-		enterLocalMode,
 	};
 
 	return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

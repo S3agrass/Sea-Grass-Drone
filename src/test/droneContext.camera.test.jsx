@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React, { StrictMode } from 'react';
 import { render, act } from '@testing-library/react';
-import { DroneProvider, useDrone } from '../context/DroneContext';
+import { DroneProvider, useDrone, DEFAULT_CAMERA_URL } from '../context/DroneContext';
 
 // vi.hoisted runs before any imports, so the factory value is available
 // when vi.mock() builds the module mock below.
@@ -116,7 +116,7 @@ describe('DroneContext — camera lifecycle', () => {
     ]));
     const getCtx = renderContext();
     connect();
-    expect(getCtx().activeDrone.camera_url).toBe('http://seagrass.local:8000/stream.mjpg');
+    expect(getCtx().activeDrone.camera_url).toBe(DEFAULT_CAMERA_URL);
     expect(mockLink.cameraOn).toHaveBeenCalled();
   });
 
@@ -185,6 +185,63 @@ describe('DroneContext — camera lifecycle', () => {
     act(() => { emitToLink({ type: 'message', data: { type: 'state', camera: true } }); });
     act(() => { emitToLink({ type: 'status', status: 'disconnected' }); });
     expect(getCtx().cameraActive).toBe(false);
+  });
+
+  it('retries camera_on while the server keeps reporting the camera off', () => {
+    // The Pi's camera_stream.py can exit at startup (busy sensor, missing
+    // dependency). The transition gate fired its one camera_on and considered
+    // the job done, so the panel showed "Camera is off" forever with nothing
+    // retrying. Reconciling against the reported state is what recovers it.
+    renderContext();
+    connect();
+    mockLink.cameraOn.mockClear();
+    act(() => { emitToLink({ type: 'message', data: { type: 'state', camera: false } }); });
+
+    act(() => { vi.advanceTimersByTime(8000); });
+    expect(mockLink.cameraOn).toHaveBeenCalledTimes(1);
+    act(() => { vi.advanceTimersByTime(8000); });
+    expect(mockLink.cameraOn).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops retrying as soon as the server confirms the camera is up', () => {
+    renderContext();
+    connect();
+    act(() => { emitToLink({ type: 'message', data: { type: 'state', camera: false } }); });
+    act(() => { vi.advanceTimersByTime(8000); });
+    mockLink.cameraOn.mockClear();
+
+    act(() => { emitToLink({ type: 'message', data: { type: 'state', camera: true } }); });
+    act(() => { vi.advanceTimersByTime(60000); });
+    expect(mockLink.cameraOn).not.toHaveBeenCalled();
+  });
+
+  it('does not retry into a healthy start still inside its startup grace', () => {
+    // start_camera() sleeps ~1s checking the process survived, then answers with
+    // state. Retrying inside that window would stack starts on the Pi.
+    renderContext();
+    connect();
+    mockLink.cameraOn.mockClear();
+    act(() => { vi.advanceTimersByTime(2000); });
+    expect(mockLink.cameraOn).not.toHaveBeenCalled();
+  });
+
+  it('re-sends camera_on after a reconnect the off debounce swallowed', () => {
+    // Drop and restore faster than CAMERA_OFF_DEBOUNCE_MS: the pending OFF is
+    // cancelled, so appliedRef still reads "on" and the gate stays silent. If
+    // the server restarted in the gap, only reconciliation gets the camera back.
+    renderContext();
+    connect();
+    act(() => { emitToLink({ type: 'message', data: { type: 'state', camera: true } }); });
+    mockLink.cameraOn.mockClear();
+
+    act(() => { emitToLink({ type: 'status', status: 'disconnected' }); });
+    act(() => { vi.advanceTimersByTime(100); }); // under the 400ms off debounce
+    connect();
+    expect(mockLink.cameraOff).not.toHaveBeenCalled();
+    expect(mockLink.cameraOn).not.toHaveBeenCalled(); // gate is gated shut
+
+    act(() => { vi.advanceTimersByTime(8000); });
+    expect(mockLink.cameraOn).toHaveBeenCalledTimes(1);
   });
 
   it('sends camera_on exactly once under real React StrictMode', () => {

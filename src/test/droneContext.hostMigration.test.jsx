@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render } from '@testing-library/react';
-import { DroneProvider, useDrone } from '../context/DroneContext';
+import { DroneProvider, useDrone, DEFAULT_CAMERA_URL, DEFAULT_MEDIA_URL } from '../context/DroneContext';
 
 // A saved fleet entry overrides the code default forever, so correcting the
 // default was not enough on its own: the stale host produced a UI stuck on
@@ -84,7 +84,7 @@ describe('DroneContext — stale host migration', () => {
       },
     ]));
     const getCtx = renderContext();
-    expect(getCtx().fleet[0].camera_url).toBe('http://seagrass.local:8000/stream.mjpg');
+    expect(getCtx().fleet[0].camera_url).toBe(DEFAULT_CAMERA_URL);
   });
 
   it('repairs camera_url even when host is already correct', () => {
@@ -97,7 +97,7 @@ describe('DroneContext — stale host migration', () => {
       },
     ]));
     const getCtx = renderContext();
-    expect(getCtx().fleet[0].camera_url).toBe('http://seagrass.local:8000/stream.mjpg');
+    expect(getCtx().fleet[0].camera_url).toBe(DEFAULT_CAMERA_URL);
     expect(getCtx().fleet[0].host).toBe('ws://seagrass.local:8765');
   });
 
@@ -108,7 +108,7 @@ describe('DroneContext — stale host migration', () => {
     ]));
     renderContext();
     const saved = JSON.parse(localStorage.getItem('seagrass-fleet'));
-    expect(saved[0].camera_url).toBe('http://seagrass.local:8000/stream.mjpg');
+    expect(saved[0].camera_url).toBe(DEFAULT_CAMERA_URL);
   });
 
   it('leaves a correct host untouched', () => {
@@ -135,7 +135,7 @@ describe('DroneContext — stale host migration', () => {
       { id: 'a', name: 'Seagrass One', host: 'ws://seagrass.local:8765', token: 't', camera_url: '' },
     ]));
     const getCtx = renderContext();
-    expect(getCtx().fleet[0].camera_url).toBe('http://seagrass.local:8000/stream.mjpg');
+    expect(getCtx().fleet[0].camera_url).toBe(DEFAULT_CAMERA_URL);
   });
 
   it('fills in a camera_url that is missing entirely', () => {
@@ -143,7 +143,7 @@ describe('DroneContext — stale host migration', () => {
       { id: 'a', name: 'Seagrass One', host: 'ws://seagrass.local:8765', token: 't' },
     ]));
     const getCtx = renderContext();
-    expect(getCtx().fleet[0].camera_url).toBe('http://seagrass.local:8000/stream.mjpg');
+    expect(getCtx().fleet[0].camera_url).toBe(DEFAULT_CAMERA_URL);
   });
 
   it('never overwrites a camera_url the operator set', () => {
@@ -157,12 +157,96 @@ describe('DroneContext — stale host migration', () => {
     expect(getCtx().fleet[0].camera_url).toBe('https://cam.example.com/feed.mjpg');
   });
 
+  // Third instance of the same fault: the :8000 MJPEG default outlived the
+  // server that answered it. camera_stream.py now feeds MediaMTX and :8000 is
+  // media_server.py, which 404s /stream.mjpg — and the .mjpg suffix makes the
+  // app pick the legacy <img> path instead of WHEP, so it never tries the real
+  // endpoint either. Everyone whose blank was filled in back then is pinned to it.
+  it('rewrites the retired :8000 MJPEG default to the WHEP endpoint', () => {
+    localStorage.setItem('seagrass-fleet', JSON.stringify([
+      { id: 'a', name: 'Seagrass One', host: 'ws://seagrass.local:8765', token: 't',
+        camera_url: 'http://seagrass.local:8000/stream.mjpg' },
+    ]));
+    const getCtx = renderContext();
+    expect(getCtx().fleet[0].camera_url).toBe(DEFAULT_CAMERA_URL);
+  });
+
+  it('repairs the retired default behind a dead host, in one pass', () => {
+    // Both migrations have to land on the same field: the host rewrite turns
+    // this into the exact old default, which the default repair then replaces.
+    localStorage.setItem('seagrass-fleet', JSON.stringify([
+      { id: 'a', name: 'Seagrass One', host: 'ws://seagrass-pi.local:8765', token: 't',
+        camera_url: 'http://seagrass-pi.local:8000/stream.mjpg' },
+    ]));
+    const getCtx = renderContext();
+    expect(getCtx().fleet[0].camera_url).toBe(DEFAULT_CAMERA_URL);
+  });
+
+  it('leaves a custom MJPEG stream alone — a legacy rig may still serve it', () => {
+    // Only the EXACT retired default is rewritten. A .mjpg URL anywhere else is
+    // a deliberate setup that might work fine, and breaking it would be worse
+    // than leaving it: MJPEG support is still in CameraView for this reason.
+    localStorage.setItem('seagrass-fleet', JSON.stringify([
+      { id: 'a', name: 'Old rig', host: 'ws://10.0.0.5:8765', token: 't',
+        camera_url: 'http://10.0.0.5:8000/stream.mjpg' },
+    ]));
+    const getCtx = renderContext();
+    expect(getCtx().fleet[0].camera_url).toBe('http://10.0.0.5:8000/stream.mjpg');
+  });
+
+  it('pairs the media URL with the public camera default', () => {
+    // Camera and media are separate hosts, so the mediaBase fallback (camera
+    // host + :8000) invents cam.seagrassrobotics.com:8000 — nothing serves that,
+    // and the Media page 404s while WHEP quietly loses its TURN credentials.
+    localStorage.setItem('seagrass-fleet', JSON.stringify([
+      { id: 'a', name: 'Seagrass One', host: 'ws://seagrass.local:8765', token: 't',
+        camera_url: '' },
+    ]));
+    localStorage.setItem('seagrass-active-drone', 'a');
+    const getCtx = renderContext();
+    expect(getCtx().fleet[0].camera_url).toBe(DEFAULT_CAMERA_URL);
+    expect(getCtx().fleet[0].media_url).toBe(DEFAULT_MEDIA_URL);
+    expect(getCtx().mediaBase).toBe('https://media.seagrassrobotics.com');
+  });
+
+  it('leaves a media_url the operator set alone', () => {
+    localStorage.setItem('seagrass-fleet', JSON.stringify([
+      { id: 'a', name: 'Seagrass One', host: 'ws://seagrass.local:8765', token: 't',
+        camera_url: '', media_url: 'http://10.0.0.5:8000' },
+    ]));
+    const getCtx = renderContext();
+    expect(getCtx().fleet[0].media_url).toBe('http://10.0.0.5:8000');
+  });
+
+  it('does not force the public media host onto a LAN camera URL', () => {
+    // A .local camera URL derives its media host correctly on its own, so
+    // pairing must not fire and push a local rig out to the internet.
+    localStorage.setItem('seagrass-fleet', JSON.stringify([
+      { id: 'a', name: 'LAN rig', host: 'ws://seagrass.local:8765', token: 't',
+        camera_url: 'http://seagrass.local:8889/cam/whep' },
+    ]));
+    localStorage.setItem('seagrass-active-drone', 'a');
+    const getCtx = renderContext();
+    expect(getCtx().fleet[0].media_url).toBeUndefined();
+    expect(getCtx().mediaBase).toBe('http://seagrass.local:8000');
+  });
+
+  it('persists the retired-default repair so it survives a reload', () => {
+    localStorage.setItem('seagrass-fleet', JSON.stringify([
+      { id: 'a', name: 'S', host: 'ws://seagrass.local:8765', token: 't',
+        camera_url: 'http://seagrass.local:8000/stream.mjpg' },
+    ]));
+    renderContext();
+    const saved = JSON.parse(localStorage.getItem('seagrass-fleet'));
+    expect(saved[0].camera_url).toBe(DEFAULT_CAMERA_URL);
+  });
+
   it('persists the filled-in camera_url so it survives a reload', () => {
     localStorage.setItem('seagrass-fleet', JSON.stringify([
       { id: 'a', name: 'Seagrass One', host: 'ws://seagrass.local:8765', token: 't', camera_url: '' },
     ]));
     renderContext();
     const saved = JSON.parse(localStorage.getItem('seagrass-fleet'));
-    expect(saved[0].camera_url).toBe('http://seagrass.local:8000/stream.mjpg');
+    expect(saved[0].camera_url).toBe(DEFAULT_CAMERA_URL);
   });
 });

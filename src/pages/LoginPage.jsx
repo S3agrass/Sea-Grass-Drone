@@ -4,7 +4,7 @@ import { useAuth } from "../context/AuthContext";
 import { supabaseConfigured } from "../lib/supabase";
 
 export default function LoginPage() {
-	const { signIn, signUp, authed, enterLocalMode } = useAuth();
+	const { signIn, signUp, authed } = useAuth();
 	const navigate = useNavigate();
 
 	const [tab, setTab] = useState("signin"); // signin | signup
@@ -161,7 +161,8 @@ export default function LoginPage() {
 
 					{!supabaseConfigured && (
 						<div className="login-notice">
-							Supabase is not configured — use "Continue without account" below to test locally.
+							Supabase is not configured — accounts are unavailable until
+							VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set.
 						</div>
 					)}
 					{error && <div className="login-error">{error}</div>}
@@ -179,16 +180,6 @@ export default function LoginPage() {
 								: "Create account"}
 					</button>
 				</div>
-
-				<button
-					className="btn btn-ghost login-local"
-					onClick={() => {
-						enterLocalMode();
-						navigate("/fleet", { replace: true });
-					}}
-				>
-					Continue without account
-				</button>
 
 				<div className="login-foot mono">SEAGRASS GCS · v2.0</div>
 			</div>

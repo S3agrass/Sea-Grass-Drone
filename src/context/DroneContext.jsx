@@ -19,17 +19,37 @@ const DroneContext = createContext(null);
 // camera promptly. Only the OFF side is debounced; ON is always immediate.
 const CAMERA_OFF_DEBOUNCE_MS = 400;
 
-// The Pi serves MJPEG from a fixed, known place — camera_stream.py binds
-// ('', 8000) and routes /stream.mjpg — so there is no reason for this to have
-// shipped blank. It did, and a blank camera_url is indistinguishable from a
-// deliberate one: no feed renders, and `shouldCameraBeOn` stays false so the
-// camera never even starts. The operator sees a dead panel with nothing
-// anywhere explaining that a field they have never been shown is empty.
-export const DEFAULT_CAMERA_URL = "http://seagrass.local:8000/stream.mjpg";
+// How long to leave a camera_on unanswered before sending it again. Must clear
+// start_camera()'s ~1s startup grace on the Pi plus the state round-trip, or a
+// perfectly healthy start gets a second start piled on top of it while the first
+// is still coming up. Slow on purpose: this is a self-heal, not a poll.
+const CAMERA_RETRY_MS = 8000;
 
-// Port camera_stream.py binds for /media, /photo and /record — the same server
-// that serves /stream.mjpg. Used to derive mediaBase when the camera URL points
-// somewhere else (MediaMTX's WebRTC endpoint on :8889 is the documented setup).
+// Where the fleet actually serves video, so a drone saved without a URL still
+// gets a working one. camera_stream.py pushes H.264 into MediaMTX over RTSP and
+// browsers pull it back by WHEP; this is the public entry point to that, which
+// beats a .local name for a default because it resolves off the LAN too. A blank
+// camera_url is indistinguishable from a deliberate one — no feed renders, and
+// `shouldCameraBeOn` stays false so the camera never even starts.
+export const DEFAULT_CAMERA_URL = "https://cam.seagrassrobotics.com/cam/whep";
+
+// Media (photos, recordings, TURN credentials) is a DIFFERENT host from the
+// camera, so this cannot be left to the mediaBase fallback below: that keeps the
+// camera's host and swaps in :8000, which for the public camera URL invents
+// `https://cam.seagrassrobotics.com:8000` — nothing listens there, so the Media
+// page 404s and WHEP silently drops to STUN-only. The two defaults are a pair;
+// changing one without the other breaks the other half.
+export const DEFAULT_MEDIA_URL = "https://media.seagrassrobotics.com";
+
+// The previous default, from when camera_stream.py was a self-contained
+// Picamera2 MJPEG server on :8000. That script is gone; :8000 is media_server.py
+// now, which has no /stream.mjpg and answers 404 — and `streamType()` reads the
+// .mjpg suffix as legacy MJPEG, so the app never even tries WHEP. Migrated below.
+const LEGACY_CAMERA_URL = "http://seagrass.local:8000/stream.mjpg";
+
+// Port media_server.py binds for /media, /photo, /record and /turn-credentials.
+// Used to derive mediaBase from the camera URL's host, because the camera itself
+// is on MediaMTX's :8889 and the two are separate servers.
 const MEDIA_PORT = "8000";
 
 const LOCAL_DRONE = {
@@ -37,6 +57,7 @@ const LOCAL_DRONE = {
   name: "Seagrass One",
   host: "ws://seagrass.local:8765",
   camera_url: DEFAULT_CAMERA_URL,
+  media_url: DEFAULT_MEDIA_URL,
   token: "",
 };
 
@@ -73,6 +94,25 @@ function migrateDeadHosts(fleet) {
     if (!next.camera_url) {
       changed = true;
       next = { ...next, camera_url: DEFAULT_CAMERA_URL };
+    }
+    // Third instance of the same shape: the :8000 MJPEG default outlived the
+    // server that answered it. Anyone whose blank was filled in while that was
+    // the default is now pinned to a URL that 404s, which reads as a camera
+    // fault rather than a stale address. Only the EXACT old default is rewritten
+    // — a custom .mjpg elsewhere may well be a legacy rig that still works, and
+    // that is the operator's call, not a default to be repaired.
+    if (next.camera_url === LEGACY_CAMERA_URL) {
+      changed = true;
+      next = { ...next, camera_url: DEFAULT_CAMERA_URL };
+    }
+    // Keep the pair together. On the public camera host the mediaBase fallback
+    // (camera host + :8000) points at nothing, so a blank media_url there is not
+    // "derive it" — it's a broken Media page and STUN-only WHEP. Only ever
+    // filled alongside the public camera URL; a LAN camera_url still derives its
+    // media host correctly and is left to do so.
+    if (next.camera_url === DEFAULT_CAMERA_URL && !next.media_url) {
+      changed = true;
+      next = { ...next, media_url: DEFAULT_MEDIA_URL };
     }
     return next;
   });
@@ -584,6 +624,28 @@ export function DroneProvider({ children }) {
     offTimerRef.current = setTimeout(fireOff, CAMERA_OFF_DEBOUNCE_MS);
     return () => clearTimeout(offTimerRef.current);
   }, [shouldCameraBeOn, link]);
+
+  // Reconcile the gate above against what the server actually reports. It sends
+  // camera_on once per off→on flip, which assumes the start succeeded — and it
+  // doesn't always. camera_stream.py can exit at startup (sensor busy, missing
+  // dependency; start_camera logs the reason to /tmp/seagrass-camera.log on the
+  // Pi), and a reconnect quicker than the off debounce cancels the pending OFF,
+  // leaving appliedRef reading "on" against a server that meanwhile restarted
+  // with no camera. In both cases the server kept reporting camera:false, the
+  // gate had nothing left to fire, and the operator sat in front of a permanent
+  // "Camera is off" with nothing retrying short of a page reload.
+  //
+  // So: while the camera should be on and the server keeps saying it isn't,
+  // re-send. The interval resets whenever cameraActive flips, so a start that
+  // works ends the retries on the first state message that confirms it.
+  useEffect(() => {
+    if (!shouldCameraBeOn || cameraActive) return undefined;
+    const id = setInterval(() => {
+      appliedRef.current = "on";
+      link.cameraOn();
+    }, CAMERA_RETRY_MS);
+    return () => clearInterval(id);
+  }, [shouldCameraBeOn, cameraActive, link]);
 
   // Base URL of the Pi's media server (photos/recordings live on the SD card and
   // are fetched/deleted directly from it, not proxied through the control WS).
