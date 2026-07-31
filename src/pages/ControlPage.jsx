@@ -23,6 +23,18 @@ export default function ControlPage() {
     activeDrone, telemetry, sonar, pid,
     headingHold, headingHoldOn, headingHoldOff, armed,
   } = useDrone();
+  // Focus mode: the map takes the whole deck. Every dial in theme.css is at its
+  // floor (--sonar-h 84px, gaps 8px, the left rail already deleted), so the only
+  // space left to give the map is space something else is currently using. This
+  // borrows it a click at a time instead of taking it permanently. Persisted,
+  // like the sonar strip's fold, so it survives a reload mid-survey.
+  const [mapFocus, setMapFocus] = useState(
+    () => localStorage.getItem("seagrass-map-focus") === "1",
+  );
+  useEffect(() => {
+    localStorage.setItem("seagrass-map-focus", mapFocus ? "1" : "0");
+  }, [mapFocus]);
+
   const [waypoints, setWaypoints] = useState([]);
   const [trail, setTrail] = useState([]);
   const lastTrailPoint = useRef(null);
@@ -60,7 +72,7 @@ export default function ControlPage() {
     <div className="app-shell">
       <TopBar />
       <Toasts />
-      <div className="deck">
+      <div className={`deck ${mapFocus ? "map-focus" : ""}`}>
         <main className="deck-map">
           <DroneMap
             dronePos={dronePos}
@@ -69,6 +81,8 @@ export default function ControlPage() {
             onAddWaypoint={addWaypoint}
             onClearWaypoints={() => setWaypoints([])}
             heading={telemetry.heading}
+            focused={mapFocus}
+            onToggleFocus={() => setMapFocus((f) => !f)}
           />
         </main>
 
