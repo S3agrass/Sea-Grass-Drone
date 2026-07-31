@@ -10,27 +10,102 @@ function streamType(url) {
   return "webrtc";
 }
 
+const STUN_ONLY = [{ urls: "stun:stun.l.google.com:19302" }];
+
+// The credentials are good for an hour (Cloudflare Realtime); ten minutes of
+// cache keeps every reconnect after the first one instant while leaving plenty
+// of headroom before expiry.
+const TURN_CACHE_TTL_MS = 10 * 60 * 1000;
+
+// Longest we will ever hold the offer back waiting for candidates. The old code
+// waited for ICE gathering to reach "complete" or five seconds, whichever came
+// first — and with a TURN server in the list, "complete" routinely means
+// seconds, because it is not reached until every relay candidate has been
+// allocated. That wait was most of the camera's startup time.
+const ICE_GATHER_MAX_MS = 1500;
+// Once a reflexive or relay candidate exists we already have something that can
+// traverse NAT; this is just a moment's grace to collect its siblings rather
+// than sending on the strict first one.
+const ICE_GATHER_GRACE_MS = 300;
+
+// Module-level so it survives remounts and the connect/reconnect cycle.
+let turnCache = { base: null, at: 0, iceServers: null, inflight: null };
+
+/** ICE servers for `mediaBase`, cached. Safe to call speculatively — that is
+ *  the point: warming this while the page is still connecting takes the fetch
+ *  off the critical path entirely. */
+export async function getIceServers(mediaBase) {
+  if (!mediaBase) return STUN_ONLY;
+  const fresh =
+    turnCache.base === mediaBase &&
+    turnCache.iceServers &&
+    Date.now() - turnCache.at < TURN_CACHE_TTL_MS;
+  if (fresh) return turnCache.iceServers;
+  // Deliberately not passed the caller's AbortSignal: this result is shared, so
+  // one torn-down negotiation must not cancel the fetch another is waiting on.
+  if (!turnCache.inflight || turnCache.base !== mediaBase) {
+    turnCache = {
+      base: mediaBase,
+      at: 0,
+      iceServers: null,
+      inflight: (async () => {
+        try {
+          const resp = await fetch(`${mediaBase}/turn-credentials`);
+          const data = await resp.json();
+          if (Array.isArray(data.iceServers) && data.iceServers.length) {
+            turnCache.iceServers = data.iceServers;
+            turnCache.at = Date.now();
+            return data.iceServers;
+          }
+        } catch {
+          // network hiccup — fall through to STUN-only for this attempt
+        }
+        return STUN_ONLY;
+      })(),
+    };
+  }
+  return turnCache.inflight;
+}
+
+/** Resolve once the offer has candidates worth sending, rather than once ICE
+ *  gathering is exhaustively finished. */
+function waitForCandidates(pc) {
+  return new Promise((resolve) => {
+    if (pc.iceGatheringState === "complete") return resolve();
+    let grace = null;
+    const finish = () => {
+      clearTimeout(grace);
+      clearTimeout(cap);
+      pc.removeEventListener("icegatheringstatechange", onState);
+      pc.removeEventListener("icecandidate", onCandidate);
+      resolve();
+    };
+    const cap = setTimeout(finish, ICE_GATHER_MAX_MS);
+    const onState = () => {
+      if (pc.iceGatheringState === "complete") finish();
+    };
+    const onCandidate = (e) => {
+      // A null candidate is the end-of-gathering sentinel.
+      if (!e.candidate) return finish();
+      if (!grace && / typ (srflx|relay)/.test(e.candidate.candidate || "")) {
+        grace = setTimeout(finish, ICE_GATHER_GRACE_MS);
+      }
+    };
+    pc.addEventListener("icegatheringstatechange", onState);
+    pc.addEventListener("icecandidate", onCandidate);
+  });
+}
+
 // WHEP (WebRTC-HTTP Egress Protocol) client for MediaMTX.
 // POSTs an SDP offer to the WHEP URL; MediaMTX replies with an SDP answer;
 // the browser then plays the H.264 stream in a <video> element.
 async function connectWHEP(url, videoEl, signal, mediaBase) {
   // TURN credentials come from the Pi's media_server.py, not hardcoded here —
-  // they're short-lived (Cloudflare Realtime, 1h TTL) and its secret never
-  // reaches the browser. Falls back to STUN-only if mediaBase is unknown or
-  // the fetch fails; that still works on networks whose NAT/firewall allows
-  // direct inbound UDP, just not the common home-router case this exists for.
-  let iceServers = [{ urls: "stun:stun.l.google.com:19302" }];
-  if (mediaBase) {
-    try {
-      const resp = await fetch(`${mediaBase}/turn-credentials`, { signal });
-      const data = await resp.json();
-      if (Array.isArray(data.iceServers) && data.iceServers.length) {
-        iceServers = data.iceServers;
-      }
-    } catch {
-      // network hiccup or aborted — proceed with the STUN-only default above
-    }
-  }
+  // they're short-lived and its secret never reaches the browser. Falls back to
+  // STUN-only if mediaBase is unknown or the fetch fails; that still works on
+  // networks whose NAT/firewall allows direct inbound UDP, just not the common
+  // home-router case this exists for.
+  const iceServers = await getIceServers(mediaBase);
   if (signal.aborted) return null;
 
   const pc = new RTCPeerConnection({ iceServers });
@@ -49,21 +124,10 @@ async function connectWHEP(url, videoEl, signal, mediaBase) {
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
 
-  // Wait for ICE gathering to finish (or 5 s timeout) so we send a complete
-  // SDP offer — simpler than trickle-ICE and works fine over Tailscale.
-  await Promise.race([
-    new Promise((resolve) => {
-      if (pc.iceGatheringState === "complete") return resolve();
-      const handler = () => {
-        if (pc.iceGatheringState === "complete") {
-          pc.removeEventListener("icegatheringstatechange", handler);
-          resolve();
-        }
-      };
-      pc.addEventListener("icegatheringstatechange", handler);
-    }),
-    new Promise((resolve) => setTimeout(resolve, 5000)),
-  ]);
+  // Send the offer as soon as it carries a candidate that can actually get
+  // through a NAT, instead of waiting for gathering to be exhaustively
+  // complete. Still a single non-trickle offer — just not a patient one.
+  await waitForCandidates(pc);
 
   if (signal.aborted) { pc.close(); return null; }
 
@@ -86,6 +150,7 @@ export default function CameraView() {
     activeDrone,
     linkStatus,
     cameraActive,
+    cameraKnown,
     mediaBase,
     detectActive,
     detections,
@@ -106,7 +171,17 @@ export default function CameraView() {
   // link connected to ask (standalone viewing straight from the stream URL). This
   // decouples *watching* from the control server: you can see the camera with just
   // a URL, while On/Off, recording and snapshots still require the drone link.
-  const wantFeed = !!streamUrl && (cameraActive || !connected);
+  //
+  // `!cameraKnown` is what stops the feed thrashing on every page load. The
+  // sequence is: disconnected (wantFeed true, negotiation starts) -> link
+  // connects, and for the moment before the server's first `state` arrives
+  // cameraActive is still its default false. Without this clause wantFeed
+  // flipped to false right there, aborting the in-flight WHEP negotiation, and
+  // then back to true when `state` landed — so every load paid for ICE
+  // gathering and SDP exchange twice and threw the first one away. Unknown is
+  // not the same as off.
+  const wantFeed =
+    !!streamUrl && (cameraActive || !connected || !cameraKnown);
 
   // "feed" state: off | connecting | live | error
   const [feedState, setFeedState] = useState("off");
@@ -120,6 +195,14 @@ export default function CameraView() {
   // detections were invisible on the camera path that actually runs.
   const imgRef = useRef(null);
   const canvasRef = useRef(null);
+
+  // Warm the TURN credentials as soon as we know where to ask, without waiting
+  // for a reason to connect. It is one round trip to the Pi that otherwise sits
+  // in front of the peer connection being built at all, and by the time the
+  // camera is wanted the answer is usually already cached.
+  useEffect(() => {
+    if (mediaBase) getIceServers(mediaBase).catch(() => {});
+  }, [mediaBase]);
 
   // When the camera subprocess starts/stops on the Pi, or the stream URL
   // changes, reset the feed state so the WHEP hook re-runs.
