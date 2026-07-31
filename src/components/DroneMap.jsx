@@ -74,6 +74,23 @@ function MapController({ flyTarget, follow, dronePos }) {
   return null;
 }
 
+// Leaflet sizes its viewport once and caches it. Anything that changes the
+// container's box without a window resize — entering focus mode, the sonar
+// strip folding — leaves it drawing tiles for the old size: grey gutters where
+// the map grew, and clicks landing at the wrong coordinates because the pixel
+// origin is stale. An observer is better than invalidating on the focus prop:
+// it also covers the strips collapsing and the window itself.
+function KeepSized() {
+  const map = useMap();
+  useEffect(() => {
+    const target = map.getContainer();
+    const ro = new ResizeObserver(() => map.invalidateSize({ animate: false }));
+    ro.observe(target);
+    return () => ro.disconnect();
+  }, [map]);
+  return null;
+}
+
 export default function DroneMap({
   dronePos,
   trail,
@@ -81,6 +98,8 @@ export default function DroneMap({
   onAddWaypoint,
   onClearWaypoints,
   heading,
+  focused = false,
+  onToggleFocus,
 }) {
   const [userPos, setUserPos] = useState(null);
   const [flyTarget, setFlyTarget] = useState(null);
@@ -151,6 +170,7 @@ export default function DroneMap({
         zoomControl={false}
         style={{ width: "100%", height: "100%" }}
       >
+        <KeepSized />
         {satellite ? (
           <TileLayer
             url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
@@ -212,6 +232,19 @@ export default function DroneMap({
 
       {/* floating controls */}
       <div className="map-controls">
+        {onToggleFocus && (
+          <button
+            className={`map-btn ${focused ? "on" : ""}`}
+            title={
+              focused
+                ? "Bring the camera and instruments back"
+                : "Give the map the whole deck"
+            }
+            onClick={onToggleFocus}
+          >
+            {focused ? "⤡ Exit focus" : "⛶ Focus map"}
+          </button>
+        )}
         <button
           className={`map-btn ${locating ? "busy" : ""}`}
           title="Fly to my location"

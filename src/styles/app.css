@@ -373,6 +373,26 @@
   padding: var(--deck-pad);
 }
 
+/* Focus mode — the map takes the whole deck.
+
+   Every dial in theme.css is already at its floor, so there is no width or
+   height left to hand the map permanently; what is left belongs to the camera,
+   the instruments and the sonar. This borrows all of it for as long as the
+   operator wants it, and gives it straight back.
+
+   Hiding by selector rather than unmounting in ControlPage is deliberate: the
+   camera panel keeps its WHEP connection and the sonar keeps its echogram
+   history, so leaving focus mode shows live panels rather than three that have
+   to reconnect and refill. `display: none` on a flex/grid child costs nothing
+   to keep mounted. Leaflet needs telling its box changed — see KeepSized. */
+.deck.map-focus {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+.deck.map-focus > *:not(.deck-map) {
+  display: none;
+}
+
 /* The goal is that these never actually scroll — the content is laid out to
    fit. `auto` stays rather than `hidden` deliberately: it is a safety net, not
    the plan. If someone runs a short window or a 100% browser zoom we did not
