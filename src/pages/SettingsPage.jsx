@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import TopBar from "../components/TopBar";
+import Toasts from "../components/Toasts";
 import { useAuth } from "../context/AuthContext";
 import { useDrone } from "../context/DroneContext";
 
@@ -21,6 +22,7 @@ export default function SettingsPage() {
   const [form, setForm] = useState(null);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [saveError, setSaveError] = useState("");
 
   useEffect(() => {
     if (activeDrone) setForm({ ...activeDrone });
@@ -28,8 +30,18 @@ export default function SettingsPage() {
 
   async function handleSave() {
     setBusy(true);
-    await saveDrone(form);
+    setSaveError("");
+    const result = await saveDrone(form);
     setBusy(false);
+    // "Saved ✓" used to appear unconditionally, whether or not anything had
+    // been written. A rejected write therefore looked identical to a
+    // successful one right up until the next refresh, when the settings were
+    // simply back to what they had been — which is precisely how "my settings
+    // don't save" presents.
+    if (result && result.ok === false) {
+      setSaveError(result.error || "The settings could not be saved.");
+      return;
+    }
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   }
@@ -37,6 +49,7 @@ export default function SettingsPage() {
   return (
     <div className="app-shell">
       <TopBar />
+      <Toasts />
       <div className="settings">
         <h1 className="settings-title">Settings</h1>
 
@@ -109,6 +122,7 @@ export default function SettingsPage() {
                   onChange={(e) => setForm({ ...form, token: e.target.value })}
                 />
               </label>
+              {saveError && <div className="login-error">{saveError}</div>}
               <div className="settings-actions">
                 <button className="btn btn-primary" onClick={handleSave} disabled={busy}>
                   {busy ? "Saving…" : saved ? "Saved ✓" : "Save changes"}
