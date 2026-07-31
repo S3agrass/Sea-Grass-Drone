@@ -514,6 +514,13 @@
    auto-fit rather than a fixed column count so this stays correct at any rail
    width: narrow gives one column, wider gives two or three, with no breakpoint
    to maintain. */
+/* The two full-width strips carry the shared panel padding, which is 16px top
+   AND bottom on each — 64px of the deck's height spent on inside margins, and
+   row 1 is the only row that can pay for it. The tiles inside have their own
+   padding and their own borders, so the outer ring was double-spacing content
+   that was already spaced. */
+.inst-cluster { padding: var(--s2); }
+
 .inst-cluster {
   grid-column: 1 / -1;   /* full-width strip, like the sonar panel below it */
   display: grid;
@@ -602,17 +609,22 @@
    rather than sentences floating at ten different heights. */
 .inst-plain {
   margin-top: auto;
-  padding-top: 5px;
+  padding-top: 3px;
   font-size: 11px;
   font-weight: 600;
-  line-height: 1.35;
+  line-height: 1.25;
   color: var(--muted);
 }
 .inst-note { font-weight: 400; color: var(--faint); }
 
 .compass { display: flex; flex-direction: column; align-items: center; gap: 6px; }
 /* Scales down inside a narrow tile instead of forcing the column wider. */
-.compass svg { width: 100%; max-width: 104px; height: auto; }
+/* 104px made this the tallest thing in the strip, and because a grid row is as
+   tall as its tallest tile, the compass alone was setting the height of both
+   instrument rows — roughly 60px of deck that every other tile was padding out
+   with empty space. The dial is read by its needle and the degrees underneath
+   it, neither of which needs the extra diameter. */
+.compass svg { width: 100%; max-width: 76px; height: auto; }
 .compass-readout { font-size: var(--t-lg); font-weight: 700; color: var(--teal); }
 
 .depth { display: flex; align-items: center; gap: var(--s3); }
@@ -758,8 +770,11 @@
 
 /* attitude — artificial horizon + roll/pitch/yaw readout */
 .attitude { display: flex; align-items: center; gap: 10px; }
-.attitude-ball { flex: 0 0 84px; }
-.attitude-ball svg { width: 84px; height: 84px; display: block; }
+/* Second-tallest tile content, and the same reasoning as the compass: the ball
+   is read by which way the horizon tilts, not by its size, and the numbers are
+   beside it. */
+.attitude-ball { flex: 0 0 64px; }
+.attitude-ball svg { width: 64px; height: 64px; display: block; }
 .attitude-readout { display: flex; flex-direction: column; gap: 3px; flex: 1; }
 .attitude-row { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
 .attitude-label { font-size: 10px; color: var(--muted); }
@@ -823,9 +838,12 @@
 
 /* ============ visual sonar (echogram + beam cone) ============ */
 .sonar-panel {
-  /* Spans all three deck columns on the second grid row. */
+  /* Full width of the deck, on the last grid row. */
   grid-column: 1 / -1;
-  padding: 10px 14px;
+  /* Vertical padding trimmed with the instrument strip's — see the note there.
+     Horizontal is left roomier: the echogram wants the width, and width costs
+     the map nothing, only height does. */
+  padding: var(--s2) var(--s3);
 }
 .sonar-panel .panel-head { margin-bottom: 8px; gap: 10px; justify-content: flex-start; }
 
