@@ -328,8 +328,23 @@ When registering the drone, set:
 - **Drone link:** `ws://100.64.0.1:8765`
 - **Camera stream URL:** `http://100.64.0.1:8889/cam/whep`
 - **Media server URL:** leave blank (defaults to the camera host on `:8000`)
-- **Drone ID:** matches `DRONE_ID` on the Pi, or blank to show the whole fleet's media
+- **Drone ID:** matches `DRONE_ID` on the Pi — **required**, see below
 - **Access token:** matches `SEAGRASS_TOKEN` on the Pi
+
+> **Drone ID is no longer optional.** It used to be blank-for-everything, which
+> worked only because the media table had no per-user policy — everyone saw
+> every capture. Media is now reached *through* the drone that owns it
+> (`d.owner = auth.uid() and d.drone_id = media.drone_id`), so a blank id
+> matches nothing and the Media page comes up empty.
+>
+> Find the value your uploader is actually writing:
+>
+> ```sql
+> select distinct drone_id, count(*) from public.media group by drone_id;
+> ```
+>
+> With nothing uploaded yet it defaults to the Pi's hostname — see `DRONE_ID`
+> in `server/media_uploader.py`.
 
 The stream will now work from anywhere the operator has Tailscale running.
 
@@ -543,7 +558,12 @@ tradeoff for dropping the "must be on the tailnet" requirement.
 npm run build   # outputs to dist/
 ```
 
-Netlify auto-deploys on push. The app uses hash routing so no redirect rules are needed. Add the `VITE_FIREBASE_*` environment variables in Netlify → Site settings → Environment variables.
+Netlify auto-deploys on push. The app uses hash routing so no redirect rules are needed. Add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in Netlify → Site settings → Environment variables.
+
+> The `VITE_FIREBASE_*` variables that used to go here are dead — sign-in moved
+> to Supabase Auth. **Delete them from Netlify**, or a deploy will look
+> configured while the login page reports Supabase as missing. Firebase Hosting,
+> if you use it, is unaffected.
 
 ---
 
