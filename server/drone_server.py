@@ -690,6 +690,13 @@ def start_camera():
             stdout=log,
             stderr=subprocess.STDOUT,
             env={**os.environ, "DETECT_FRAME": DETECT_FRAME_PATH},
+            # Own session, so stop_camera can signal the whole tree. The script
+            # runs gst-launch-1.0 as a CHILD (camera_stream.py: subprocess.run),
+            # and it is gst-launch that actually holds the sensor. Terminating
+            # only the Python parent orphaned it, and libcamera allows exactly
+            # one owner — so every later start died with "Camera is already in
+            # use" (EBUSY) against a process nothing was tracking any more.
+            start_new_session=True,
         )
         log.close()  # the child inherited its own fd; ours is no longer needed
         print(f"Camera stream started (pid {camera_proc.pid})")
@@ -702,6 +709,13 @@ def start_camera():
         tail = _tail_camera_log()
         print(f"Camera exited immediately (code {camera_proc.returncode}) — "
               f"{tail or f'see {CAMERA_LOG_PATH}'}")
+        # EBUSY is worth calling out by name. libcamera allows one owner, so
+        # this always means another process holds the sensor — and the usual
+        # culprit is a gst-launch orphaned by a server that stopped the camera
+        # before the process-group fix, which no amount of retrying will shift.
+        if any(s in tail for s in ("already in use", "Device or resource busy")):
+            print("  ^ the camera device is held by another process. Find it with:"
+                  " pgrep -af gst-launch  (then kill it; retries cannot free it)")
 
 
 def _tail_camera_log(n_lines: int = 6) -> str:
@@ -713,16 +727,41 @@ def _tail_camera_log(n_lines: int = 6) -> str:
         return ""
 
 
+def _signal_camera_group(sig) -> bool:
+    """Signal the camera's whole process group. False if it is already gone.
+
+    The group is what matters: killing camera_proc alone leaves gst-launch-1.0
+    holding the camera device (see start_new_session above). Falls back to the
+    single process if the group lookup fails, which is better than not signalling
+    at all — a stale gst-launch is exactly what this function exists to prevent.
+    """
+    try:
+        os.killpg(os.getpgid(camera_proc.pid), sig)
+        return True
+    except ProcessLookupError:
+        return False
+    except OSError as exc:  # noqa: BLE001
+        print(f"Could not signal camera group ({exc}) — falling back to the process")
+        try:
+            camera_proc.send_signal(sig)
+            return True
+        except ProcessLookupError:
+            return False
+
+
 def stop_camera():
     global camera_proc
     if not camera_running():
         camera_proc = None
         return
-    camera_proc.terminate()
+    _signal_camera_group(signal.SIGTERM)
     try:
         camera_proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
-        camera_proc.kill()
+        # SIGTERM did not take. Escalate to the group again rather than to
+        # camera_proc.kill(): a Python parent that dies while gst-launch ignores
+        # SIGKILL-less shutdown is precisely how the sensor got stranded before.
+        _signal_camera_group(signal.SIGKILL)
         camera_proc.wait()
     camera_proc = None
     print("Camera stream stopped")
