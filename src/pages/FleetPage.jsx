@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useDrone, DEFAULT_CAMERA_URL } from "../context/DroneContext";
+import Toasts from "../components/Toasts";
 
 // Pre-filled rather than blank: a blank camera_url silently means "no feed and
 // never start the camera", and the Pi's MJPEG address is fixed and known.
@@ -20,6 +21,15 @@ export default function FleetPage() {
   const navigate = useNavigate();
   const [editing, setEditing] = useState(null); // drone object or null
   const [busy, setBusy] = useState(false);
+  // Why the last save didn't take. Shown in the form, which stays open on
+  // failure — closing it threw away everything the operator typed and left the
+  // fleet looking exactly as it does when a save simply hasn't happened yet.
+  const [saveError, setSaveError] = useState("");
+
+  function openEditor(drone) {
+    setSaveError("");
+    setEditing(drone);
+  }
 
   function launch(drone) {
     selectDrone(drone.id);
@@ -27,10 +37,35 @@ export default function FleetPage() {
   }
 
   async function handleSave() {
-    if (!editing.name.trim() || !editing.host.trim()) return;
+    // Was a bare `return`: pressing Save with a blank name did nothing at all
+    // and said nothing about why.
+    if (!editing.name.trim()) {
+      setSaveError("Give the drone a name.");
+      return;
+    }
+    if (!editing.host.trim()) {
+      setSaveError("Enter the drone's WebSocket address.");
+      return;
+    }
+    setSaveError("");
     setBusy(true);
-    await saveDrone(editing);
+    const result = await saveDrone(editing);
     setBusy(false);
+    if (result && result.ok === false) {
+      setSaveError(result.error || "The drone could not be saved.");
+      return;
+    }
+    setEditing(null);
+  }
+
+  async function handleRemove() {
+    setBusy(true);
+    const result = await removeDrone(editing.id);
+    setBusy(false);
+    if (result && result.ok === false) {
+      setSaveError(result.error || "The drone could not be removed.");
+      return;
+    }
     setEditing(null);
   }
 
@@ -47,7 +82,7 @@ export default function FleetPage() {
           </div>
         </div>
         <div className="fleet-head-actions">
-          <button className="btn" onClick={() => setEditing({ ...EMPTY })}>
+          <button className="btn" onClick={() => openEditor({ ...EMPTY })}>
             + Add drone
           </button>
           <button
@@ -69,7 +104,7 @@ export default function FleetPage() {
           <div className="ping-dot off" />
           <p>No drones registered yet. Add your first vehicle to launch the
           control deck.</p>
-          <button className="btn btn-primary" onClick={() => setEditing({ ...EMPTY })}>
+          <button className="btn btn-primary" onClick={() => openEditor({ ...EMPTY })}>
             Register a drone
           </button>
         </div>
@@ -89,7 +124,7 @@ export default function FleetPage() {
                 <button className="btn btn-primary" onClick={() => launch(d)}>
                   Open control deck
                 </button>
-                <button className="btn btn-ghost" onClick={() => setEditing({ ...d })}>
+                <button className="btn btn-ghost" onClick={() => openEditor({ ...d })}>
                   Edit
                 </button>
               </div>
@@ -141,15 +176,10 @@ export default function FleetPage() {
                 onChange={(e) => setEditing({ ...editing, token: e.target.value })}
               />
             </label>
+            {saveError && <div className="login-error">{saveError}</div>}
             <div className="modal-actions">
               {editing.id !== "new" && (
-                <button
-                  className="btn btn-danger"
-                  onClick={async () => {
-                    await removeDrone(editing.id);
-                    setEditing(null);
-                  }}
-                >
+                <button className="btn btn-danger" onClick={handleRemove} disabled={busy}>
                   Remove
                 </button>
               )}
@@ -165,6 +195,12 @@ export default function FleetPage() {
           </div>
         </div>
       )}
+
+      {/* Without this the provider's error toasts — "could not save drone",
+          "could not load fleet" — were raised into a page that renders none of
+          them, which is why a failed registration looked like nothing at all
+          happening. */}
+      <Toasts />
     </div>
   );
 }

@@ -3,10 +3,20 @@
 :root {
   /* palette — ocean survey console */
   --abyss: #06111e;
-  --console: #0c1c2e;
-  --rail: #102540;
-  --line: #1c3a57;
-  --line-soft: #14304c;
+  /* Elevation on a dark theme comes from lighter surfaces, not darker shadows:
+     the page is already near-black, so there is no "darker" left for a shadow
+     to occupy and a drop shadow simply does not render. These three were
+     previously so close together (--console sat 6,11,16 above --abyss) that
+     every panel dissolved into the background. Each step is now a visible lift,
+     which is what actually makes a panel read as raised.
+
+     Text contrast was checked against the new --console, not the old one:
+     --ink 13.1:1 and --muted 4.9:1, both still over the 4.5:1 floor. */
+  --console: #122844;
+  --rail: #1c3a5e;
+  --console-raised: #1a3355;   /* modals, hover — one step above a panel */
+  --line: #2a4d76;
+  --line-soft: #1f4066;
   --ink: #e9f2f8;
   --muted: #7c97ad;
   --faint: #4d6a82;
@@ -23,6 +33,104 @@
 
   --radius: 10px;
   --radius-sm: 6px;
+
+  /* Spacing scale. The stylesheet had grown fifteen different hand-picked gaps
+     (4, 6, 7, 8, 9, 10, 12, 14, 16, 18, 22...), which is why panels never quite
+     looked like they belonged to the same instrument. Everything snaps to these
+     six now, so rhythm is consistent by construction rather than by eye. */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+
+  /* Type scale — same reasoning as spacing. */
+  --t-micro: 10px;   /* eyebrows, axis labels */
+  --t-small: 12px;   /* secondary rows, units */
+  --t-body: 13px;
+  --t-base: 14px;
+  --t-lg: 18px;
+  --t-xl: 22px;      /* primary instrument readouts */
+
+  /* Shadows are the *supporting* cue here, not the mechanism — see the palette
+     note above. They are pushed to near-opaque black because anything lighter
+     is mathematically invisible against --abyss, and kept tight (small blur,
+     small offset) so they read as a contact shadow hugging the panel edge
+     rather than a glow that fogs the background.
+
+     --edge-top is the real workhorse: a 1px white line along the top edge is
+     the classic dark-UI trick for catching light from above, and at 4.5% it
+     was too faint to see, so it is now 12%. */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.7);
+  --shadow-2: 0 3px 10px rgba(0, 0, 0, 0.8), 0 1px 2px rgba(0, 0, 0, 0.6);
+  --shadow-3: 0 12px 36px rgba(0, 0, 0, 0.9), 0 3px 8px rgba(0, 0, 0, 0.7);
+  --edge-top: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+
+  /* Accent glow, for the one or two things that are genuinely live. */
+  --glow-teal: 0 0 0 1px rgba(59, 217, 187, 0.35), 0 0 16px rgba(59, 217, 187, 0.14);
+
+  /* ==================================================================
+     CONTROL DECK LAYOUT — every size worth tuning, in one place.
+
+     These were scattered across five rules in app.css, so "make the map
+     bigger" meant hunting for which of several hardcoded pixel values was
+     the one that mattered. Now it is one block.
+
+     They live on :root on purpose, which means you can drag them live in
+     browser DevTools (inspect <html>, edit the value, the whole deck
+     reflows instantly) and only write the number you settle on back here.
+     No rebuild, no guessing.
+
+     HOW THE DECK IS PUT TOGETHER
+       row 1  link rail | map | camera+gamepad rail   <- the only 1fr row
+       row 2  instrument strip                        <- sized by content
+       row 3  sonar strip                             <- sized by content
+
+     Because row 1 is the sole 1fr, it swallows whatever rows 2 and 3 give
+     up. So every pixel you take off --sonar-h or the instrument tiles goes
+     straight to the map, 1:1. That is the lever for "bigger map".
+     ================================================================== */
+
+  /* Side rail widths. Wider rails = narrower map. The left rail holds only
+     the link panel now, so it can go quite narrow; the right one has to fit
+     the camera and the gamepad keypad.
+
+     The right rail is THE dial for camera size, and not for the reason you
+     might expect. The feed box takes all the vertical slack in the rail, so on
+     any normal window it is much taller than a 4:3 stream needs at this width
+     — the video is width-limited and object-fit: contain letterboxes the rest
+     away as black bars. Making the panel taller therefore does nothing you can
+     see; making the rail wider scales the picture itself, and eats the bars it
+     already had. 340px was showing a ~340x255 image in a box some 500px tall.
+
+     clamp rather than a flat number so a big display actually spends its extra
+     width on the feed, while a 1280px laptop keeps a usable map: 30vw is
+     ~384px at 1280, ~432px at 1440, and pinned at 520px from 1734px up. */
+  --deck-left-w: 260px;
+  --deck-right-w: clamp(360px, 30vw, 520px);
+
+  /* Breathing room between and around the deck's panels. */
+  --deck-gap: 10px;
+  --deck-pad: 10px;
+
+  /* Instrument strip. This is a *minimum tile width*, not a column count:
+     the grid fits as many columns as will hold, so lowering it lets all ten
+     instruments stay on one row at narrower windows, and raising it forces
+     them to wrap onto two rows (which costs the map ~100px). 120px keeps
+     one row down to about 1366px wide. */
+  --inst-min-w: 120px;
+
+  /* Sonar display height — beam cone, POV and echogram all share it so
+     switching view never reflows the panel. The single biggest dial for map
+     size: 130px was the original, 96px is current, 84px is about the floor
+     before the echogram's depth resolution gets cramped. */
+  --sonar-h: 96px;
+
+  /* How short the camera feed may be squeezed before the right rail gives up
+     and scrolls. The feed letterboxes, so this is a legibility floor rather
+     than an aspect ratio. */
+  --camera-min-h: 96px;
 }
 
 * { box-sizing: border-box; }
@@ -67,14 +175,49 @@ input, select {
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   color: var(--ink);
-  padding: 10px 12px;
-  font-size: 14px;
+  padding: 10px var(--s3);
+  font-size: var(--t-base);
   width: 100%;
+  /* Inset shadow reads as a recess, the visual opposite of the raised .btn —
+     so a field looks like something you type into and a button looks like
+     something you press, before you have read either label. */
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 input::placeholder { color: var(--faint); }
-input:focus { border-color: var(--teal-dim); outline: none; }
+input:focus, select:focus {
+  border-color: var(--teal-dim);
+  outline: none;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35),
+              0 0 0 3px rgba(59, 217, 187, 0.12);
+}
+input:disabled, select:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* shared primitives */
+
+/* Tabular figures everywhere a number changes while you watch it.
+   Inter's default proportional digits are different widths — a "1" is narrower
+   than a "8" — so a depth readout ticking 11.8 -> 12.0 physically reflows and
+   the whole row twitches. On a page where ten instruments update several times
+   a second that reads as instability, and it makes a value genuinely harder to
+   read at a glance because the digits never sit still. Tabular figures lock
+   every digit to the same advance width, so only the glyphs change. */
+.mono,
+.inst-value,
+.inst-unit,
+.compass-readout,
+.sonar-conf-value,
+.sonar-raw,
+.conn-row,
+.depth-readout,
+.sonar-readout,
+.speed,
+.alt,
+.climb {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
 .mono { font-family: var(--font-mono); }
 
 .eyebrow {
@@ -90,35 +233,64 @@ input:focus { border-color: var(--teal-dim); outline: none; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 10px 16px;
+  gap: var(--s2);
+  padding: 10px var(--s4);
   border-radius: var(--radius-sm);
-  font-size: 13px;
+  font-size: var(--t-body);
   font-weight: 600;
+  /* Controls get hit mid-manoeuvre, sometimes on a touchscreen in a boat.
+     Locking a comfortable minimum height stops the small variants collapsing
+     into targets you have to aim at. */
+  min-height: 34px;
   border: 1px solid var(--line);
   background: var(--rail);
   color: var(--ink);
-  transition: background 0.15s, border-color 0.15s, transform 0.05s;
+  box-shadow: var(--shadow-1), var(--edge-top);
+  transition: background 0.15s ease, border-color 0.15s ease,
+              box-shadow 0.15s ease, transform 0.06s ease;
 }
-.btn:hover { background: var(--line-soft); border-color: var(--faint); }
-.btn:active { transform: translateY(1px); }
-.btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+.btn:hover:not(:disabled) {
+  background: var(--line-soft);
+  border-color: var(--faint);
+  box-shadow: var(--shadow-2), var(--edge-top);
+}
+/* Press collapses the shadow as well as dropping the button, so it reads as
+   the surface actually going down rather than the label sliding. */
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: none;
+}
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
 
 .btn-primary {
   background: var(--teal);
   border-color: var(--teal);
   color: #04241d;
 }
-.btn-primary:hover { background: #57e6cc; border-color: #57e6cc; }
+.btn-primary:hover:not(:disabled) {
+  background: #57e6cc;
+  border-color: #57e6cc;
+  box-shadow: var(--shadow-2), 0 0 18px rgba(59, 217, 187, 0.22);
+}
 
 .btn-danger {
   background: rgba(255, 92, 108, 0.12);
   border-color: rgba(255, 92, 108, 0.5);
   color: var(--red);
 }
-.btn-danger:hover { background: rgba(255, 92, 108, 0.22); border-color: var(--red); }
+.btn-danger:hover:not(:disabled) {
+  background: rgba(255, 92, 108, 0.22);
+  border-color: var(--red);
+  box-shadow: var(--shadow-2), 0 0 18px rgba(255, 92, 108, 0.18);
+}
 
-.btn-ghost { background: transparent; }
+.btn-ghost { background: transparent; box-shadow: none; }
+.btn-ghost:hover:not(:disabled) { box-shadow: none; }
 
 /* sonar ping — the signature */
 @keyframes sonar {

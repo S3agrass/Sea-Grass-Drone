@@ -178,16 +178,25 @@
 }
 
 .drone-card {
-  background: var(--console);
-  border: 1px solid var(--line-soft);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0) 140px),
+    var(--console);
+  border: 1px solid var(--line);
   border-radius: var(--radius);
-  padding: 22px;
+  padding: var(--s5);
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  transition: border-color 0.15s, transform 0.15s;
+  gap: var(--s4);
+  box-shadow: var(--shadow-2), var(--edge-top);
+  transition: border-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
 }
-.drone-card:hover { border-color: var(--teal-dim); transform: translateY(-2px); }
+/* Lifting the shadow along with the card is what sells the hover — raising an
+   element without deepening its shadow just looks like it slid upward. */
+.drone-card:hover {
+  border-color: var(--teal-dim);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-3), var(--edge-top);
+}
 
 .drone-card-top { display: flex; align-items: center; gap: 10px; }
 .drone-card-name {
@@ -235,14 +244,26 @@
   justify-content: center;
   z-index: 200;
 }
+/* The one place a heavy shadow is right: it has to float clearly above a
+   blurred backdrop, and the extra depth is the cue that the rest of the app is
+   inert until you deal with this. */
 .modal {
   width: min(440px, calc(100vw - 32px));
-  background: var(--console);
+  /* One surface step above a panel — a modal sits on top of them, so matching
+     their fill would flatten it into whatever it is covering. */
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0) 160px),
+    var(--console-raised);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 26px;
   max-height: 90vh;
   overflow-y: auto;
+  box-shadow: var(--shadow-3), var(--edge-top);
+  animation: modal-in 0.16s ease-out;
+}
+@keyframes modal-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.99); }
 }
 .modal .eyebrow { margin-bottom: 18px; display: block; }
 .modal-actions {
@@ -267,9 +288,14 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 0 16px;
+  padding: 0 var(--s4);
   background: var(--console);
   border-bottom: 1px solid var(--line-soft);
+  /* Casts onto the deck below, so the bar reads as fixed chrome the content
+     scrolls under rather than just the first row of the page. */
+  box-shadow: var(--shadow-2);
+  position: relative;
+  z-index: 10;
 }
 
 .topbar-brand { display: flex; align-items: center; gap: 10px; }
@@ -307,67 +333,117 @@
 
 .topbar-nav { display: flex; gap: 4px; }
 .topbar-nav a {
+  position: relative;
   color: var(--muted);
   text-decoration: none;
-  font-size: 13px;
+  font-size: var(--t-body);
   font-weight: 600;
-  padding: 7px 12px;
+  padding: 7px var(--s3);
   border-radius: var(--radius-sm);
+  transition: color 0.15s ease, background 0.15s ease;
 }
 .topbar-nav a:hover { color: var(--ink); background: var(--rail); }
 .topbar-nav a.active { color: var(--teal); background: rgba(59, 217, 187, 0.08); }
+/* An underline anchored to the bar's own bottom edge, so "where am I" survives
+   a glance that never reaches the label colour. Colour alone carrying the
+   active state also fails for anyone who cannot separate teal from grey. */
+.topbar-nav a.active::after {
+  content: "";
+  position: absolute;
+  left: var(--s3);
+  right: var(--s3);
+  bottom: -15px;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--teal);
+}
 
 /* ============ control deck ============ */
 .deck {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 250px 1fr 320px;
-  /* Row 1 takes the slack; row 2 is the sonar strip, sized by its content. */
-  grid-template-rows: minmax(0, 1fr) auto;
-  gap: 10px;
-  padding: 10px;
+  /* All four numbers are dials in theme.css — see "CONTROL DECK LAYOUT". */
+  grid-template-columns: var(--deck-left-w) minmax(0, 1fr) var(--deck-right-w);
+  /* Row 1 takes the slack; rows 2 and 3 are the instrument and sonar strips,
+     both full-width and sized by their content. */
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  gap: var(--deck-gap);
+  padding: var(--deck-pad);
 }
 
+/* The goal is that these never actually scroll — the content is laid out to
+   fit. `auto` stays rather than `hidden` deliberately: it is a safety net, not
+   the plan. If someone runs a short window or a 100% browser zoom we did not
+   anticipate, a scrollbar is a far better failure than silently clipping the
+   battery reading off the bottom of the rail. If you see one, the layout needs
+   fixing — but you can still reach your telemetry in the meantime. */
 .deck-left, .deck-right {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--deck-gap);
   min-height: 0;
   overflow-y: auto;
 }
 
+/* Matches the panels' elevation so the map sits in the same plane as
+   everything around it rather than looking like a hole cut in the deck. */
 .deck-map {
   min-height: 0;
   border-radius: var(--radius);
   overflow: hidden;
   border: 1px solid var(--line-soft);
+  box-shadow: var(--shadow-2);
 }
 
+/* A hairline under the title separates chrome from data, so the eye can skip
+   the header when scanning for a number. Pulled out to the panel's full width
+   with negative margins — a rule that stops short of the edges looks like an
+   accident rather than a division. */
 .panel-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
+  gap: var(--s2);
+  margin: 0 calc(var(--s4) * -1) var(--s3);
+  padding: 0 var(--s4) var(--s2);
+  border-bottom: 1px solid var(--line-soft);
+  min-height: 22px;
 }
 .panel-head-btn {
-  font-size: 10px;
+  font-size: var(--t-micro);
   letter-spacing: 0.1em;
   color: var(--muted);
   border: 1px solid var(--line);
   border-radius: 4px;
-  padding: 4px 8px;
+  padding: var(--s1) var(--s2);
+  white-space: nowrap;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
 }
-.panel-head-btn:hover:not(:disabled) { color: var(--ink); border-color: var(--faint); }
+.panel-head-btn:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--faint);
+  background: var(--rail);
+}
 .panel-head-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-/* connection panel */
+/* Shared panel surface. `.panel` is the name to reach for on anything new; the
+   five specific classes stay listed so existing markup (and the tests that
+   query it) keeps working without a rename sweep.
+
+   The gradient is a two-stop fill barely lighter at the top, which with the
+   --edge-top highlight and a drop shadow makes each panel read as a raised
+   plate lit from above instead of a rectangle of slightly different navy. */
+.panel,
 .conn-panel, .inst-cluster, .camera-panel, .kbd-panel, .sonar-panel {
-  background: var(--console);
-  border: 1px solid var(--line-soft);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0) 100px),
+    var(--console);
+  border: 1px solid var(--line);
   border-radius: var(--radius);
-  padding: 14px;
+  padding: var(--s4);
   flex-shrink: 0;
+  box-shadow: var(--shadow-2), var(--edge-top);
 }
 
 .conn-chip {
@@ -392,13 +468,31 @@
 }
 .conn-detail { font-size: 12px; color: var(--amber); margin-top: 8px; }
 
-.conn-rows { margin: 12px 0; display: flex; flex-direction: column; gap: 8px; }
+.conn-rows {
+  margin: var(--s3) 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* Two columns, but only in the connection panel. These are four short
+   label/value pairs that were each taking a full row at the top of the rail.
+   GamepadControl reuses .conn-rows for its mapping diagnostics, where the
+   values are long ("(non-standard / empty)") and a half-width cell wrapped them
+   to three lines — taller than the single row it was meant to save. */
+.conn-panel .conn-rows {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px var(--s3);
+}
 .conn-row {
   display: flex;
   justify-content: space-between;
-  font-size: 12px;
+  gap: var(--s2);
+  font-size: var(--t-small);
   color: var(--muted);
+  min-width: 0;
 }
+.conn-row > :last-child { color: var(--ink); text-align: right; }
 .conn-row .ok { color: var(--teal); }
 .conn-row .armed { color: var(--amber); }
 .conn-row .dim { color: var(--faint); }
@@ -406,19 +500,89 @@
 .conn-actions { display: flex; gap: 8px; }
 .conn-actions .btn { flex: 1; padding: 9px 8px; font-size: 12px; }
 
-/* instruments */
-.inst-cluster { display: flex; flex-direction: column; gap: 16px; }
-.inst { display: flex; flex-direction: column; gap: 8px; }
+/* instruments — a grid of tiles, not a stack.
+
+   Ten instruments stacked vertically in a 250px rail came to roughly 1030px of
+   content in about 800px of deck, so the rail always scrolled and you could
+   never see all your telemetry at once. Laying them out across the rail's width
+   instead of down its length is what removes the scroll, and it uses horizontal
+   room the deck had going spare — the map was enormous while the rails
+   overflowed.
+
+   auto-fit rather than a fixed column count so this stays correct at any rail
+   width: narrow gives one column, wider gives two or three, with no breakpoint
+   to maintain. */
+.inst-cluster {
+  grid-column: 1 / -1;   /* full-width strip, like the sonar panel below it */
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(var(--inst-min-w), 1fr));
+  gap: var(--s2);
+  align-content: start;
+}
+
+/* Each instrument is now a recessed tile inside the raised panel, which gives
+   every readout its own edge to be read against — a stack of unbounded rows
+   relies on whitespace alone to say where one instrument ends. */
+.inst {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--s2);
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  min-width: 0;
+  /* Lets the readouts inside size themselves against THIS tile rather than the
+     viewport — a tile in a ten-column strip and the same tile in a two-column
+     one need different type sizes to keep their numbers inside the border. */
+  container-type: inline-size;
+}
+
+/* These are horizontal by construction — an attitude ball beside its
+   roll/pitch/yaw column, PID/heading-hold's four-column readout rows, sonar's
+   range and confidence bars. In a single 120px column they wrap into an
+   unreadable mess, so they take two.
+
+   This rule went missing: the deck rebuild landed with it stubbed out as
+   "spans removed for measurement" while the comment describing it survived, so
+   the four-column PID rows have been rendering in a ~120px tile ever since and
+   their numbers spilled straight out the side of the box. The tiles that need
+   the width now say so with .inst-wide rather than being matched on their
+   contents, so it can't be silently lost again. */
+.inst-wide { grid-column: span 2; }
+/* One column is all there is at the narrowest rail widths — spanning 2 of 1
+   would overflow the strip itself. */
+@media (max-width: 420px) {
+  .inst-wide { grid-column: span 1; }
+}
+
+/* Plain-language verdict at the foot of an instrument tile. Sits last and is
+   pushed to the bottom so the sentence lands on the same baseline across the
+   whole strip — the row reads as one line of status you can scan sideways,
+   rather than sentences floating at ten different heights. */
+.inst-plain {
+  margin-top: auto;
+  padding-top: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--muted);
+}
+.inst-note { font-weight: 400; color: var(--faint); }
 
 .compass { display: flex; flex-direction: column; align-items: center; gap: 6px; }
-.compass svg { width: 128px; height: 128px; }
-.compass-readout { font-size: 18px; font-weight: 700; color: var(--teal); }
+/* Scales down inside a narrow tile instead of forcing the column wider. */
+.compass svg { width: 100%; max-width: 104px; height: auto; }
+.compass-readout { font-size: var(--t-lg); font-weight: 700; color: var(--teal); }
 
-.depth { display: flex; align-items: center; gap: 14px; }
+.depth { display: flex; align-items: center; gap: var(--s3); }
 .depth-column {
   position: relative;
   width: 14px;
-  height: 84px;
+  /* Shortened with the move to tiles — the column is a proportional indicator,
+     so it loses nothing by being shorter, and 84px was setting the height of
+     the whole first grid row. */
+  height: 62px;
   background: var(--abyss);
   border: 1px solid var(--line);
   border-radius: 7px;
@@ -441,7 +605,18 @@
 }
 .depth-readout { display: flex; align-items: baseline; gap: 5px; }
 
-.inst-value { font-size: 22px; font-weight: 700; }
+/* Scales with the tile, floored at a size that still fits the widest reading
+   these ever show ("-123.45 m" — baro altitude drifts and goes negative). A
+   flat 22px overflowed the tile the moment the value needed more than five
+   characters, which is what put Altitude's number outside its box. */
+.inst-value {
+  font-size: clamp(15px, 15cqw, 22px);
+  font-weight: 700;
+  min-width: 0;
+  /* Digits keep a constant width, so a changing reading doesn't jitter the
+     layout it sits in. */
+  font-variant-numeric: tabular-nums;
+}
 .inst-unit { font-size: 12px; color: var(--muted); }
 
 .battery { display: flex; align-items: center; gap: 12px; }
@@ -512,7 +687,12 @@
 
 /* climb — signed vertical speed with a center-zero bar */
 .climb { display: flex; align-items: baseline; gap: 5px; }
-.climb .inst-value { font-size: 18px; }
+.climb .inst-value { font-size: clamp(14px, 12cqw, 18px); }
+
+/* The value/unit rows are flex, and a flex item's default min-width is its
+   content — which is exactly how an over-long reading pushes itself out
+   through the side of its tile instead of the type shrinking to fit. */
+.alt, .speed, .climb, .depth-readout, .sonar-readout { min-width: 0; }
 .climb-track {
   position: relative;
   height: 6px;
@@ -543,13 +723,32 @@
 .attitude-readout { display: flex; flex-direction: column; gap: 3px; flex: 1; }
 .attitude-row { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
 .attitude-label { font-size: 10px; color: var(--muted); }
-.attitude-num { font-size: 13px; font-weight: 700; }
+.attitude-num { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
 
 /* alt-hold PID — setpoint/measurement/error/output + center-zero output bar */
-.pid { display: flex; flex-direction: column; gap: 6px; }
-.pid-row { display: grid; grid-template-columns: auto 1fr auto 1fr; gap: 6px; align-items: baseline; }
+.pid { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+/* minmax(0, 1fr), not 1fr: a bare 1fr will not shrink below its content, so a
+   three-decimal error term simply grew the track past the tile's edge and the
+   numbers rendered outside the box. The labels stay auto — they're three
+   characters and must not be the thing that gets squeezed. */
+.pid-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 6px;
+  align-items: baseline;
+}
 .pid-label { font-size: 10px; color: var(--muted); }
-.pid-num { font-size: 14px; font-weight: 700; text-align: right; }
+.pid-num {
+  font-size: clamp(11px, 5cqw, 14px);
+  font-weight: 700;
+  text-align: right;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+  /* Last line of defence: if a value is still too long for the column it is
+     clipped inside the tile rather than drawn over its neighbour. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .pid-track {
   position: relative;
   height: 6px;
@@ -586,7 +785,7 @@
 .sonar-panel {
   /* Spans all three deck columns on the second grid row. */
   grid-column: 1 / -1;
-  padding: 12px 14px;
+  padding: 10px 14px;
 }
 .sonar-panel .panel-head { margin-bottom: 8px; gap: 10px; justify-content: flex-start; }
 
@@ -637,7 +836,7 @@
 
 /* --- beam cone --- */
 .sonar-cone { display: flex; gap: 8px; align-items: center; }
-.sonar-cone svg { width: 150px; height: 130px; flex-shrink: 0; }
+.sonar-cone svg { width: 150px; height: var(--sonar-h); flex-shrink: 0; }
 .sonar-cone-readout { display: flex; flex-direction: column; gap: 3px; flex: 1; }
 .sonar-cone-row { display: flex; justify-content: space-between; gap: 6px; align-items: baseline; }
 .sonar-lbl { font-size: 10px; color: var(--muted); }
@@ -730,7 +929,7 @@
    replaces, so toggling views doesn't reflow the panel. */
 .sonar-pov-canvas {
   width: 150px;
-  height: 130px;
+  height: var(--sonar-h);
   flex-shrink: 0;
   display: block;
   background: var(--abyss);
@@ -742,7 +941,7 @@
 .sonar-echo { position: relative; display: flex; flex-direction: column; min-width: 0; }
 .sonar-echo-canvas {
   width: 100%;
-  height: 130px;
+  height: var(--sonar-h);
   display: block;
   background: var(--abyss);
   border: 1px solid var(--line);
@@ -801,6 +1000,26 @@
 .map-btn.on { border-color: var(--teal-dim); color: var(--teal); }
 .map-btn.busy { color: var(--amber); }
 .map-btn.danger { color: var(--red); border-color: rgba(255, 92, 108, 0.4); }
+
+/* Leg-length label sitting on the midpoint of a route segment. Centred by
+   transform rather than by Leaflet's iconAnchor so the text width does not
+   shift it — see legIcon() in DroneMap. The amber matches the dashed route
+   line it annotates, and the solid backing keeps it legible over satellite
+   imagery, which is far busier than the dark basemap. */
+.leg-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  white-space: nowrap;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--amber);
+  background: rgba(6, 17, 30, 0.9);
+  border: 1px solid rgba(255, 180, 84, 0.45);
+  border-radius: 3px;
+  padding: 2px 5px;
+  pointer-events: none;
+}
 
 .map-hint {
   position: absolute;
@@ -870,6 +1089,44 @@
 }
 
 /* ============ camera ============ */
+
+/* In the deck rail the camera is the one panel that can be any size — a video
+   feed letterboxes happily, where a gauge either fits or is unreadable. So it
+   absorbs whatever vertical slack is left after the fixed-height panels, which
+   is what keeps the right rail from overflowing on a short window. It has to
+   opt out of the shared panel's flex-shrink:0 to do that, and drop the fixed
+   4/3 ratio, which would otherwise pin its height to the rail's width. */
+.deck-right .camera-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  /* Two things must NOT be set here, both of which caused the camera to paint
+     over the gamepad panel below it:
+       - `min-height: 0`, the usual incantation for a shrinkable flex child,
+         removes the content-based floor outright. Flex then squeezed this box
+         to 145px while its header, feed and buttons still needed 224px, and the
+         surplus rendered straight over the neighbour.
+       - `overflow: hidden` looks like the fix and is not. Per flexbox, the
+         automatic minimum size applies only while overflow is visible, so
+         hiding it silently puts the floor back to 0 — same squeeze, now
+         clipping the camera's Retry button instead of overlapping.
+     Leaving both at their defaults lets the panel give up slack down to its
+     content and no further, which is exactly the wanted behaviour. */
+}
+.deck-right .camera-feed {
+  aspect-ratio: auto;
+  flex: 1 1 auto;
+  min-height: var(--camera-min-h);
+}
+/* The feed is letterboxed now rather than exactly 4/3, so the stream has to be
+   told to fit inside it instead of stretching to fill. */
+.deck-right .camera-feed video,
+.deck-right .camera-feed img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
 .camera-feed {
   position: relative;
   aspect-ratio: 4 / 3;
@@ -1148,12 +1405,16 @@
 }
 .kbd-grid.disabled { opacity: 0.45; pointer-events: none; }
 
+/* Compacted so the camera above it keeps a usable height: nine keycaps at the
+   old 10px/8px padding made this panel 403px tall, which left the camera 145px
+   and nothing else in the rail any room. The keys stay well over a comfortable
+   touch target. */
 .kbd-key {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
-  padding: 10px 4px 8px;
+  gap: 1px;
+  padding: 6px 4px 5px;
   background: var(--rail);
   border: 1px solid var(--line);
   border-bottom-width: 3px;
@@ -1169,7 +1430,7 @@
   transform: translateY(2px);
   border-bottom-width: 1px;
 }
-.kbd-key-label { font-size: 15px; font-weight: 700; }
+.kbd-key-label { font-size: 13px; font-weight: 700; }
 .kbd-key-hint { font-size: 9px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
 
 .kbd-row { display: flex; gap: 6px; margin-top: 6px; }

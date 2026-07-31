@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { firebaseConfigured } from "../firebase/config";
+import { supabaseConfigured } from "../lib/supabase";
 
 export default function LoginPage() {
 	const { signIn, signUp, authed, enterLocalMode } = useAuth();
@@ -32,33 +32,50 @@ export default function LoginPage() {
 				await signIn(email, password);
 				navigate("/fleet", { replace: true });
 			} else {
-				await signUp(email, password);
+				const data = await signUp(email, password);
+
+				// With email confirmation enabled, sign-up succeeds but returns
+				// no session — the account is not usable until the link is
+				// clicked. Navigating to /fleet here would land them on an empty
+				// page with no explanation of why they are not really signed in.
+				if (!data?.session) {
+					setNotice(
+						`Account created. Check ${email} for a confirmation link, then sign in.`,
+					);
+					setTab("signin");
+					setPassword("");
+					return;
+				}
 
 				setNotice("Account created successfully.");
 				navigate("/fleet", { replace: true });
 			}
 		} catch (err) {
-			switch (err.code) {
-				case "auth/invalid-credential":
-				case "auth/user-not-found":
-				case "auth/wrong-password":
-					setError("Incorrect email or password.");
-					break;
+			// Supabase reports a machine-readable `code` on newer clients and only
+			// a human string on older ones, so match on both rather than trusting
+			// either. Invalid credentials are deliberately not distinguished into
+			// "no such user" vs "wrong password" — that difference tells an
+			// attacker which emails have accounts.
+			const code = err.code ?? "";
+			const msg = (err.message ?? "").toLowerCase();
 
-				case "auth/email-already-in-use":
-					setError("An account with this email already exists.");
-					break;
-
-				case "auth/weak-password":
-					setError("Password must be at least 6 characters.");
-					break;
-
-				case "auth/invalid-email":
-					setError("Please enter a valid email address.");
-					break;
-
-				default:
-					setError(err.message);
+			if (code === "invalid_credentials" || msg.includes("invalid login")) {
+				setError("Incorrect email or password.");
+			} else if (
+				code === "user_already_exists" ||
+				msg.includes("already registered")
+			) {
+				setError("An account with this email already exists.");
+			} else if (code === "weak_password" || msg.includes("password should be")) {
+				setError("Password must be at least 6 characters.");
+			} else if (code === "validation_failed" || msg.includes("invalid email")) {
+				setError("Please enter a valid email address.");
+			} else if (code === "email_not_confirmed" || msg.includes("not confirmed")) {
+				setError("Confirm your email address first — check your inbox.");
+			} else if (code === "over_request_rate_limit" || msg.includes("rate limit")) {
+				setError("Too many attempts. Wait a minute and try again.");
+			} else {
+				setError(err.message);
 			}
 		} finally {
 			setBusy(false);
@@ -142,9 +159,9 @@ export default function LoginPage() {
 						/>
 					</label>
 
-					{!firebaseConfigured && (
+					{!supabaseConfigured && (
 						<div className="login-notice">
-							Firebase is not configured — use "Continue without account" below to test locally.
+							Supabase is not configured — use "Continue without account" below to test locally.
 						</div>
 					)}
 					{error && <div className="login-error">{error}</div>}
@@ -153,7 +170,7 @@ export default function LoginPage() {
 					<button
 						className="btn btn-primary login-submit"
 						onClick={handleSubmit}
-						disabled={busy || !firebaseConfigured}
+						disabled={busy || !supabaseConfigured}
 					>
 						{busy
 							? "Working…"

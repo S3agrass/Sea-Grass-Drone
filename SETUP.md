@@ -194,6 +194,28 @@ All optional — defaults work for most setups:
 | `CAM_HEIGHT` | `720` | Capture height in pixels |
 | `CAM_FPS` | `30` | Frame rate |
 | `CAM_BITRATE` | `2000` | H.264 bitrate in kbps |
+| `CAM_UNDERWATER` | `1` | Live-view boost (below). **Set 0 for dry testing** |
+| `CAM_GAMMA` | `1.3` | Midtone lift — the main murky-water knob |
+| `CAM_CONTRAST` | `1.15` | Contrast multiplier |
+| `CAM_SATURATION` | `1.2` | Saturation multiplier |
+
+**Underwater live-view boost.** In murky water the subject sits in the bottom
+third of the histogram and the feed reads as grey soup. `CAM_UNDERWATER` splices
+`gamma` + `videobalance` into the operator's H.264 branch to lift the midtones
+and contrast. It is deliberately much weaker than the detector's filter (5e):
+per-channel white balance and dehazing are NumPy-only and far too slow for every
+720p30 frame, so this trims levels rather than correcting colour. If the
+`videofilter` plugin is missing the boost is dropped and the camera still
+starts — the startup banner says which elements actually loaded.
+
+The detection tap is teed off *ahead* of the boost on purpose, so the detector
+still sees raw frames and estimates its own white balance from unskewed colour.
+
+> **Software is the smallest lever here.** Physics beats filtering: a light
+> close to the subject, or simply flying closer, does more for visibility than
+> anything in this section. A red/magenta lens filter (~$15) helps in clear
+> water at 1–3 m on ambient light — but do not combine it with a lamp, they
+> fight each other.
 
 ### 5e. Object detection (YOLOX)
 
@@ -241,6 +263,35 @@ frame. Ctrl-C to stop.
 
 Put any overrides in `~/.seagrass-env`; systemd reads it via `EnvironmentFile`.
 
+**Tuning the underwater filter.** `server/vision/underwater_filter.py` runs four
+stages on every frame before inference — Shades-of-Gray white balance, dark
+channel dehazing, CLAHE, unsharp mask (~6 ms at 320×320, against 100–300 ms of
+inference). The right settings depend on the water, so tune them against a still
+from the actual dive rather than guessing mid-mission:
+
+```bash
+python3 server/vision/underwater_filter.py frame.jpg -o compare.png   # original | enhanced
+UW_DEHAZE_STRENGTH=0.95 python3 server/vision/underwater_filter.py frame.jpg -o compare.png
+```
+
+| Variable | Default | Description |
+|---|---|---|
+| `UW_WB_NORM` | `6` | White-balance Minkowski norm. `1` = classic gray-world, `0` = skip |
+| `UW_DEHAZE` | `1` | Dark-channel dehazing — the step that cuts through murk |
+| `UW_DEHAZE_STRENGTH` | `0.85` | 0–1. Higher is more aggressive; too high crushes distant detail into noise |
+| `UW_DEHAZE_PATCH` | `15` | Dark-channel patch size in pixels |
+| `UW_CLAHE_CLIP` | `2.0` | CLAHE clip limit, `0` = skip |
+| `UW_SHARPEN` | `0.6` | Unsharp amount, `0` = skip |
+
+> Clear open water wants little dehazing; a silty bay wants a lot. If detections
+> get *worse* after enhancement, drop `UW_DEHAZE_STRENGTH` first — over-dehazing
+> invents texture that the detector reads as objects.
+
+**The biggest lever is not this filter.** A model fine-tuned on underwater
+imagery beats any amount of preprocessing on a COCO model, which has never seen
+a murky-water artifact. If you are still on `coco.txt`, go do
+`training/README.md` before spending time here.
+
 **Troubleshooting.** Detection failures now surface as a toast in the UI and a
 `Detector:` line in `journalctl -fu drone-server`. The usual causes:
 
@@ -277,8 +328,23 @@ When registering the drone, set:
 - **Drone link:** `ws://100.64.0.1:8765`
 - **Camera stream URL:** `http://100.64.0.1:8889/cam/whep`
 - **Media server URL:** leave blank (defaults to the camera host on `:8000`)
-- **Drone ID:** matches `DRONE_ID` on the Pi, or blank to show the whole fleet's media
+- **Drone ID:** matches `DRONE_ID` on the Pi — **required**, see below
 - **Access token:** matches `SEAGRASS_TOKEN` on the Pi
+
+> **Drone ID is no longer optional.** It used to be blank-for-everything, which
+> worked only because the media table had no per-user policy — everyone saw
+> every capture. Media is now reached *through* the drone that owns it
+> (`d.owner = auth.uid() and d.drone_id = media.drone_id`), so a blank id
+> matches nothing and the Media page comes up empty.
+>
+> Find the value your uploader is actually writing:
+>
+> ```sql
+> select distinct drone_id, count(*) from public.media group by drone_id;
+> ```
+>
+> With nothing uploaded yet it defaults to the Pi's hostname — see `DRONE_ID`
+> in `server/media_uploader.py`.
 
 The stream will now work from anywhere the operator has Tailscale running.
 
@@ -492,7 +558,12 @@ tradeoff for dropping the "must be on the tailnet" requirement.
 npm run build   # outputs to dist/
 ```
 
-Netlify auto-deploys on push. The app uses hash routing so no redirect rules are needed. Add the `VITE_FIREBASE_*` environment variables in Netlify → Site settings → Environment variables.
+Netlify auto-deploys on push. The app uses hash routing so no redirect rules are needed. Add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in Netlify → Site settings → Environment variables.
+
+> The `VITE_FIREBASE_*` variables that used to go here are dead — sign-in moved
+> to Supabase Auth. **Delete them from Netlify**, or a deploy will look
+> configured while the login page reports Supabase as missing. Firebase Hosting,
+> if you use it, is unaffected.
 
 ---
 
