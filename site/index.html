@@ -187,6 +187,31 @@ section.content{padding:6rem 6vw}
   max-width:480px;margin-top:1.1rem;
 }
 
+/* CONTACT SOCIALS — inline SVG rather than an icon font or a remote image:
+   everything else on this page is self-contained, and one network request for
+   a 24px glyph is not worth the dependency. currentColor lets the mark inherit
+   the link's hover state instead of needing a second rule. */
+.social-row{
+  display:flex;justify-content:center;gap:.75rem;
+  margin-top:1.75rem;
+}
+.social-link{
+  display:inline-flex;align-items:center;gap:.55rem;
+  padding:.6rem 1.1rem;
+  border:1px solid rgba(0,212,187,0.25);
+  border-radius:5px;
+  color:var(--foam);text-decoration:none;
+  font-family:'Space Grotesk',sans-serif;
+  font-weight:600;font-size:.875rem;
+  transition:color .2s,border-color .2s,background .2s;
+}
+.social-link svg{width:18px;height:18px}
+.social-link:hover{
+  color:var(--teal);
+  border-color:rgba(0,212,187,0.5);
+  background:rgba(0,212,187,0.07);
+}
+
 /* FILM — 16:9 box that never lets the iframe overflow a narrow screen.
    aspect-ratio rather than the old padding-top hack; the border and radius
    match .mission-vis so the video reads as one of the page's plates.
@@ -636,6 +661,21 @@ footer{
     <div class="contact-row">
       <input type="email" placeholder="your@email.com"/>
       <a href="mailto:jaylanluong23@gmail.com" class="btn">Reach out</a>
+    </div>
+    <div class="social-row">
+      <a
+        class="social-link"
+        href="https://www.linkedin.com/company/109648206/"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="Seagrass on LinkedIn"
+        title="Seagrass on LinkedIn"
+      >
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M20.45 20.45h-3.56v-5.57c0-1.33-.03-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.35V9h3.41v1.56h.05c.48-.9 1.63-1.85 3.36-1.85 3.6 0 4.27 2.37 4.27 5.45v6.29zM5.34 7.43a2.07 2.07 0 1 1 0-4.14 2.07 2.07 0 0 1 0 4.14zm1.78 13.02H3.56V9h3.56v11.45zM22.22 0H1.77C.8 0 0 .77 0 1.73v20.54C0 23.22.8 24 1.77 24h20.45c.98 0 1.78-.78 1.78-1.73V1.73C24 .77 23.2 0 22.22 0z"/>
+        </svg>
+        <span>LinkedIn</span>
+      </a>
     </div>
   </div>
 </section>
