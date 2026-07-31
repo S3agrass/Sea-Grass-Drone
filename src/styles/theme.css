@@ -94,9 +94,21 @@
 
   /* Side rail widths. Wider rails = narrower map. The left rail holds only
      the link panel now, so it can go quite narrow; the right one has to fit
-     the camera and the gamepad keypad. */
+     the camera and the gamepad keypad.
+
+     The right rail is THE dial for camera size, and not for the reason you
+     might expect. The feed box takes all the vertical slack in the rail, so on
+     any normal window it is much taller than a 4:3 stream needs at this width
+     — the video is width-limited and object-fit: contain letterboxes the rest
+     away as black bars. Making the panel taller therefore does nothing you can
+     see; making the rail wider scales the picture itself, and eats the bars it
+     already had. 340px was showing a ~340x255 image in a box some 500px tall.
+
+     clamp rather than a flat number so a big display actually spends its extra
+     width on the feed, while a 1280px laptop keeps a usable map: 30vw is
+     ~384px at 1280, ~432px at 1440, and pinned at 520px from 1734px up. */
   --deck-left-w: 260px;
-  --deck-right-w: 340px;
+  --deck-right-w: clamp(360px, 30vw, 520px);
 
   /* Breathing room between and around the deck's panels. */
   --deck-gap: 10px;
