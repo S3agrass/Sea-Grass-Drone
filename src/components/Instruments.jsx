@@ -411,6 +411,10 @@ export function HeadingHoldGauge({
             the server's, and guessing "left" vs "right" wrong here would be
             worse than not saying. The magnitude alone answers the real
             question, which is whether it is settled or still working. */}
+        {/* Verdict and control share a line. Separately they were two stacked
+            rows on what was the tallest tile in the strip, and every tile in
+            the row was padded out to match it. */}
+        <div className="hh-foot">
         <PlainStatus
           tone={
             state === "OFF" ? "var(--faint)"
@@ -426,8 +430,7 @@ export function HeadingHoldGauge({
                   : `Correcting ${Math.round(Math.abs(error))}°`}
         </PlainStatus>
         <button
-          className={`btn${engaged ? "" : " btn-primary"}`}
-          style={{ width: "100%", padding: "7px 8px", fontSize: 12 }}
+          className={`btn${engaged ? "" : " btn-primary"} hh-btn`}
           disabled={blocked}
           title={
             blocked
@@ -438,8 +441,9 @@ export function HeadingHoldGauge({
           }
           onClick={engaged ? onRelease : onEngage}
         >
-          {engaged ? "Release" : "Hold this heading"}
+          {engaged ? "Release" : "Hold"}
         </button>
+        </div>
       </div>
     </div>
   );
@@ -499,6 +503,103 @@ export function PIDGauge({ setpoint, measurement, error, output, ok = false }) {
             : Math.abs(error ?? 0) < 0.25 ? "Depth steady" : "Depth drifting"}
           <span className="inst-note"> · monitor only, does not steer</span>
         </PlainStatus>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------------
+   Combined tiles.
+
+   The strip's height is rows x the tallest tile in a row, so ten separate boxes
+   cost more than what is in them: each carries its own eyebrow, padding and
+   border, and every tile in a row is padded out to the height of the tallest.
+   Grouping the readouts that are read together buys that chrome back and hands
+   it to the map and camera, which share the only flexible row on the deck.
+
+   The single-instrument components above are kept and still exported — they are
+   what the tests drive, and they are the right building block if the deck is
+   ever laid out differently.
+   --------------------------------------------------------------------------- */
+
+/** Depth, altitude and climb — the three vertical-motion readouts, which are
+ *  read as one answer to "where am I in the water column and where am I
+ *  going". Three tiles became one, and the 62px depth column became a slim
+ *  horizontal bar, which is most of the height saved. */
+export function VerticalStack({ depth, altitude, climb, maxDepth = 10 }) {
+  const depthPct = depth == null ? 0 : Math.min(100, (depth / maxDepth) * 100);
+  const climbTone =
+    climb == null ? "var(--faint)" : climb >= 0 ? "var(--teal)" : "var(--amber)";
+  return (
+    <div className="inst inst-wide">
+      <div className="eyebrow">Depth · Alt · Climb</div>
+      <div className="inst-lines">
+        <div className="inst-line">
+          <span className="inst-line-label">DEPTH</span>
+          <span className="inst-line-value mono">{fmt(depth)}</span>
+          <span className="inst-line-unit mono">m</span>
+        </div>
+        <div className="inst-linebar">
+          <div className="inst-linebar-fill" style={{ width: `${depthPct}%` }} />
+        </div>
+        <div className="inst-line">
+          <span className="inst-line-label">ALT</span>
+          <span className="inst-line-value mono">{fmt(altitude, 2)}</span>
+          <span className="inst-line-unit mono">m</span>
+        </div>
+        <div className="inst-line">
+          <span className="inst-line-label">CLIMB</span>
+          <span className="inst-line-value mono" style={{ color: climbTone }}>
+            {climb == null
+              ? "—"
+              : `${climb >= 0 ? "▲" : "▼"} ${Math.abs(climb).toFixed(2)}`}
+          </span>
+          <span className="inst-line-unit mono">m/s</span>
+        </div>
+      </div>
+      {/* Kept from AltitudeMeter: these two heights look interchangeable side
+          by side and are not. Alt is air pressure and drifts; depth is the one
+          to fly by. Now that they share a tile, saying so matters more. */}
+      <PlainStatus tone="var(--faint)">ALT is air pressure, not depth</PlainStatus>
+    </div>
+  );
+}
+
+/** Speed and battery. Neither needs a tile to itself: one number and one bar
+ *  each, and they are the two "how is the vehicle doing" figures. */
+export function CruisePower({ speed, battery, maxSpeed = 5 }) {
+  const spdPct = speed == null ? 0 : Math.min(100, (speed / maxSpeed) * 100);
+  const pct = battery == null ? 0 : Math.max(0, Math.min(100, battery));
+  const battTone =
+    battery == null ? "var(--faint)"
+      : pct > 40 ? "var(--teal)"
+        : pct > 20 ? "var(--amber)"
+          : "var(--red)";
+  return (
+    <div className="inst">
+      <div className="eyebrow">Speed · Power</div>
+      <div className="inst-lines">
+        <div className="inst-line">
+          <span className="inst-line-label">SPD</span>
+          <span className="inst-line-value mono">{fmt(speed)}</span>
+          <span className="inst-line-unit mono">kn</span>
+        </div>
+        <div className="inst-linebar">
+          <div className="inst-linebar-fill" style={{ width: `${spdPct}%` }} />
+        </div>
+        <div className="inst-line">
+          <span className="inst-line-label">BATT</span>
+          <span className="inst-line-value mono" style={{ color: battTone }}>
+            {battery == null ? "—" : Math.round(pct)}
+          </span>
+          <span className="inst-line-unit mono">%</span>
+        </div>
+        <div className="inst-linebar">
+          <div
+            className="inst-linebar-fill"
+            style={{ width: `${pct}%`, background: battTone }}
+          />
+        </div>
       </div>
     </div>
   );

@@ -9,12 +9,9 @@ import SonarView from "../components/SonarView";
 import Toasts from "../components/Toasts";
 import {
   Compass,
-  DepthMeter,
   SonarGauge,
-  BatteryMeter,
-  SpeedGauge,
-  AltitudeMeter,
-  ClimbGauge,
+  VerticalStack,
+  CruisePower,
   AttitudeIndicator,
   PIDGauge,
   HeadingHoldGauge,
@@ -96,7 +93,16 @@ export default function ControlPage() {
         <div className="inst-cluster">
             <ConnectionPanel />
             <Compass heading={telemetry.heading} />
-            <DepthMeter depth={telemetry.depth} />
+            {/* Depth, altitude and climb in one tile; speed and battery in
+                another. Ten boxes each carrying an eyebrow, a border and its
+                own padding cost more height than what was in them, and the
+                strip's height comes straight off the map and the camera. */}
+            <VerticalStack
+              depth={telemetry.depth}
+              altitude={telemetry.altitude}
+              climb={telemetry.climb}
+            />
+            <CruisePower speed={telemetry.groundspeed} battery={telemetry.battery} />
             <SonarGauge
               distance={sonar.distance_m}
               raw={sonar.raw_m}
@@ -104,9 +110,6 @@ export default function ControlPage() {
               quality={sonar.quality}
               ok={sonar.ok}
             />
-            <SpeedGauge speed={telemetry.groundspeed} />
-            <AltitudeMeter altitude={telemetry.altitude} />
-            <ClimbGauge climb={telemetry.climb} />
             <AttitudeIndicator
               roll={telemetry.roll}
               pitch={telemetry.pitch}
@@ -131,7 +134,6 @@ export default function ControlPage() {
               output={pid.output}
               ok={pid.ok}
             />
-            <BatteryMeter level={telemetry.battery} />
         </div>
 
         {/* Full-width strip under the three columns — the echogram needs

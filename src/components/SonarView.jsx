@@ -124,6 +124,15 @@ export default function SonarView() {
   });
   const [usePitch, setUsePitch] = useState(true);
   const [paused, setPaused] = useState(false);
+  // Collapsed sonar gives its whole height to the map and the camera, which
+  // share the deck's only flexible row. Remembered, because whichever way an
+  // operator wants this strip they want it every session, not once.
+  const [collapsed, setCollapsed] = useState(
+    () => localStorage.getItem("seagrass-sonar-collapsed") === "1",
+  );
+  useEffect(() => {
+    localStorage.setItem("seagrass-sonar-collapsed", collapsed ? "1" : "0");
+  }, [collapsed]);
   // Clustered objects mirrored out of the draw loop for the text list. Only the
   // map view needs it, and only at MAP_CLUSTER_MS, so the 5 Hz point stream
   // still never reaches React.
@@ -680,8 +689,16 @@ export default function SonarView() {
   const linkOk = demoMode || sonar.ok;
 
   return (
-    <section className="sonar-panel">
+    <section className={`sonar-panel${collapsed ? " collapsed" : ""}`}>
       <div className="panel-head">
+        <button
+          className="strip-collapse"
+          onClick={() => setCollapsed((c) => !c)}
+          aria-expanded={!collapsed}
+          title={collapsed ? "Show the sonar display" : "Hide the sonar display and give the space to the map"}
+        >
+          {collapsed ? "▸" : "▾"}
+        </button>
         <span className="eyebrow">Sonar</span>
         <span
           className="sonar-quality mono"
@@ -734,7 +751,7 @@ export default function SonarView() {
         </div>
       </div>
 
-      <div className="sonar-body">
+      <div className="sonar-body" hidden={collapsed}>
         {/* ---- where the echo is, right now: plan view or POV tunnel ---- */}
         <div className={`sonar-cone${view === "map" ? " map" : ""}`}>
           {view === "map" ? (

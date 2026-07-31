@@ -603,6 +603,53 @@
   .inst-cluster .conn-panel { grid-column: span 1; }
 }
 
+/* Compact label / value / unit rows, for tiles holding several readouts at
+   once. A row here is ~16px against ~90px for the same figure as a tile of its
+   own with an eyebrow, a border, padding and a bar — which is the whole reason
+   the combined tiles are shorter than the ones they replaced, rather than just
+   fewer. */
+.inst-lines { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.inst-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  line-height: 1.2;
+}
+.inst-line-label {
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  color: var(--faint);
+  flex: 0 0 auto;
+}
+.inst-line-value {
+  font-size: clamp(12px, 11cqw, 16px);
+  font-weight: 700;
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+}
+.inst-line-unit { font-size: 9px; color: var(--muted); flex: 0 0 auto; }
+/* Slim replacement for the 62px depth column and the standalone speed bar. */
+.inst-linebar {
+  height: 3px;
+  background: var(--abyss);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.inst-linebar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--teal-dim), var(--teal));
+  transition: width 0.4s ease;
+}
+
+/* Heading hold's verdict and its button, on one line rather than two stacked
+   rows. It was the tallest tile in the strip and set the height of its whole
+   row. */
+.hh-foot { display: flex; align-items: center; gap: var(--s2); margin-top: auto; }
+.hh-foot .inst-plain { margin-top: 0; padding-top: 0; flex: 1; min-width: 0; }
+.hh-btn { padding: 5px 10px; font-size: 11px; flex: 0 0 auto; }
+
 /* Plain-language verdict at the foot of an instrument tile. Sits last and is
    pushed to the bottom so the sentence lands on the same baseline across the
    whole strip — the row reads as one line of status you can scan sideways,
@@ -624,7 +671,7 @@
    instrument rows — roughly 60px of deck that every other tile was padding out
    with empty space. The dial is read by its needle and the degrees underneath
    it, neither of which needs the extra diameter. */
-.compass svg { width: 100%; max-width: 76px; height: auto; }
+.compass svg { width: 100%; max-width: 64px; height: auto; }
 .compass-readout { font-size: var(--t-lg); font-weight: 700; color: var(--teal); }
 
 .depth { display: flex; align-items: center; gap: var(--s3); }
@@ -845,6 +892,19 @@
      the map nothing, only height does. */
   padding: var(--s2) var(--s3);
 }
+/* Chevron that folds the sonar display away. Collapsed, the strip is just its
+   header, and every pixel it gives up goes to row 1 — the map and the camera —
+   because that is the deck's only 1fr row. */
+.strip-collapse {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 2px 6px;
+  border-radius: 4px;
+  line-height: 1;
+}
+.strip-collapse:hover { color: var(--ink); background: var(--rail); }
+.sonar-panel.collapsed .panel-head { margin-bottom: 0; }
+
 .sonar-panel .panel-head { margin-bottom: 8px; gap: 10px; justify-content: flex-start; }
 
 .sonar-controls {

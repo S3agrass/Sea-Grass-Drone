@@ -10,7 +10,10 @@ describe('HeadingHoldGauge', () => {
   it('renders with everything null and does not throw', () => {
     render(<HeadingHoldGauge />);
     expect(screen.getByText('OFF')).toBeTruthy();
-    expect(screen.getByRole('button').textContent).toBe('Hold this heading');
+    // Shortened from "Hold this heading" when the button moved onto the same
+    // line as the verdict to get height back for the map — the full sentence is
+    // still on its title attribute.
+    expect(screen.getByRole('button').textContent).toBe('Hold');
   });
 
   it('shows HOLD when engaged and steering', () => {
