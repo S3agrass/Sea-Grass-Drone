@@ -131,7 +131,7 @@ export function SonarGauge({ distance, raw, confidence, quality = "none", ok = f
   const confPct = confidence == null ? 0 : Math.max(0, Math.min(100, confidence));
 
   return (
-    <div className="inst">
+    <div className="inst inst-wide">
       <div className="eyebrow">
         Sonar
         <span
@@ -279,7 +279,7 @@ export function AttitudeIndicator({ roll, pitch, yaw }) {
   const pitchOffset = Math.max(-40, Math.min(40, p * 2));
   const live = roll != null || pitch != null;
   return (
-    <div className="inst">
+    <div className="inst inst-wide">
       <div className="eyebrow">Attitude</div>
       <div className="attitude">
         <div className="attitude-ball">
@@ -374,7 +374,7 @@ export function HeadingHoldGauge({
   const blocked = !engaged && !armed;
 
   return (
-    <div className="inst">
+    <div className="inst inst-wide">
       <div className="eyebrow">
         Heading Hold
         <span className="pid-tag mono" style={{ color: tone, borderColor: tone }}>
@@ -451,7 +451,7 @@ export function PIDGauge({ setpoint, measurement, error, output, ok = false }) {
   const outPct = output == null ? 0 : Math.min(100, Math.abs(output) * 100);
   const outTone = !ok ? "var(--faint)" : output >= 0 ? "var(--teal)" : "var(--amber)";
   return (
-    <div className="inst">
+    <div className="inst inst-wide">
       <div className="eyebrow">
         Alt-Hold PID
         <span
