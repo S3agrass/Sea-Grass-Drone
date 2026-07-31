@@ -62,6 +62,10 @@ export function AuthProvider({ children }) {
 		user,
 		loading,
 		localMode,
+		// SettingsPage reads this off useAuth() and always got undefined, so its
+		// Account section told anyone in local mode to "configure Supabase in
+		// .env" however configured Supabase actually was.
+		supabaseConfigured,
 		authed: !!user || localMode,
 		signIn,
 		signUp,
