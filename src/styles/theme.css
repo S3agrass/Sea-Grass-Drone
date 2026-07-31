@@ -107,12 +107,19 @@
      clamp rather than a flat number so a big display actually spends its extra
      width on the feed, while a 1280px laptop keeps a usable map: 30vw is
      ~384px at 1280, ~432px at 1440, and pinned at 520px from 1734px up. */
-  --deck-left-w: 260px;
+  /* 260px when the left rail still held instruments; it now holds the link
+     panel alone, whose widest content is a wrapping URL and two half-width
+     status columns. 220px still fits those without squeezing "PIXHAWK / OK"
+     into a wrap, and hands the difference straight to the map. */
+  --deck-left-w: 220px;
   --deck-right-w: clamp(360px, 30vw, 520px);
 
-  /* Breathing room between and around the deck's panels. */
-  --deck-gap: 10px;
-  --deck-pad: 10px;
+  /* Breathing room between and around the deck's panels. There are four gaps
+     and two pads across the deck, so a couple of pixels off each is worth
+     nearly ten to the map in both directions — and at 8px the panels still
+     read as separate plates. */
+  --deck-gap: 8px;
+  --deck-pad: 8px;
 
   /* Instrument strip. This is a *minimum tile width*, not a column count:
      the grid fits as many columns as will hold, so lowering it lets all ten
@@ -123,9 +130,11 @@
 
   /* Sonar display height — beam cone, POV and echogram all share it so
      switching view never reflows the panel. The single biggest dial for map
-     size: 130px was the original, 96px is current, 84px is about the floor
-     before the echogram's depth resolution gets cramped. */
-  --sonar-h: 96px;
+     size: 130px was the original, and 84px is about the floor before the
+     echogram's depth resolution gets cramped. Now at that floor — this is the
+     cheapest height the map can be given, and there is nothing left here after
+     it. */
+  --sonar-h: 84px;
 
   /* How short the camera feed may be squeezed before the right rail gives up
      and scrolls. The feed letterboxes, so this is a legibility floor rather
