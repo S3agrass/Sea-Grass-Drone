@@ -19,6 +19,12 @@ const DroneContext = createContext(null);
 // camera promptly. Only the OFF side is debounced; ON is always immediate.
 const CAMERA_OFF_DEBOUNCE_MS = 400;
 
+// How long to leave a camera_on unanswered before sending it again. Must clear
+// start_camera()'s ~1s startup grace on the Pi plus the state round-trip, or a
+// perfectly healthy start gets a second start piled on top of it while the first
+// is still coming up. Slow on purpose: this is a self-heal, not a poll.
+const CAMERA_RETRY_MS = 8000;
+
 // The Pi serves MJPEG from a fixed, known place — camera_stream.py binds
 // ('', 8000) and routes /stream.mjpg — so there is no reason for this to have
 // shipped blank. It did, and a blank camera_url is indistinguishable from a
@@ -584,6 +590,28 @@ export function DroneProvider({ children }) {
     offTimerRef.current = setTimeout(fireOff, CAMERA_OFF_DEBOUNCE_MS);
     return () => clearTimeout(offTimerRef.current);
   }, [shouldCameraBeOn, link]);
+
+  // Reconcile the gate above against what the server actually reports. It sends
+  // camera_on once per off→on flip, which assumes the start succeeded — and it
+  // doesn't always. camera_stream.py can exit at startup (sensor busy, missing
+  // dependency; start_camera logs the reason to /tmp/seagrass-camera.log on the
+  // Pi), and a reconnect quicker than the off debounce cancels the pending OFF,
+  // leaving appliedRef reading "on" against a server that meanwhile restarted
+  // with no camera. In both cases the server kept reporting camera:false, the
+  // gate had nothing left to fire, and the operator sat in front of a permanent
+  // "Camera is off" with nothing retrying short of a page reload.
+  //
+  // So: while the camera should be on and the server keeps saying it isn't,
+  // re-send. The interval resets whenever cameraActive flips, so a start that
+  // works ends the retries on the first state message that confirms it.
+  useEffect(() => {
+    if (!shouldCameraBeOn || cameraActive) return undefined;
+    const id = setInterval(() => {
+      appliedRef.current = "on";
+      link.cameraOn();
+    }, CAMERA_RETRY_MS);
+    return () => clearInterval(id);
+  }, [shouldCameraBeOn, cameraActive, link]);
 
   // Base URL of the Pi's media server (photos/recordings live on the SD card and
   // are fetched/deleted directly from it, not proxied through the control WS).
