@@ -69,7 +69,7 @@ export default function SettingsPage() {
                 <input
                   className="mono"
                   value={form.camera_url || ""}
-                  placeholder="http://seagrass.local:8000/stream.mjpg"
+                  placeholder="https://cam.seagrassrobotics.com/cam/whep"
                   onChange={(e) => setForm({ ...form, camera_url: e.target.value })}
                 />
               </label>
@@ -78,7 +78,7 @@ export default function SettingsPage() {
                 <input
                   className="mono"
                   value={form.media_url || ""}
-                  placeholder="http://seagrass.local:8000"
+                  placeholder="https://media.seagrassrobotics.com"
                   onChange={(e) => setForm({ ...form, media_url: e.target.value })}
                 />
                 <span className="field-help">

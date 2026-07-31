@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React, { StrictMode } from 'react';
 import { render, act } from '@testing-library/react';
-import { DroneProvider, useDrone } from '../context/DroneContext';
+import { DroneProvider, useDrone, DEFAULT_CAMERA_URL } from '../context/DroneContext';
 
 // vi.hoisted runs before any imports, so the factory value is available
 // when vi.mock() builds the module mock below.
@@ -116,7 +116,7 @@ describe('DroneContext — camera lifecycle', () => {
     ]));
     const getCtx = renderContext();
     connect();
-    expect(getCtx().activeDrone.camera_url).toBe('http://seagrass.local:8000/stream.mjpg');
+    expect(getCtx().activeDrone.camera_url).toBe(DEFAULT_CAMERA_URL);
     expect(mockLink.cameraOn).toHaveBeenCalled();
   });
 
