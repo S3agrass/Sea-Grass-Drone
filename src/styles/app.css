@@ -363,8 +363,10 @@
   flex: 1;
   min-height: 0;
   display: grid;
-  /* All four numbers are dials in theme.css — see "CONTROL DECK LAYOUT". */
-  grid-template-columns: var(--deck-left-w) minmax(0, 1fr) var(--deck-right-w);
+  /* All the numbers are dials in theme.css — see "CONTROL DECK LAYOUT".
+     Two columns, not three: the left rail is gone and the map starts at the
+     deck's edge. */
+  grid-template-columns: minmax(0, 1fr) var(--deck-right-w);
   /* Row 1 takes the slack; rows 2 and 3 are the instrument and sonar strips,
      both full-width and sized by their content. */
   grid-template-rows: minmax(0, 1fr) auto auto;
@@ -378,7 +380,7 @@
    anticipate, a scrollbar is a far better failure than silently clipping the
    battery reading off the bottom of the rail. If you see one, the layout needs
    fixing — but you can still reach your telemetry in the meantime. */
-.deck-left, .deck-right {
+.deck-right {
   display: flex;
   flex-direction: column;
   gap: var(--deck-gap);
@@ -512,6 +514,13 @@
    auto-fit rather than a fixed column count so this stays correct at any rail
    width: narrow gives one column, wider gives two or three, with no breakpoint
    to maintain. */
+/* The two full-width strips carry the shared panel padding, which is 16px top
+   AND bottom on each — 64px of the deck's height spent on inside margins, and
+   row 1 is the only row that can pay for it. The tiles inside have their own
+   padding and their own borders, so the outer ring was double-spacing content
+   that was already spaced. */
+.inst-cluster { padding: var(--s2); }
+
 .inst-cluster {
   grid-column: 1 / -1;   /* full-width strip, like the sonar panel below it */
   display: grid;
@@ -556,23 +565,66 @@
   .inst-wide { grid-column: span 1; }
 }
 
+/* The drone-link panel, now a tile in this strip instead of the sole occupant
+   of a full-height 220px rail. That rail cost the map its width all the way
+   down the deck to show one short panel and then several hundred pixels of
+   nothing.
+
+   Three columns rather than two: at two it wraps the host URL and the action
+   buttons onto extra lines, and since a grid row is as tall as its tallest
+   tile, those lines would raise the whole strip and take back in height what
+   the map just gained in width. At three it sits at about instrument height
+   and costs the strip nothing — the row it joins had spare columns.
+
+   Restyled from raised panel to recessed tile so it reads as part of the strip
+   rather than a panel that wandered into it. */
+.inst-cluster .conn-panel {
+  grid-column: span 3;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--s2);
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  min-width: 0;
+}
+.inst-cluster .conn-panel .conn-host {
+  padding: 5px 7px;
+  font-size: 10px;
+}
+/* The rail gave these room to breathe; a tile does not, and the margins were
+   most of the difference between this and an instrument's height. */
+.inst-cluster .conn-panel .conn-rows { margin: 0; }
+.inst-cluster .conn-panel .conn-actions { margin-top: auto; }
+.inst-cluster .conn-panel .conn-actions .btn { padding: 7px 8px; }
+@media (max-width: 420px) {
+  .inst-cluster .conn-panel { grid-column: span 1; }
+}
+
 /* Plain-language verdict at the foot of an instrument tile. Sits last and is
    pushed to the bottom so the sentence lands on the same baseline across the
    whole strip — the row reads as one line of status you can scan sideways,
    rather than sentences floating at ten different heights. */
 .inst-plain {
   margin-top: auto;
-  padding-top: 5px;
+  padding-top: 3px;
   font-size: 11px;
   font-weight: 600;
-  line-height: 1.35;
+  line-height: 1.25;
   color: var(--muted);
 }
 .inst-note { font-weight: 400; color: var(--faint); }
 
 .compass { display: flex; flex-direction: column; align-items: center; gap: 6px; }
 /* Scales down inside a narrow tile instead of forcing the column wider. */
-.compass svg { width: 100%; max-width: 104px; height: auto; }
+/* 104px made this the tallest thing in the strip, and because a grid row is as
+   tall as its tallest tile, the compass alone was setting the height of both
+   instrument rows — roughly 60px of deck that every other tile was padding out
+   with empty space. The dial is read by its needle and the degrees underneath
+   it, neither of which needs the extra diameter. */
+.compass svg { width: 100%; max-width: 76px; height: auto; }
 .compass-readout { font-size: var(--t-lg); font-weight: 700; color: var(--teal); }
 
 .depth { display: flex; align-items: center; gap: var(--s3); }
@@ -718,8 +770,11 @@
 
 /* attitude — artificial horizon + roll/pitch/yaw readout */
 .attitude { display: flex; align-items: center; gap: 10px; }
-.attitude-ball { flex: 0 0 84px; }
-.attitude-ball svg { width: 84px; height: 84px; display: block; }
+/* Second-tallest tile content, and the same reasoning as the compass: the ball
+   is read by which way the horizon tilts, not by its size, and the numbers are
+   beside it. */
+.attitude-ball { flex: 0 0 64px; }
+.attitude-ball svg { width: 64px; height: 64px; display: block; }
 .attitude-readout { display: flex; flex-direction: column; gap: 3px; flex: 1; }
 .attitude-row { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
 .attitude-label { font-size: 10px; color: var(--muted); }
@@ -783,9 +838,12 @@
 
 /* ============ visual sonar (echogram + beam cone) ============ */
 .sonar-panel {
-  /* Spans all three deck columns on the second grid row. */
+  /* Full width of the deck, on the last grid row. */
   grid-column: 1 / -1;
-  padding: 10px 14px;
+  /* Vertical padding trimmed with the instrument strip's — see the note there.
+     Horizontal is left roomier: the echogram wants the width, and width costs
+     the map nothing, only height does. */
+  padding: var(--s2) var(--s3);
 }
 .sonar-panel .panel-head { margin-bottom: 8px; gap: 10px; justify-content: flex-start; }
 
@@ -1561,7 +1619,7 @@
     overflow-y: auto;
   }
   .deck-map { height: 55vh; min-height: 360px; order: -1; }
-  .deck-left, .deck-right { overflow: visible; }
+  .deck-right { overflow: visible; }
   /* Stack cone above echogram — 250px of cone plus a canvas doesn't fit. */
   .sonar-panel { grid-column: auto; }
   .sonar-body { grid-template-columns: 1fr; }

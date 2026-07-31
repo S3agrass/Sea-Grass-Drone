@@ -64,10 +64,6 @@ export default function ControlPage() {
       <TopBar />
       <Toasts />
       <div className="deck">
-        <aside className="deck-left">
-          <ConnectionPanel />
-        </aside>
-
         <main className="deck-map">
           <DroneMap
             dronePos={dronePos}
@@ -89,8 +85,16 @@ export default function ControlPage() {
             content in ~790px of deck, so the rail always scrolled and you
             could never see all your telemetry at once. Laid out across the
             deck's width they fit on screen, and they use room the map had
-            going spare. */}
+            going spare.
+
+            The link panel joins them here, and the left rail is gone with it.
+            That rail was a full-height 220px column holding this one short
+            panel and then several hundred pixels of nothing, all of it taken
+            off the map's width. As a wide tile in this strip it costs three
+            columns of a row that had spare capacity, and the map gets the
+            whole rail back. */}
         <div className="inst-cluster">
+            <ConnectionPanel />
             <Compass heading={telemetry.heading} />
             <DepthMeter depth={telemetry.depth} />
             <SonarGauge
