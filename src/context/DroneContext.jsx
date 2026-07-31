@@ -220,6 +220,13 @@ export function DroneProvider({ children }) {
   // Why the Pi says the camera is down, when it knows. Server-supplied text;
   // null whenever the camera is running or the reason is simply "not started".
   const [cameraError, setCameraError] = useState(null);
+  // Whether cameraActive means anything yet. Between the link connecting and
+  // the server's first `state` message, cameraActive is still its default
+  // false — which is indistinguishable from "the camera is genuinely off"
+  // unless something tracks that we simply have not been told. CameraView uses
+  // this to avoid tearing down a WHEP negotiation during that window; see the
+  // comment on wantFeed there.
+  const [cameraKnown, setCameraKnown] = useState(false);
   const [detectActive, setDetectActive] = useState(false);
   const [detections, setDetections] = useState([]); // latest bbox array
   // Recording lives on the Pi (see DroneLink protocol) — these mirror the Pi's
@@ -416,6 +423,8 @@ export function DroneProvider({ children }) {
           setPixhawkOk(false);
           setCameraActive(false);
           setCameraError(null);
+          // Back to "not told yet" — the next connection starts unknown again.
+          setCameraKnown(false);
           setDetectActive(false);
           setDetections([]);
           // brake/braking clear with the rest: a "FWD STOP" warning left on
@@ -439,6 +448,7 @@ export function DroneProvider({ children }) {
           setPixhawkOk(Boolean(m.pixhawk));
           setCameraActive(Boolean(m.camera));
           setCameraError(m.camera ? null : m.camera_error || null);
+          setCameraKnown(true);
           setDetectActive(Boolean(m.detect));
           setRecording(Boolean(m.recording));
           setRecElapsed(m.rec_elapsed_s || 0);
@@ -694,6 +704,7 @@ export function DroneProvider({ children }) {
     disconnect,
     cameraActive,
     cameraError,
+    cameraKnown,
     detectActive,
     detections,
     detectOn,

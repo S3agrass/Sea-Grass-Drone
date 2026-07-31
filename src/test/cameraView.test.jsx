@@ -11,6 +11,10 @@ const mockDrone = {
   linkStatus: 'connected',
   cameraActive: false,
   cameraError: null,
+  // The server has told us the camera state. cameraActive is only meaningful
+  // alongside this — false with cameraKnown false means "not told yet", which
+  // deliberately keeps the feed up rather than tearing it down.
+  cameraKnown: true,
   detectActive: false,
   detections: [],
   detectOn: vi.fn(),
@@ -207,6 +211,21 @@ describe('CameraView — standalone viewing (no drone link)', () => {
     const { container } = render(<CameraView />);
     expect(screen.getByText(/camera is off/i)).toBeInTheDocument();
     expect(container.querySelector('img')).not.toBeInTheDocument();
+  });
+
+  // The window between the link connecting and the server's first `state`
+  // message. cameraActive is still its default false there, and treating that
+  // as "off" tore down the WHEP negotiation already in flight and started a
+  // second one from scratch — the camera took roughly twice as long to appear
+  // as it needed to, on every single page load.
+  it('keeps the feed up while connected but not yet told the camera state', () => {
+    mockCtx.linkStatus = 'connected';
+    mockCtx.cameraActive = false;
+    mockCtx.cameraKnown = false;
+    mockCtx.activeDrone = { camera_url: 'http://pi.local:8000/stream.mjpg' };
+    const { container } = render(<CameraView />);
+    expect(container.querySelector('img')).toBeInTheDocument();
+    expect(screen.queryByText(/camera is off/i)).not.toBeInTheDocument();
   });
 });
 
