@@ -26,6 +26,7 @@ state = {
     "mode": "MANUAL",
     "pixhawk": True,
     "camera": False,
+    "camera_error": None,
     "detect": False,
     "recording": False,
     "autorecord": False,

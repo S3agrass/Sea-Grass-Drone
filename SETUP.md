@@ -37,7 +37,7 @@ VITE_FIREBASE_APP_ID=1:123:web:abc
 
 ## 3. Supabase (cloud fleet registry + captured media)
 
-Without Supabase, drone configs are saved in `localStorage` on the device (local mode) and captured photos stay on the Pi's SD card only. Set it up to share a fleet across devices and to back up media — see [step 6b](#6b-media-backup-to-supabase) for the media half:
+Supabase is **required** — it provides sign-in, and local mode (which used to let you in without an account) was retired. Without it the login screen has nothing to authenticate against and there is no way into the app. It also holds the shared fleet registry and the media backup — see [step 6b](#6b-media-backup-to-supabase) for the media half:
 
 1. Create a project at [supabase.com](https://supabase.com) (free tier, no card).
 2. SQL Editor → run `supabase-schema.sql` (creates the `drones` and `media` tables with Row Level Security, plus the `media` storage bucket).
@@ -381,7 +381,7 @@ paid tier and everything already on the card uploads.
 2. SQL Editor → New query → paste all of `supabase-schema.sql` → Run. This
    creates the `drones` and `media` tables, their RLS policies, and the `media`
    storage bucket.
-3. Project settings → API. Copy into `.env` (and into Netlify's env vars):
+3. Project settings → API. Copy into `.env` (and into the GitHub Actions secrets CI deploys with):
    ```
    VITE_SUPABASE_URL=https://xxxxxxxx.supabase.co
    VITE_SUPABASE_ANON_KEY=eyJ...
@@ -552,18 +552,37 @@ tradeoff for dropping the "must be on the tailnet" requirement.
 
 ---
 
-## 7. Deploy the web UI (Netlify)
+## 7. Deploy the web UI (Firebase Hosting)
+
+One Firebase site serves the whole domain:
+
+| URL | Serves |
+|---|---|
+| `/` | marketing landing page (`site/index.html`) |
+| `/launch` | the page whose button opens the GCS |
+| `/desktop/` | the GCS itself |
 
 ```bash
-npm run build   # outputs to dist/
+npm run build:web   # vite build, then assembles hosting/
+npm run deploy      # the above, then firebase deploy --only hosting
 ```
 
-Netlify auto-deploys on push. The app uses hash routing so no redirect rules are needed. Add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in Netlify → Site settings → Environment variables.
+`build:web` is the important one: `firebase.json` serves `hosting/`, which only
+that script assembles — plain `npm run build` fills `dist/` and would deploy
+nothing. Both GitHub Actions workflows already call it, and pushing to `main`
+deploys to the live channel; opening a PR builds a preview channel first.
 
-> The `VITE_FIREBASE_*` variables that used to go here are dead — sign-in moved
-> to Supabase Auth. **Delete them from Netlify**, or a deploy will look
-> configured while the login page reports Supabase as missing. Firebase Hosting,
-> if you use it, is unaffected.
+The GCS needs no sub-path configuration. `vite base: './'` keeps asset URLs
+relative and the app uses hash routing, so `/desktop/#/fleet` works with no
+basename and no SPA rewrite.
+
+Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` as GitHub Actions secrets —
+that is where CI reads them from. There is no way into the app without them:
+local mode was retired, so the login screen is the only door.
+
+> Netlify used to host the marketing site on its own domain. It is no longer
+> part of the deploy; delete the site so it cannot serve a stale copy. The
+> `VITE_FIREBASE_*` variables are dead too — sign-in moved to Supabase Auth.
 
 ---
 

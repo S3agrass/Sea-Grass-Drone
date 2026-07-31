@@ -86,6 +86,7 @@ export default function CameraView() {
     activeDrone,
     linkStatus,
     cameraActive,
+    cameraError,
     mediaBase,
     detectActive,
     detections,
@@ -314,14 +315,22 @@ export default function CameraView() {
             {noUrl
               ? "No stream URL configured"
               : !wantFeed
-              ? "Camera is off"
+              ? cameraError
+                ? "Camera failed to start"
+                : "Camera is off"
               : feedState === "connecting"
               ? "Connecting to camera…"
               : "Camera error — stream unreachable"}
           </div>
+          {/* The Pi knows why it could not start and used to keep it to itself,
+              so "Camera is off" read as "not switched on yet" and invited
+              waiting — when the answer was a stranded process no amount of
+              waiting would clear. Say the reason where the operator is looking. */}
           <div className="camera-placeholder-sub mono">
             {noUrl
               ? "Edit this drone in Fleet and add a WHEP URL"
+              : !wantFeed && cameraError
+              ? cameraError
               : streamUrl}
           </div>
           {feedState === "error" && (

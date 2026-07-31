@@ -10,6 +10,7 @@ const mockDrone = {
   activeDrone: { camera_url: 'http://100.64.0.1:8889/cam/whep' },
   linkStatus: 'connected',
   cameraActive: false,
+  cameraError: null,
   detectActive: false,
   detections: [],
   detectOn: vi.fn(),
@@ -46,6 +47,24 @@ describe('CameraView — placeholder states', () => {
   it('shows "Camera is off" when camera inactive', () => {
     render(<CameraView />);
     expect(screen.getByText(/camera is off/i)).toBeInTheDocument();
+  });
+
+  it('shows the reason instead when the Pi reported one', () => {
+    // "Camera is off" reads as "not switched on yet" and invites waiting. When
+    // the server knows a process is sitting on the sensor, waiting is exactly
+    // the wrong thing to do, so the panel has to say so.
+    mockCtx.cameraError = 'Camera device is held by another process';
+    render(<CameraView />);
+    expect(screen.getByText(/camera failed to start/i)).toBeInTheDocument();
+    expect(screen.getByText(/held by another process/i)).toBeInTheDocument();
+    expect(screen.queryByText(/camera is off/i)).not.toBeInTheDocument();
+  });
+
+  it('does not show a stale reason once the camera is running', () => {
+    mockCtx.cameraActive = true;
+    mockCtx.cameraError = 'Camera device is held by another process';
+    render(<CameraView />);
+    expect(screen.queryByText(/camera failed to start/i)).not.toBeInTheDocument();
   });
 
   it('shows "No stream URL configured" when camera_url is empty', () => {
