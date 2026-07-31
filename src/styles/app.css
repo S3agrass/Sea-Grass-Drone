@@ -47,7 +47,18 @@
 
 .login-hero-inner { position: relative; max-width: 460px; }
 
+/* The brand type lives on the inner span now, not the wrapper: ParticleTitle
+   reads these values off it with getComputedStyle to build the canvas, so the
+   stylesheet stays the single source of the size, weight and tracking. The
+   gradient is still declared here and mirrored onto the canvas — the particles
+   sample their colour from the rasterised text rather than being told it. */
 .login-brand {
+  position: relative;
+  display: inline-block;
+  line-height: 1.1;
+}
+
+.login-brand .particle-title-text {
   font-family: var(--font-display);
   font-size: 56px;
   font-weight: 800;
@@ -56,6 +67,22 @@
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+}
+
+/* Canvas sits exactly over the text it replaced. pointer-events stay on the
+   wrapper so the repulsion tracks the cursor across the whole word, including
+   the gaps between letters where the canvas has nothing drawn. */
+.particle-title {
+  position: relative;
+  display: inline-block;
+}
+
+.particle-title-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }
 
 .login-tagline {
