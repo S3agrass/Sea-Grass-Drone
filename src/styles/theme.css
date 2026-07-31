@@ -83,8 +83,8 @@
      No rebuild, no guessing.
 
      HOW THE DECK IS PUT TOGETHER
-       row 1  link rail | map | camera+gamepad rail   <- the only 1fr row
-       row 2  instrument strip                        <- sized by content
+       row 1  map | camera+gamepad rail               <- the only 1fr row
+       row 2  instrument strip (link panel lives here) <- sized by content
        row 3  sonar strip                             <- sized by content
 
      Because row 1 is the sole 1fr, it swallows whatever rows 2 and 3 give
@@ -92,9 +92,15 @@
      straight to the map, 1:1. That is the lever for "bigger map".
      ================================================================== */
 
-  /* Side rail widths. Wider rails = narrower map. The left rail holds only
-     the link panel now, so it can go quite narrow; the right one has to fit
-     the camera and the gamepad keypad.
+  /* There is no --deck-left-w any more. The left rail was a full-height column
+     holding the link panel and then several hundred pixels of nothing, and all
+     of that width came off the map for the whole depth of the deck. The link
+     panel is a tile in the instrument strip now and the map starts at the
+     deck's edge, which is worth ~230px of map width — far more than any dial
+     in this block could give. */
+
+  /* Right rail width. Wider rail = narrower map; it has to fit the camera and
+     the gamepad keypad.
 
      The right rail is THE dial for camera size, and not for the reason you
      might expect. The feed box takes all the vertical slack in the rail, so on
@@ -107,11 +113,6 @@
      clamp rather than a flat number so a big display actually spends its extra
      width on the feed, while a 1280px laptop keeps a usable map: 30vw is
      ~384px at 1280, ~432px at 1440, and pinned at 520px from 1734px up. */
-  /* 260px when the left rail still held instruments; it now holds the link
-     panel alone, whose widest content is a wrapping URL and two half-width
-     status columns. 220px still fits those without squeezing "PIXHAWK / OK"
-     into a wrap, and hands the difference straight to the map. */
-  --deck-left-w: 220px;
   --deck-right-w: clamp(360px, 30vw, 520px);
 
   /* Breathing room between and around the deck's panels. There are four gaps

@@ -363,8 +363,10 @@
   flex: 1;
   min-height: 0;
   display: grid;
-  /* All four numbers are dials in theme.css — see "CONTROL DECK LAYOUT". */
-  grid-template-columns: var(--deck-left-w) minmax(0, 1fr) var(--deck-right-w);
+  /* All the numbers are dials in theme.css — see "CONTROL DECK LAYOUT".
+     Two columns, not three: the left rail is gone and the map starts at the
+     deck's edge. */
+  grid-template-columns: minmax(0, 1fr) var(--deck-right-w);
   /* Row 1 takes the slack; rows 2 and 3 are the instrument and sonar strips,
      both full-width and sized by their content. */
   grid-template-rows: minmax(0, 1fr) auto auto;
@@ -378,7 +380,7 @@
    anticipate, a scrollbar is a far better failure than silently clipping the
    battery reading off the bottom of the rail. If you see one, the layout needs
    fixing — but you can still reach your telemetry in the meantime. */
-.deck-left, .deck-right {
+.deck-right {
   display: flex;
   flex-direction: column;
   gap: var(--deck-gap);
@@ -554,6 +556,44 @@
    would overflow the strip itself. */
 @media (max-width: 420px) {
   .inst-wide { grid-column: span 1; }
+}
+
+/* The drone-link panel, now a tile in this strip instead of the sole occupant
+   of a full-height 220px rail. That rail cost the map its width all the way
+   down the deck to show one short panel and then several hundred pixels of
+   nothing.
+
+   Three columns rather than two: at two it wraps the host URL and the action
+   buttons onto extra lines, and since a grid row is as tall as its tallest
+   tile, those lines would raise the whole strip and take back in height what
+   the map just gained in width. At three it sits at about instrument height
+   and costs the strip nothing — the row it joins had spare columns.
+
+   Restyled from raised panel to recessed tile so it reads as part of the strip
+   rather than a panel that wandered into it. */
+.inst-cluster .conn-panel {
+  grid-column: span 3;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--s2);
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  min-width: 0;
+}
+.inst-cluster .conn-panel .conn-host {
+  padding: 5px 7px;
+  font-size: 10px;
+}
+/* The rail gave these room to breathe; a tile does not, and the margins were
+   most of the difference between this and an instrument's height. */
+.inst-cluster .conn-panel .conn-rows { margin: 0; }
+.inst-cluster .conn-panel .conn-actions { margin-top: auto; }
+.inst-cluster .conn-panel .conn-actions .btn { padding: 7px 8px; }
+@media (max-width: 420px) {
+  .inst-cluster .conn-panel { grid-column: span 1; }
 }
 
 /* Plain-language verdict at the foot of an instrument tile. Sits last and is
@@ -1561,7 +1601,7 @@
     overflow-y: auto;
   }
   .deck-map { height: 55vh; min-height: 360px; order: -1; }
-  .deck-left, .deck-right { overflow: visible; }
+  .deck-right { overflow: visible; }
   /* Stack cone above echogram — 250px of cone plus a canvas doesn't fit. */
   .sonar-panel { grid-column: auto; }
   .sonar-body { grid-template-columns: 1fr; }
