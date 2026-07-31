@@ -94,9 +94,9 @@ Both connections travel over **Tailscale** (an encrypted mesh VPN) when operatin
 ### Infrastructure
 | Technology | Role |
 |---|---|
-| Firebase Console | Auth provider management, user accounts |
+| Supabase | Auth (accounts + sessions), cloud fleet registry, media backup |
 | Tailscale admin | Device VPN mesh, Pi gets a stable 100.x.x.x IP |
-| Netlify (optional) | Web app hosting with CI/CD from git push |
+| Firebase Hosting | Serves seagrassrobotics.com — marketing site at `/`, GCS at `/desktop/`. Deployed by GitHub Actions on push to `main` |
 
 ---
 
@@ -129,7 +129,7 @@ Sea-Grass-Drone/
 │   │   └── ProtectedRoute.jsx # Auth guard (unused — inline in App.jsx)
 │   │
 │   ├── context/
-│   │   ├── AuthContext.jsx   # Firebase auth state, localMode, signIn/Out
+│   │   ├── AuthContext.jsx   # Supabase auth state, session, signIn/Out
 │   │   └── DroneContext.jsx  # DroneLink instance, fleet, telemetry, camera state
 │   │
 │   ├── lib/
@@ -180,8 +180,8 @@ LoginPage
        │
        ▼
   AuthContext
-  ├─ user: Firebase user object (null if not signed in)
-  ├─ localMode: boolean (session-scoped, stored in sessionStorage)
+  ├─ user: Supabase user object (null if not signed in)
+  ├─ localMode: retired — always false unless a pre-existing tab set it
   └─ authed: true if user OR localMode
        │
        ▼
@@ -190,12 +190,16 @@ LoginPage
 ```
 
 ### Files
-- `src/firebase/config.js` — initialises the Firebase app from `VITE_FIREBASE_*` environment variables. These must be present in `.env` for auth to work. Without them Firebase throws on startup.
-- `src/firebase/auth.js` — thin wrappers around Firebase SDK functions. Keeps Firebase SDK calls out of components.
-- `src/context/AuthContext.jsx` — subscribes to `onAuthStateChanged` (Firebase's auth state listener) so the whole app reacts when a user signs in or out.
+- `src/lib/supabase.js` — creates the Supabase client from `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`, and exports `supabaseConfigured`. Without both, accounts are unavailable and the login button stays disabled.
+- `src/lib/auth.js` — thin wrappers around Supabase Auth. Keeps SDK calls out of components.
+- `src/context/AuthContext.jsx` — restores the session with `getSession()` and subscribes to `onAuthStateChange`, so the whole app reacts when a user signs in or out. Both are needed: `onAuthStateChange` does not reliably fire for a session that already existed before it subscribed, so a refresh would bounce a signed-in user back to the login screen.
 
-### Local mode
-`localMode` lets the app run without a Firebase account. The fleet is stored in `localStorage` instead of Supabase/Firestore. Useful for LAN-only deployments. `enterLocalMode()` exists in AuthContext but as of now there is no UI button to trigger it — adding a "Continue without account" button to `LoginPage.jsx` is a known gap.
+Auth used to be Firebase. It moved because the fleet data lives in Supabase and Postgres had no way to learn who a Firebase user was — inside RLS, `auth.uid()` was always NULL, so every account saw the same fleet. `src/firebase/` no longer exists.
+
+### Local mode (retired)
+`localMode` let the app run without an account, storing the fleet in `localStorage`. **There is no way to enter it any more** — the "Continue without account" button and `enterLocalMode()` were removed, deliberately: a deployed control station for real vehicles should not let anonymous visitors in. The flag is still read from `sessionStorage` and still honoured by `DroneContext`, purely so a tab that was already in local mode keeps its fleet until it closes.
+
+Note the consequence: with Supabase unconfigured there is now no way into the app at all. The login screen says so rather than offering a door that no longer exists.
 
 ### Environment variables required
 ```
@@ -490,7 +494,7 @@ URLs configured in fleet settings determine which player is used. New drones def
 ```
 App.jsx
 └─ HashRouter
-   └─ AuthProvider (Firebase auth state)
+   └─ AuthProvider (Supabase auth state)
       └─ DroneProvider (drone link, fleet, telemetry, camera state)
          ├─ LoginPage          /
          ├─ FleetPage          /fleet
@@ -519,9 +523,9 @@ There is no Redux or Zustand. State lives in two React contexts:
 ### AuthContext
 ```javascript
 {
-  user,          // Firebase User object | null
-  loading,       // boolean — true while Firebase checks stored session
-  localMode,     // boolean — true when using app without an account
+  user,          // Supabase User object | null
+  loading,       // boolean — true while the stored session is being restored
+  localMode,     // boolean — retired; nothing can set it any more
   authed,        // boolean — user || localMode
   signIn,        // (email, password) => Promise
   signUp,        // (email, password) => Promise
@@ -703,16 +707,16 @@ const { telemetry } = useDrone();
 
 **3. Add nav link in `TopBar.jsx`**
 
-### Replacing Supabase fleet storage with Firestore
+### Replacing Supabase fleet storage
 
-`src/firebase/firestore.js` is a stub waiting to be filled. The pattern in `DroneContext.jsx` already branches on `supabaseConfigured`. Add a `firestoreConfigured` check and mirror the `saveDrone`/`removeDrone`/`refreshFleet` implementations using the Firestore SDK.
+`DroneContext.jsx` branches on `supabaseConfigured`, so an alternative backend mirrors `saveDrone`/`removeDrone`/`refreshFleet` behind the same check. Note that whatever replaces it must expose the signed-in user's identity to the storage layer's own access rules — Firestore was dropped precisely because Firebase UIDs left `auth.uid()` NULL inside Postgres RLS, and every account saw the same fleet.
 
 ---
 
 ## 12. Key Design Decisions
 
 ### Hash routing instead of history routing
-Electron loads the app as `file:///path/to/dist/index.html`. History-based routing (e.g. `/fleet`) would require a web server to redirect all paths to `index.html`. Hash routing (`/#/fleet`) works without a server. Netlify also doesn't need redirect rules.
+Electron loads the app as `file:///path/to/dist/index.html`. History-based routing (e.g. `/fleet`) would require a web server to redirect all paths to `index.html`. Hash routing (`/#/fleet`) works without a server. It also turned out to be what let the GCS move under `/desktop/` on Firebase without a single code change — no basename, no SPA rewrite, and `vite base: './'` keeps the asset URLs relative.
 
 ### DroneLink as a plain class, not a React hook
 `DroneLink` manages a WebSocket that must persist across renders and re-renders. Putting it in a plain class (stored in a `useRef` inside `DroneProvider`) keeps the WebSocket lifecycle completely separate from React's render cycle. The context subscribes to link events once and updates state via `setState` calls.
@@ -753,5 +757,5 @@ Only one WebSocket client can send commands at a time. Either the previous sessi
 ### Tests fail with "localStorage.getItem is not a function"
 This means `src/test/setup.js` is not being loaded. Verify `setupFiles: './src/test/setup.js'` is present in `vite.config.js` under the `test` key.
 
-### Firebase auth fails silently (no error, no redirect)
-The `.env` file is missing or has empty values. Open the browser console — you should see the `console.log` in `src/firebase/config.js` printing the project ID. If it prints `undefined`, the env vars are not loaded.
+### Sign-in fails silently (no error, no redirect)
+The `.env` file is missing or has empty values. `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` must both be set, or `supabaseConfigured` is false and the login button stays disabled. Since local mode was retired there is no way past the login screen without them.

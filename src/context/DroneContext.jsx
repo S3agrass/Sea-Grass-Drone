@@ -217,6 +217,9 @@ export function DroneProvider({ children }) {
     ok: false,
   });
   const [cameraActive, setCameraActive] = useState(false);
+  // Why the Pi says the camera is down, when it knows. Server-supplied text;
+  // null whenever the camera is running or the reason is simply "not started".
+  const [cameraError, setCameraError] = useState(null);
   const [detectActive, setDetectActive] = useState(false);
   const [detections, setDetections] = useState([]); // latest bbox array
   // Recording lives on the Pi (see DroneLink protocol) — these mirror the Pi's
@@ -412,6 +415,7 @@ export function DroneProvider({ children }) {
           setArmed(false);
           setPixhawkOk(false);
           setCameraActive(false);
+          setCameraError(null);
           setDetectActive(false);
           setDetections([]);
           // brake/braking clear with the rest: a "FWD STOP" warning left on
@@ -434,6 +438,7 @@ export function DroneProvider({ children }) {
           if (m.mode) setFlightMode(m.mode);
           setPixhawkOk(Boolean(m.pixhawk));
           setCameraActive(Boolean(m.camera));
+          setCameraError(m.camera ? null : m.camera_error || null);
           setDetectActive(Boolean(m.detect));
           setRecording(Boolean(m.recording));
           setRecElapsed(m.rec_elapsed_s || 0);
@@ -688,6 +693,7 @@ export function DroneProvider({ children }) {
     connect,
     disconnect,
     cameraActive,
+    cameraError,
     detectActive,
     detections,
     detectOn,

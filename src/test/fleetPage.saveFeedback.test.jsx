@@ -13,7 +13,8 @@ import FleetPage from '../pages/FleetPage';
 let mockDrone;
 vi.mock('../context/DroneContext', () => ({
   useDrone: () => mockDrone,
-  DEFAULT_CAMERA_URL: 'http://seagrass.local:8000/stream.mjpg',
+  DEFAULT_CAMERA_URL: 'https://cam.seagrassrobotics.com/cam/whep',
+  DEFAULT_MEDIA_URL: 'https://media.seagrassrobotics.com',
 }));
 
 vi.mock('../context/AuthContext', () => ({
@@ -48,6 +49,38 @@ async function openRegisterForm(user) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe('FleetPage — media server URL', () => {
+  // Only Settings had this field. A drone registered here kept a blank
+  // media_url, and mediaBase then falls back to "camera host, port 8000" —
+  // which for a camera served anywhere other than the Pi itself points at
+  // nothing: Media page 404s, and WHEP loses its TURN credentials.
+  it('offers the field, prefilled with the default', async () => {
+    const user = userEvent.setup();
+    mockDrone = baseDrone();
+    renderPage();
+    await openRegisterForm(user);
+    expect(
+      screen.getByDisplayValue('https://media.seagrassrobotics.com'),
+    ).toBeInTheDocument();
+  });
+
+  it('saves what the operator typed', async () => {
+    const user = userEvent.setup();
+    const saveDrone = vi.fn(async () => ({ ok: true, error: null }));
+    mockDrone = baseDrone({ saveDrone });
+    renderPage();
+
+    await openRegisterForm(user);
+    const field = screen.getByDisplayValue('https://media.seagrassrobotics.com');
+    await user.clear(field);
+    await user.type(field, 'http://10.0.0.5:8000');
+    await user.click(screen.getByRole('button', { name: /save drone/i }));
+
+    await waitFor(() => expect(saveDrone).toHaveBeenCalled());
+    expect(saveDrone.mock.calls[0][0]).toMatchObject({ media_url: 'http://10.0.0.5:8000' });
+  });
 });
 
 describe('FleetPage — registration feedback', () => {

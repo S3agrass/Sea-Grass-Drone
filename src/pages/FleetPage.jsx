@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { useDrone, DEFAULT_CAMERA_URL } from "../context/DroneContext";
+import { useDrone, DEFAULT_CAMERA_URL, DEFAULT_MEDIA_URL } from "../context/DroneContext";
 import Toasts from "../components/Toasts";
 
 // Pre-filled rather than blank: a blank camera_url silently means "no feed and
@@ -11,6 +11,7 @@ const EMPTY = {
   name: "",
   host: "ws://seagrass.local:8765",
   camera_url: DEFAULT_CAMERA_URL,
+  media_url: DEFAULT_MEDIA_URL,
   token: "",
 };
 
@@ -166,6 +167,25 @@ export default function FleetPage() {
                   setEditing({ ...editing, camera_url: e.target.value })
                 }
               />
+            </label>
+            <label className="field">
+              <span className="eyebrow">Media server URL (optional)</span>
+              <input
+                className="mono"
+                value={editing.media_url || ""}
+                placeholder={DEFAULT_MEDIA_URL}
+                onChange={(e) =>
+                  setEditing({ ...editing, media_url: e.target.value })
+                }
+              />
+              {/* Only Settings had this field, so a drone added here kept a blank
+                  media_url and fell back to "camera host, port 8000" — which for
+                  any camera URL not served from the Pi itself points at nothing:
+                  a Media page that 404s and WHEP with no TURN credentials. */}
+              <span className="field-hint">
+                Leave blank only if photos and recordings live on the same host
+                as the camera stream.
+              </span>
             </label>
             <label className="field">
               <span className="eyebrow">Access token (optional)</span>

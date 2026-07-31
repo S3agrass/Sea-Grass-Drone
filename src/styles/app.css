@@ -1687,3 +1687,5 @@
   .login { grid-template-columns: 1fr; }
   .login-hero { display: none; }
 }
+
+.field-hint { display: block; margin-top: 4px; font-size: 11px; color: var(--muted); line-height: 1.5; }

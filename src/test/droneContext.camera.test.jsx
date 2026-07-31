@@ -67,6 +67,34 @@ describe('DroneContext — cameraActive state', () => {
     expect(getCtx().cameraActive).toBe(false);
   });
 
+  it('carries the server-supplied reason when the camera is down', () => {
+    // The Pi knows why (EBUSY, missing plugin, MediaMTX down) and used to keep
+    // it to itself, leaving the UI saying "Camera is off" — which reads as "not
+    // switched on yet" and invites waiting that cannot help.
+    const getCtx = renderContext();
+    act(() => {
+      emitToLink({
+        type: 'message',
+        data: { type: 'state', camera: false, camera_error: 'Camera device is held by another process' },
+      });
+    });
+    expect(getCtx().cameraError).toBe('Camera device is held by another process');
+  });
+
+  it('drops the reason once the camera comes up', () => {
+    const getCtx = renderContext();
+    act(() => { emitToLink({ type: 'message', data: { type: 'state', camera: false, camera_error: 'boom' } }); });
+    act(() => { emitToLink({ type: 'message', data: { type: 'state', camera: true } }); });
+    expect(getCtx().cameraError).toBe(null);
+  });
+
+  it('clears the reason on disconnect', () => {
+    const getCtx = renderContext();
+    act(() => { emitToLink({ type: 'message', data: { type: 'state', camera: false, camera_error: 'boom' } }); });
+    act(() => { emitToLink({ type: 'status', status: 'disconnected' }); });
+    expect(getCtx().cameraError).toBe(null);
+  });
+
   it('resets to false on link disconnect', () => {
     const getCtx = renderContext();
     act(() => { emitToLink({ type: 'message', data: { type: 'state', camera: true } }); });

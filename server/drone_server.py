@@ -679,8 +679,29 @@ CAMERA_LOG_PATH = "/tmp/seagrass-camera.log"
 _CAMERA_STARTUP_GRACE_S = 1.0
 
 
+# Why the last start failed, in a few words an operator can act on. The server
+# has always known this and kept it to itself: the UI could only say "Camera is
+# off", which reads as "not switched on yet" and invites waiting, when the real
+# answer may be that no amount of waiting will help. Cleared on every successful
+# start, reported in state() so any client that connects later still sees it.
+camera_error: str | None = None
+
+
+def _diagnose_camera_failure(tail: str) -> str:
+    """Turn a GStreamer/libcamera log tail into one line worth showing a human."""
+    if any(s in tail for s in ("already in use", "Device or resource busy")):
+        return "Camera device is held by another process"
+    if "Connection refused" in tail:
+        return "MediaMTX is not accepting the stream — is it running?"
+    if "no element" in tail:
+        return "A GStreamer plugin is missing on the Pi"
+    if "gst-launch-1.0 not found" in tail:
+        return "gst-launch-1.0 is not installed on the Pi"
+    return "Camera process exited at startup"
+
+
 def start_camera():
-    global camera_proc
+    global camera_proc, camera_error
     if camera_running():
         return
     try:
@@ -699,14 +720,17 @@ def start_camera():
             start_new_session=True,
         )
         log.close()  # the child inherited its own fd; ours is no longer needed
+        camera_error = None
         print(f"Camera stream started (pid {camera_proc.pid})")
     except Exception as exc:  # noqa: BLE001
+        camera_error = f"Could not launch the camera process: {exc}"
         print(f"Failed to start camera: {exc}")
         return
 
     time.sleep(_CAMERA_STARTUP_GRACE_S)
     if camera_proc.poll() is not None:
         tail = _tail_camera_log()
+        camera_error = _diagnose_camera_failure(tail)
         print(f"Camera exited immediately (code {camera_proc.returncode}) — "
               f"{tail or f'see {CAMERA_LOG_PATH}'}")
         # EBUSY is worth calling out by name. libcamera allows one owner, so
@@ -750,7 +774,10 @@ def _signal_camera_group(sig) -> bool:
 
 
 def stop_camera():
-    global camera_proc
+    global camera_proc, camera_error
+    # A deliberate stop is not a fault. Leaving the last error set would have the
+    # UI blaming a dead sensor for a camera the operator switched off.
+    camera_error = None
     if not camera_running():
         camera_proc = None
         return
@@ -1786,6 +1813,7 @@ async def client_handler(ws):
                 "mode": mode,
                 "pixhawk": pixhawk_ok,
                 "camera": camera_running(),
+                "camera_error": None if camera_running() else camera_error,
                 "detect": detector_running(),
                 "recording": recording,
                 "rec_elapsed_s": int(time.time() - rec_started_at) if recording else 0,
