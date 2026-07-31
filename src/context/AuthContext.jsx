@@ -13,6 +13,24 @@ export function AuthProvider({ children }) {
 		() => sessionStorage.getItem("seagrass-local-mode") === "1",
 	);
 
+	// Signing in supersedes local mode, and nothing used to say so. `signOut`
+	// cleared the flag but signing IN did not, and it lives in sessionStorage —
+	// so "Continue without account" followed by a real sign-in left localMode
+	// true alongside a genuine user. DroneContext gates the cloud fleet on
+	// `!localMode`, so that account's drones and settings were quietly read from
+	// and written to this browser's storage instead of the account, in that tab
+	// only. Open a second tab and the flag is gone, the cloud fleet loads, and
+	// none of the work done in the first tab is in it — which is what "my
+	// settings don't save" and "adding a drone does nothing" both looked like.
+	const applySession = (session) => {
+		const nextUser = session?.user ?? null;
+		setUser(nextUser);
+		if (nextUser) {
+			sessionStorage.removeItem("seagrass-local-mode");
+			setLocalMode(false);
+		}
+	};
+
 	useEffect(() => {
 		if (!supabaseConfigured) {
 			setLoading(false);
@@ -27,12 +45,12 @@ export function AuthProvider({ children }) {
 		let active = true;
 		supabase.auth.getSession().then(({ data }) => {
 			if (!active) return;
-			setUser(data.session?.user ?? null);
+			applySession(data.session);
 			setLoading(false);
 		});
 
 		const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-			setUser(session?.user ?? null);
+			applySession(session);
 			setLoading(false);
 		});
 
