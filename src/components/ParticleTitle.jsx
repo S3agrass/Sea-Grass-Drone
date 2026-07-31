@@ -81,7 +81,12 @@ export default function ParticleTitle({ text, className = "" }) {
       // Take the type off the element actually being replaced, so the canvas
       // cannot drift from the stylesheet.
       const cs = getComputedStyle(measure);
-      const fontSize = parseFloat(cs.fontSize) || 56;
+      // Must be px: parseFloat("2em") is 2, which is truthy, so a bare ||
+      // fallback never fires and the word rasterises at 2px — drawn, but gone.
+      const fontSize =
+        cs.fontSize?.includes("px") && parseFloat(cs.fontSize) > 4
+          ? parseFloat(cs.fontSize)
+          : 56;
       const tracking = parseFloat(cs.letterSpacing) || 0;
       ctx.font = `${cs.fontWeight || 800} ${fontSize}px ${cs.fontFamily}`;
       ctx.textBaseline = "middle";
