@@ -580,9 +580,10 @@ Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` as GitHub Actions secrets �
 that is where CI reads them from. There is no way into the app without them:
 local mode was retired, so the login screen is the only door.
 
-> Netlify used to host the marketing site on its own domain. It is no longer
-> part of the deploy; delete the site so it cannot serve a stale copy. The
-> `VITE_FIREBASE_*` variables are dead too — sign-in moved to Supabase Auth.
+> Netlify used to host the marketing site on its own domain, and the pages
+> lived in a separate `Sea-Grass-Site` repo. Both are retired: the site is in
+> `site/` here, and the Netlify deploy has been deleted. The `VITE_FIREBASE_*`
+> variables are dead too — sign-in moved to Supabase Auth.
 
 ---
 

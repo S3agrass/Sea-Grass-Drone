@@ -134,12 +134,8 @@ Sea-Grass-Drone/
 │   │
 │   ├── lib/
 │   │   ├── droneLink.js      # WebSocket client class — all drone communication
+│   │   ├── auth.js           # login(), register(), logout() — Supabase Auth
 │   │   └── supabase.js       # Supabase client (null when env vars absent)
-│   │
-│   ├── firebase/
-│   │   ├── config.js         # Firebase app init, reads VITE_FIREBASE_* env vars
-│   │   ├── auth.js           # login(), register(), logout() wrappers
-│   │   └── firestore.js      # Stub — Firestore helpers go here if added later
 │   │
 │   ├── styles/
 │   │   ├── theme.css         # CSS variables — colours, fonts, radius, animation
@@ -150,6 +146,13 @@ Sea-Grass-Drone/
 │       ├── droneLink.test.js           # DroneLink WebSocket protocol tests
 │       ├── droneContext.camera.test.jsx # DroneContext camera state machine tests
 │       └── cameraView.test.jsx         # CameraView UI and stream type tests
+│
+├── site/                     # Marketing pages, served at / on seagrassrobotics.com
+│   ├── index.html            # Landing page; its buttons lead to /launch
+│   └── launch.html           # Hands off to the GCS at /desktop/
+│
+├── scripts/
+│   └── assemble-hosting.mjs  # Builds hosting/: site/ at /, dist/ at /desktop/
 │
 ├── electron/
 │   └── main.cjs              # Electron main process — opens BrowserWindow
