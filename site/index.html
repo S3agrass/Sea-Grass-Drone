@@ -735,20 +735,59 @@ footer{
     ctx.textBaseline = "middle";
     ctx.textAlign = "left";
 
-    var lines = readLines();
+    /* The heading is tracked -0.03em. Canvas does not apply letter-spacing on
+       its own, so measuring whole runs overstated every line by ~2px per gap —
+       about 47px across "Autonomous vehicles that" — which pushed the last word
+       past the h1's 760px and clipped it. Characters are placed individually
+       with the tracking added, matching what the browser laid out. */
+    var tracking = (cs.letterSpacing || "").indexOf("px") !== -1
+      ? parseFloat(cs.letterSpacing) || 0
+      : 0;
+
+    var lines = readLines().map(function (runs) {
+      var chars = [];
+      for (var r = 0; r < runs.length; r++) {
+        var parts = runs[r].text.split("");
+        for (var c = 0; c < parts.length; c++) {
+          chars.push({ ch: parts[c], color: runs[r].color });
+        }
+      }
+      return chars;
+    });
+
+    function lineWidth(chars) {
+      var total = 0;
+      for (var i = 0; i < chars.length; i++) {
+        total += ctx.measureText(chars[i].ch).width + tracking;
+      }
+      return chars.length ? total - tracking : 0;
+    }
+
+    /* Belt to that braces: if a line still measures wider than the box, scale
+       the type down to fit rather than let the canvas crop it. Clipped words
+       are the one failure mode here that looks like a bug rather than a style,
+       and the browser's line breaking is not something this can predict. */
+    var widest = 0;
+    for (var m = 0; m < lines.length; m++) widest = Math.max(widest, lineWidth(lines[m]));
+    if (widest > w - 2 && widest > 0) {
+      var scale = (w - 2) / widest;
+      fontSize = fontSize * scale;
+      tracking = tracking * scale;
+      lineHeight = lineHeight * scale;
+      ctx.font = (cs.fontWeight || 700) + " " + fontSize + "px " + cs.fontFamily;
+    }
+
     var blockH = lines.length * lineHeight;
     var topY = h / 2 - blockH / 2 + lineHeight / 2;
 
     for (var li = 0; li < lines.length; li++) {
-      var runs = lines[li];
-      var total = 0;
-      for (var r = 0; r < runs.length; r++) total += ctx.measureText(runs[r].text).width;
-      var penX = Math.max(0, w / 2 - total / 2);   /* the hero is centred */
+      var chars = lines[li];
+      var penX = Math.max(0, w / 2 - lineWidth(chars) / 2);   /* the hero is centred */
       var y = topY + li * lineHeight;
-      for (var k = 0; k < runs.length; k++) {
-        ctx.fillStyle = runs[k].color;
-        ctx.fillText(runs[k].text, penX, y);
-        penX += ctx.measureText(runs[k].text).width;
+      for (var k = 0; k < chars.length; k++) {
+        ctx.fillStyle = chars[k].color;
+        ctx.fillText(chars[k].ch, penX, y);
+        penX += ctx.measureText(chars[k].ch).width + tracking;
       }
     }
 
