@@ -231,7 +231,14 @@ export function DroneProvider({ children }) {
   // database's job: a client-side filter would look identical in the UI while
   // leaving every row readable to anyone who bothered to call the REST endpoint
   // directly with the anon key, which ships in this bundle.
-  const useCloudFleet = supabaseConfigured && !!user && !localMode;
+  // Deliberately NOT gated on `!localMode` any more. A signed-in user is on
+  // their account, full stop — local mode means "no account", and the two
+  // cannot both be true of the same person. When they were allowed to be, a
+  // stale local-mode flag (it lives in sessionStorage, and signing in used to
+  // leave it set) silently redirected a real account's drones and settings
+  // into this browser's storage. AuthContext now clears the flag on sign-in;
+  // this makes the storage choice correct even if it ever fails to.
+  const useCloudFleet = supabaseConfigured && !!user;
 
   const refreshFleet = useCallback(async () => {
     setFleetLoading(true);
