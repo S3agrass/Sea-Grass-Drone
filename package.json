@@ -13,7 +13,9 @@
     "preview": "vite preview",
     "electron": "electron .",
     "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
-    "electron:build": "vite build && electron-builder"
+    "electron:build": "vite build && electron-builder",
+    "build:web": "vite build && node scripts/assemble-hosting.mjs",
+    "deploy": "npm run build:web && firebase deploy --only hosting"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.47.0",
