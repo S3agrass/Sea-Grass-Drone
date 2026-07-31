@@ -33,9 +33,12 @@ vi.mock('../context/AuthContext', () => ({
 
 const { insert, select, from } = vi.hoisted(() => {
   const order = vi.fn(() => Promise.resolve({ data: [], error: null }));
+  // Reads chain .select().order(); writes chain .insert()/.update().select(),
+  // which resolves to the rows actually stored.
+  const written = () => Promise.resolve({ data: [{ id: 'row-1' }], error: null });
   const select = vi.fn(() => ({ order }));
-  const insert = vi.fn(() => Promise.resolve({ error: null }));
-  const update = vi.fn(() => ({ eq: () => Promise.resolve({ error: null }) }));
+  const insert = vi.fn(() => ({ select: written }));
+  const update = vi.fn(() => ({ eq: () => ({ select: written }) }));
   const from = vi.fn(() => ({ select, insert, update }));
   return { insert, select, from };
 });

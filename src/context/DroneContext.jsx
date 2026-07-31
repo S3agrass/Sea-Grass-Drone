@@ -107,6 +107,13 @@ export function DroneProvider({ children }) {
 
   const [fleet, setFleet] = useState([]);
   const [fleetLoading, setFleetLoading] = useState(true);
+  // Mirror of `fleet` for the local-storage path, which has to compute the next
+  // list AND persist it in one go. Doing that inside a setFleet updater means
+  // persisting from inside a render — and StrictMode runs updaters twice.
+  const fleetRef = useRef(fleet);
+  useEffect(() => {
+    fleetRef.current = fleet;
+  }, [fleet]);
   const [activeDroneId, setActiveDroneId] = useState(
     () => localStorage.getItem("seagrass-active-drone") || null,
   );
@@ -221,20 +228,31 @@ export function DroneProvider({ children }) {
 
   const refreshFleet = useCallback(async () => {
     setFleetLoading(true);
+    let failure = null;
     if (useCloudFleet) {
       const { data, error } = await supabase
         .from("drones")
         .select("*")
         .order("created_at", { ascending: true });
       if (!error && data) setFleet(data);
-      else setFleet([]);
+      else {
+        // A failed read used to be indistinguishable from an empty fleet: the
+        // list was blanked and nothing was said. That is how a drone could be
+        // registered successfully and still never appear — the insert worked,
+        // the reload behind it did not, and the page looked exactly like a
+        // fleet with nothing in it.
+        setFleet([]);
+        failure = error?.message || "Could not load your fleet.";
+        pushToast("error", `Could not load fleet: ${failure}`);
+      }
     } else if (localMode || !supabaseConfigured) {
       setFleet(loadLocalFleet());
     } else {
       setFleet([]);
     }
     setFleetLoading(false);
-  }, [useCloudFleet, localMode]);
+    return { ok: !failure, error: failure };
+  }, [useCloudFleet, localMode, pushToast]);
 
   useEffect(() => {
     refreshFleet();
@@ -258,24 +276,53 @@ export function DroneProvider({ children }) {
           // account, which is part of why nothing was ever attributable.
           owner: user.id,
         };
-        const { error } =
+        // .select() so the write reports back what it actually stored. Without
+        // it a policy that silently matches no rows — an update against a row
+        // you don't own — returns no error and writes nothing, which is
+        // "success" as far as the caller can tell.
+        const { data, error } =
           drone.id && drone.id !== "new"
-            ? await supabase.from("drones").update(row).eq("id", drone.id)
-            : await supabase.from("drones").insert(row);
-        // Previously unchecked: a rejected insert/update (RLS, a bad
-        // constraint) failed exactly like this once before — silently, with
-        // the modal closing and the fleet just staying empty and no clue why.
-        if (error) pushToast("error", `Could not save drone: ${error.message}`);
-        await refreshFleet();
+            ? await supabase.from("drones").update(row).eq("id", drone.id).select()
+            : await supabase.from("drones").insert(row).select();
+        // Previously unchecked, then toasted into a page that renders no
+        // toasts: a rejected insert/update (RLS, an expired session, a missing
+        // column) failed silently, with the modal closing and the fleet just
+        // staying empty and no clue why. The error is now RETURNED as well, so
+        // the caller can keep the form open and say what went wrong.
+        if (error) {
+          pushToast("error", `Could not save drone: ${error.message}`);
+          return { ok: false, error: error.message };
+        }
+        if (!data?.length) {
+          const detail =
+            "the database accepted the request but stored no row (check that you are still signed in).";
+          pushToast("error", `Could not save drone — ${detail}`);
+          return { ok: false, error: detail };
+        }
+        const reloaded = await refreshFleet();
+        return reloaded;
       } else {
-        setFleet((prev) => {
-          const next =
-            drone.id && drone.id !== "new"
-              ? prev.map((d) => (d.id === drone.id ? { ...d, ...drone } : d))
-              : [...prev, { ...drone, id: `local-${Date.now()}` }];
+        // The id is minted OUT here, not inside the updater: React invokes
+        // state updaters twice under StrictMode, and Date.now() inside one can
+        // hand the two passes different ids for the same drone.
+        const id =
+          drone.id && drone.id !== "new" ? drone.id : `local-${Date.now()}`;
+        const prev = fleetRef.current;
+        const next = prev.some((d) => d.id === id)
+          ? prev.map((d) => (d.id === id ? { ...d, ...drone, id } : d))
+          : [...prev, { ...drone, id }];
+        setFleet(next);
+        try {
           localStorage.setItem("seagrass-fleet", JSON.stringify(next));
-          return next;
-        });
+        } catch {
+          // The drone is in the list either way; what the operator needs to
+          // know is that it won't survive a reload.
+          pushToast(
+            "warn",
+            "Drone added, but this browser could not save it — it will be gone after a reload.",
+          );
+        }
+        return { ok: true, error: null };
       }
     },
     [user, useCloudFleet, refreshFleet, pushToast],
@@ -285,14 +332,20 @@ export function DroneProvider({ children }) {
     async (id) => {
       if (useCloudFleet) {
         const { error } = await supabase.from("drones").delete().eq("id", id);
-        if (error) pushToast("error", `Could not remove drone: ${error.message}`);
-        await refreshFleet();
+        if (error) {
+          pushToast("error", `Could not remove drone: ${error.message}`);
+          return { ok: false, error: error.message };
+        }
+        return await refreshFleet();
       } else {
-        setFleet((prev) => {
-          const next = prev.filter((d) => d.id !== id);
+        const next = fleetRef.current.filter((d) => d.id !== id);
+        setFleet(next);
+        try {
           localStorage.setItem("seagrass-fleet", JSON.stringify(next));
-          return next;
-        });
+        } catch {
+          pushToast("warn", "Removed, but this browser could not save the change.");
+        }
+        return { ok: true, error: null };
       }
     },
     [useCloudFleet, refreshFleet, pushToast],
