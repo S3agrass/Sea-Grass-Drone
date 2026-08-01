@@ -9,6 +9,7 @@ import {
   useMapEvents,
 } from "react-leaflet";
 import L from "leaflet";
+import { routePoints, routeLegs, routeLength } from "../lib/route";
 import "leaflet/dist/leaflet.css";
 
 const FALLBACK_CENTER = [37.8065, -122.4305]; // Fort Mason, San Francisco
@@ -144,23 +145,13 @@ export default function DroneMap({
   const center = dronePos || userPos || FALLBACK_CENTER;
 
   // Route legs: drone -> wp1 -> wp2 ... Each leg carries its own length and the
-  // midpoint to hang the label on. Leaflet's distanceTo does proper spherical
-  // distance, so this stays honest at any latitude — no flat-earth approximation.
-  const legs = useMemo(() => {
-    const points = dronePos ? [dronePos, ...waypoints] : waypoints;
-    const out = [];
-    for (let i = 1; i < points.length; i++) {
-      const a = L.latLng(points[i - 1]);
-      const b = L.latLng(points[i]);
-      out.push({
-        mid: [(a.lat + b.lat) / 2, (a.lng + b.lng) / 2],
-        metres: a.distanceTo(b),
-      });
-    }
-    return out;
-  }, [dronePos, waypoints]);
+  // midpoint to hang the label on. The maths lives in src/lib/route.js so the
+  // distances can be checked without rendering a map — see its note on how
+  // accurate they are.
+  const points = useMemo(() => routePoints(dronePos, waypoints), [dronePos, waypoints]);
+  const legs = useMemo(() => routeLegs(points), [points]);
 
-  const totalMetres = legs.reduce((sum, leg) => sum + leg.metres, 0);
+  const totalMetres = routeLength(legs);
 
   return (
     <div className="map-wrap">
@@ -209,10 +200,21 @@ export default function DroneMap({
         {waypoints.map((wp, i) => (
           <Marker key={`${wp[0]}-${wp[1]}-${i}`} position={wp} icon={waypointIcon(i)} />
         ))}
-        {waypoints.length > 0 && dronePos && (
+        {/* Dotted, and drawn from `points` rather than from the drone — with no
+            GPS fix there is no vehicle position, and this used to render
+            nothing at all, leaving the distance labels floating between pins
+            with no line between them. Round caps make the dashes read as dots
+            rather than as very short ticks. */}
+        {points.length > 1 && (
           <Polyline
-            positions={[dronePos, ...waypoints]}
-            pathOptions={{ color: "#ffb454", weight: 2, dashArray: "6 5", opacity: 0.85 }}
+            positions={points}
+            pathOptions={{
+              color: "#ffb454",
+              weight: 2.5,
+              dashArray: "1 8",
+              lineCap: "round",
+              opacity: 0.9,
+            }}
           />
         )}
 
