@@ -59,22 +59,30 @@ beforeEach(() => {
 });
 
 describe('deck layout', () => {
-  // The strips used to be two stacked rows and the deck paid for both their
-  // heights. Row 1 — map and camera — is the only 1fr, so that came straight
-  // off the two things the operator actually watches.
-  it('puts instruments and sonar in one row, not two', () => {
+  // The sonar was a full-width strip of its own, so the deck spent a whole row
+  // — about 145px — on it. Row 1, map and camera, is the only 1fr and paid for
+  // all of it. In the rail it costs the map nothing.
+  it('puts the sonar in the rail, not in a row of its own', () => {
     const { container } = renderDeck();
-    const strip = container.querySelector('.deck-strip');
-    expect(strip).toBeInTheDocument();
-    expect(strip.querySelector('.inst-cluster')).toBeInTheDocument();
-    expect(strip).toContainElement(screen.getByText('sonar'));
+    expect(container.querySelector('.deck-right')).toContainElement(
+      screen.getByText('sonar'),
+    );
+    expect(container.querySelector('.deck > .sonar-panel')).toBeNull();
   });
 
-  it('keeps the strip a direct child of the deck, so focus mode still hides it', () => {
-    // Focus mode hides `.deck > *:not(.deck-map)`. Nesting the strip any deeper
-    // would leave it on screen with the map supposedly full-bleed.
+  it('leaves the instruments the full width of the deck', () => {
+    // Half the width forces ten tile-widths of instruments onto two rows, which
+    // costs more height than the sonar row it was meant to save.
     const { container } = renderDeck();
-    expect(container.querySelector('.deck > .deck-strip')).toBeInTheDocument();
+    expect(container.querySelector('.deck > .inst-cluster')).toBeInTheDocument();
+  });
+
+  it('keeps focus mode able to hide everything but the map', () => {
+    // Focus mode hides `.deck > *:not(.deck-map)`, so both survivors have to
+    // stay direct children of the deck.
+    const { container } = renderDeck();
+    const kids = [...container.querySelector('.deck').children];
+    expect(kids.every((k) => k.matches('.deck-map, .deck-right, .inst-cluster'))).toBe(true);
   });
 });
 

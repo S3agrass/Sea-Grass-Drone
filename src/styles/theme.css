@@ -83,16 +83,20 @@
      No rebuild, no guessing.
 
      HOW THE DECK IS PUT TOGETHER
-       row 1  map | camera+gamepad rail                <- the only 1fr row
-       row 2  instruments | sonar, ABREAST             <- sized by content
+       row 1  map | rail: camera + sonar + gamepad     <- the only 1fr row
+       row 2  instrument strip                         <- sized by content
 
-     The two strips used to be rows 2 and 3, stacked, and the deck paid for
-     both their heights. Side by side it pays for the taller one, and the
-     difference — around 110px — went to row 1.
+     The sonar used to be a full-width row of its own, which cost the deck
+     ~145px that row 1 paid for. In the rail it costs the map nothing.
+
+     Instruments keep the full width on purpose. Ten tile-widths of them in
+     half a deck wrap onto two rows, and that second row costs MORE height
+     than the sonar row it was meant to save — which is exactly what happened
+     when they were tried side by side.
 
      Because row 1 is the sole 1fr, it swallows whatever row 2 gives up. So
-     every pixel off --sonar-h or the instrument tiles still goes straight to
-     the map and the camera, 1:1.
+     every pixel off the instrument tiles still goes straight to the map and
+     the camera, 1:1.
      ================================================================== */
 
   /* There is no --deck-left-w any more. The left rail was a full-height column

@@ -103,17 +103,16 @@ export default function ControlPage() {
 
         <aside className="deck-right">
           <CameraView />
+          {/* The sonar lives in the rail now, next to the other sensor. As a
+              full-width strip of its own it cost the deck a whole row — about
+              145px — and row 1 is the only 1fr, so the map paid for all of it.
+              The echogram gets less time history at this width; that is the
+              trade for a map that is ~120px taller. Fold it if you want the
+              rail's height back for the camera. */}
+          <SonarView />
           <GamepadControl />
         </aside>
 
-        {/* Instruments and sonar sit SIDE BY SIDE in one row rather than
-            stacked as two. Stacked, the deck paid for both their heights —
-            about 260px — and row 1 is the only 1fr, so every pixel of that
-            came off the map and the camera. Side by side the row costs the
-            taller of the two instead of the sum, and the difference goes
-            straight upstairs. They wrap back to two rows under 1100px, where
-            side-by-side would squeeze the echogram's time history too far. */}
-        <div className="deck-strip">
         {/* Instruments run as a full-width strip rather than down the left
             rail. Ten of them stacked in a 250px column came to ~1210px of
             content in ~790px of deck, so the rail always scrolled and you
@@ -188,11 +187,7 @@ export default function ControlPage() {
             />
         </div>
 
-        {/* The echogram still needs horizontal room for its time history, so
-            it takes the wider share of the row and drops to full width when
-            the deck gets narrow. */}
-        <SonarView />
-        </div>
+
       </div>
     </div>
   );

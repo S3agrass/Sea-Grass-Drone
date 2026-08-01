@@ -402,29 +402,6 @@
   padding: var(--deck-pad);
 }
 
-/* The bottom row: instruments and sonar abreast. The sonar takes the larger
-   share because the echogram is a time history and reads along its width; the
-   instruments are a tile grid that reflows happily into whatever is left.
-
-   Under 1100px they stack again. Two cramped halves of a narrow deck is worse
-   than one full-width strip each — the echogram in particular stops being
-   readable long before the tiles do. */
-.deck-strip {
-  grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
-  gap: var(--deck-gap);
-  align-items: start;
-}
-
-@media (max-width: 1100px) {
-  .deck-strip { grid-template-columns: minmax(0, 1fr); }
-}
-
-/* Both children were full-width strips in their own right; inside the row they
-   are ordinary grid items. */
-.deck-strip > .inst-cluster,
-.deck-strip > .sonar-panel { grid-column: auto; }
 
 /* Focus mode — the map takes the whole deck.
 
@@ -442,6 +419,9 @@
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
 }
+/* The sonar sits in the rail now; it no longer spans the deck. */
+.deck-right > .sonar-panel { grid-column: auto; width: 100%; }
+
 .deck.map-focus > *:not(.deck-map) {
   display: none;
 }
@@ -1326,9 +1306,15 @@
   object-fit: contain;
 }
 
+/* 16:9, matching what the Pi actually sends: camera_stream.py encodes
+   1280x720. The box was 4/3, so object-fit: contain letterboxed every frame —
+   at the current rail width that reserved about 90px of black above and below
+   a picture that was never going to fill it. Correcting the ratio makes the
+   panel exactly as tall as the video and hands the difference to the rest of
+   the rail. */
 .camera-feed {
   position: relative;
-  aspect-ratio: 4 / 3;
+  aspect-ratio: 16 / 9;
   background: var(--abyss);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-sm);
