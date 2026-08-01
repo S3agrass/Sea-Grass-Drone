@@ -1753,8 +1753,15 @@ def read_telemetry():
             out["pitch"] = round(math.degrees(msg.pitch), 1)
             out["yaw"] = round(math.degrees(msg.yaw) % 360, 1)
         elif t == "GLOBAL_POSITION_INT":
-            out["lat"] = msg.lat / 1e7
-            out["lon"] = msg.lon / 1e7
+            # ArduPilot fills this message with zeroes until it has a GPS fix,
+            # and 0/0 is a real coordinate — the Gulf of Guinea. Reporting it as
+            # the vehicle's position put the drone marker 11,000 km away and ran
+            # every waypoint's route line off the map towards it. Send nothing
+            # rather than somewhere wrong; the UI already handles an absent fix.
+            # Depth comes off the barometer, not the GPS, so it is unaffected.
+            if msg.lat != 0 or msg.lon != 0:
+                out["lat"] = msg.lat / 1e7
+                out["lon"] = msg.lon / 1e7
             out["depth"] = max(0.0, -msg.relative_alt / 1000.0)
         elif t == "SYS_STATUS":
             if msg.battery_remaining >= 0:
