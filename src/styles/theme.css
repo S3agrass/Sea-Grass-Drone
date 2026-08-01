@@ -83,13 +83,16 @@
      No rebuild, no guessing.
 
      HOW THE DECK IS PUT TOGETHER
-       row 1  map | camera+gamepad rail               <- the only 1fr row
-       row 2  instrument strip (link panel lives here) <- sized by content
-       row 3  sonar strip                             <- sized by content
+       row 1  map | camera+gamepad rail                <- the only 1fr row
+       row 2  instruments | sonar, ABREAST             <- sized by content
 
-     Because row 1 is the sole 1fr, it swallows whatever rows 2 and 3 give
-     up. So every pixel you take off --sonar-h or the instrument tiles goes
-     straight to the map, 1:1. That is the lever for "bigger map".
+     The two strips used to be rows 2 and 3, stacked, and the deck paid for
+     both their heights. Side by side it pays for the taller one, and the
+     difference — around 110px — went to row 1.
+
+     Because row 1 is the sole 1fr, it swallows whatever row 2 gives up. So
+     every pixel off --sonar-h or the instrument tiles still goes straight to
+     the map and the camera, 1:1.
      ================================================================== */
 
   /* There is no --deck-left-w any more. The left rail was a full-height column
@@ -104,16 +107,20 @@
 
      The right rail is THE dial for camera size, and not for the reason you
      might expect. The feed box takes all the vertical slack in the rail, so on
-     any normal window it is much taller than a 4:3 stream needs at this width
-     — the video is width-limited and object-fit: contain letterboxes the rest
+     any normal window it is much taller than the stream needs at this width —
+     the video is width-limited and object-fit: contain letterboxes the rest
      away as black bars. Making the panel taller therefore does nothing you can
      see; making the rail wider scales the picture itself, and eats the bars it
-     already had. 340px was showing a ~340x255 image in a box some 500px tall.
+     already had.
+
+     Widened from clamp(360px, 30vw, 520px): the map paid ~60px of width for it
+     and got ~110px of height back from the strips going abreast, which is the
+     better side of that trade in area as well as in what the map is for.
 
      clamp rather than a flat number so a big display actually spends its extra
-     width on the feed, while a 1280px laptop keeps a usable map: 30vw is
-     ~384px at 1280, ~432px at 1440, and pinned at 520px from 1734px up. */
-  --deck-right-w: clamp(360px, 30vw, 520px);
+     width on the feed, while a 1280px laptop keeps a usable map: 34vw is
+     ~435px at 1280, ~490px at 1440, and pinned at 620px from 1824px up. */
+  --deck-right-w: clamp(420px, 34vw, 620px);
 
   /* Breathing room between and around the deck's panels. There are four gaps
      and two pads across the deck, so a couple of pixels off each is worth

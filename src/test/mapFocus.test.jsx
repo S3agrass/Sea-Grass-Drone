@@ -58,6 +58,26 @@ beforeEach(() => {
   telemetry = {};
 });
 
+describe('deck layout', () => {
+  // The strips used to be two stacked rows and the deck paid for both their
+  // heights. Row 1 — map and camera — is the only 1fr, so that came straight
+  // off the two things the operator actually watches.
+  it('puts instruments and sonar in one row, not two', () => {
+    const { container } = renderDeck();
+    const strip = container.querySelector('.deck-strip');
+    expect(strip).toBeInTheDocument();
+    expect(strip.querySelector('.inst-cluster')).toBeInTheDocument();
+    expect(strip).toContainElement(screen.getByText('sonar'));
+  });
+
+  it('keeps the strip a direct child of the deck, so focus mode still hides it', () => {
+    // Focus mode hides `.deck > *:not(.deck-map)`. Nesting the strip any deeper
+    // would leave it on screen with the map supposedly full-bleed.
+    const { container } = renderDeck();
+    expect(container.querySelector('.deck > .deck-strip')).toBeInTheDocument();
+  });
+});
+
 describe('instrument strip fold', () => {
   // Row 1 — map and camera — is the deck's only 1fr, so it takes whatever the
   // strips give up. Folding this is the way to make that row taller while

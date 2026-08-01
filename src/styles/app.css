@@ -393,12 +393,38 @@
      Two columns, not three: the left rail is gone and the map starts at the
      deck's edge. */
   grid-template-columns: minmax(0, 1fr) var(--deck-right-w);
-  /* Row 1 takes the slack; rows 2 and 3 are the instrument and sonar strips,
-     both full-width and sized by their content. */
-  grid-template-rows: minmax(0, 1fr) auto auto;
+  /* Two rows now, not three. The instrument and sonar strips share row 2
+     side by side instead of stacking, so the deck pays for the taller of the
+     two rather than both. Row 1 is still the only 1fr and still swallows
+     everything they give up. */
+  grid-template-rows: minmax(0, 1fr) auto;
   gap: var(--deck-gap);
   padding: var(--deck-pad);
 }
+
+/* The bottom row: instruments and sonar abreast. The sonar takes the larger
+   share because the echogram is a time history and reads along its width; the
+   instruments are a tile grid that reflows happily into whatever is left.
+
+   Under 1100px they stack again. Two cramped halves of a narrow deck is worse
+   than one full-width strip each — the echogram in particular stops being
+   readable long before the tiles do. */
+.deck-strip {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+  gap: var(--deck-gap);
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .deck-strip { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Both children were full-width strips in their own right; inside the row they
+   are ordinary grid items. */
+.deck-strip > .inst-cluster,
+.deck-strip > .sonar-panel { grid-column: auto; }
 
 /* Focus mode — the map takes the whole deck.
 
