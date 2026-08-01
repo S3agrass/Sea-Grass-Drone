@@ -397,7 +397,10 @@
      side by side instead of stacking, so the deck pays for the taller of the
      two rather than both. Row 1 is still the only 1fr and still swallows
      everything they give up. */
-  grid-template-rows: minmax(0, 1fr) auto;
+  /* auto until the operator drags the splitter, which sets --deck-strip-h.
+     Row 1 is still the only 1fr, so whatever the strip is given or gives up
+     lands on the map, camera and sonar. */
+  grid-template-rows: minmax(0, 1fr) var(--deck-strip-h, auto);
   gap: var(--deck-gap);
   padding: var(--deck-pad);
 }
@@ -419,6 +422,56 @@
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
 }
+/* SPLITTERS — drag to resize, double-click or Home to hand the panel back to
+   the stylesheet's own sizing.
+
+   They sit in the gap between panels, wider in hit area than in appearance:
+   8px of grab for a 2px line, which is roughly the floor for a pointer target
+   and the reason the visible grip is separate from the handle. */
+.resizer {
+  position: absolute;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  touch-action: none;   /* or a drag scrolls the page on a trackpad/touchscreen */
+}
+.resizer-grip {
+  background: var(--line-soft);
+  border-radius: 2px;
+  transition: background 0.15s;
+}
+.resizer:hover .resizer-grip,
+.resizer:focus-visible .resizer-grip { background: var(--teal); }
+.resizer:focus-visible { outline: none; }
+
+/* Column splitter: the rail's leading edge, full height of the rail. */
+.resizer-vertical {
+  top: 0;
+  bottom: 0;
+  left: calc(var(--deck-gap) / -2 - 4px);
+  width: 8px;
+  cursor: col-resize;
+}
+.resizer-vertical .resizer-grip { width: 2px; height: 44px; }
+
+/* Row splitter: the strip's top edge. Stops short of the fold button so the
+   two controls in that corner cannot be hit by accident. */
+.resizer-horizontal {
+  left: 0;
+  right: 28px;
+  top: calc(var(--deck-gap) / -2 - 4px);
+  height: 8px;
+  cursor: row-resize;
+}
+.resizer-horizontal .resizer-grip { height: 2px; width: 44px; }
+
+/* Given an explicit height the strip may be shorter than its tiles, so it has
+   to be able to scroll — a dragged-down strip that clips the battery reading
+   would be a worse outcome than a scrollbar. */
+.inst-cluster { min-height: 0; overflow: auto; }
+
 /* Two columns inside one tile. This is what makes combining tiles a saving
    rather than a cost: the strip is a single row, so its height is its tallest
    tile — merging two tiles by stacking their contents would make that tile

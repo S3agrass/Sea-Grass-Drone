@@ -6,6 +6,7 @@ import CameraView from "../components/CameraView";
 import GamepadControl from "../components/GamepadControl";
 import ConnectionPanel from "../components/ConnectionPanel";
 import SonarView from "../components/SonarView";
+import Resizer from "../components/Resizer";
 import Toasts from "../components/Toasts";
 import {
   SonarGauge,
@@ -15,6 +16,18 @@ import {
 } from "../components/Instruments";
 import { useDrone } from "../context/DroneContext";
 import { hasFix } from "../lib/geo";
+
+/** A stored panel size, or null when the operator has never set one. Anything
+ *  unparseable is treated as unset rather than trusted into the layout. */
+function readSize(key) {
+  const raw = Number(localStorage.getItem(key));
+  return Number.isFinite(raw) && raw > 0 ? raw : null;
+}
+
+function writeSize(key, value) {
+  if (value == null) localStorage.removeItem(key);
+  else localStorage.setItem(key, String(value));
+}
 
 export default function ControlPage() {
   const {
@@ -44,6 +57,18 @@ export default function ControlPage() {
   useEffect(() => {
     localStorage.setItem("seagrass-inst-collapsed", instCollapsed ? "1" : "0");
   }, [instCollapsed]);
+
+  // Operator-set panel sizes. null means "whatever the stylesheet says", which
+  // is how a deck that has never been dragged still follows the theme's clamp()
+  // across window sizes — storing a default the moment the page loads would
+  // freeze every screen to whatever the first one happened to be.
+  const [railW, setRailW] = useState(() => readSize("seagrass-rail-w"));
+  const [stripH, setStripH] = useState(() => readSize("seagrass-strip-h"));
+  useEffect(() => writeSize("seagrass-rail-w", railW), [railW]);
+  useEffect(() => writeSize("seagrass-strip-h", stripH), [stripH]);
+
+  const railRef = useRef(null);
+  const stripRef = useRef(null);
 
   const [waypoints, setWaypoints] = useState([]);
   const [trail, setTrail] = useState([]);
@@ -84,7 +109,13 @@ export default function ControlPage() {
     <div className="app-shell">
       <TopBar />
       <Toasts />
-      <div className={`deck ${mapFocus ? "map-focus" : ""}`}>
+      <div
+        className={`deck ${mapFocus ? "map-focus" : ""}`}
+        style={{
+          ...(railW ? { "--deck-right-w": `${railW}px` } : null),
+          ...(stripH ? { "--deck-strip-h": `${stripH}px` } : null),
+        }}
+      >
         <main className="deck-map">
           <DroneMap
             dronePos={dronePos}
@@ -98,7 +129,17 @@ export default function ControlPage() {
           />
         </main>
 
-        <aside className="deck-right">
+        <aside className="deck-right" ref={railRef}>
+          <Resizer
+            orientation="vertical"
+            value={railW}
+            min={300}
+            max={900}
+            measure={() => railRef.current?.getBoundingClientRect().width ?? 420}
+            onChange={setRailW}
+            onReset={() => setRailW(null)}
+            label="Camera and sonar rail width"
+          />
           <CameraView />
           {/* The sonar lives in the rail now, next to the other sensor. As a
               full-width strip of its own it cost the deck a whole row — about
@@ -123,7 +164,22 @@ export default function ControlPage() {
             off the map's width. As a wide tile in this strip it costs three
             columns of a row that had spare capacity, and the map gets the
             whole rail back. */}
-        <div className={`inst-cluster${instCollapsed ? " collapsed" : ""}`}>
+        <div
+          className={`inst-cluster${instCollapsed ? " collapsed" : ""}`}
+          ref={stripRef}
+        >
+          {!instCollapsed && (
+            <Resizer
+              orientation="horizontal"
+              value={stripH}
+              min={64}
+              max={520}
+              measure={() => stripRef.current?.getBoundingClientRect().height ?? 150}
+              onChange={setStripH}
+              onReset={() => setStripH(null)}
+              label="Instrument strip height"
+            />
+          )}
             {/* Absolutely positioned so it costs the strip no height while
                 open — a header row here would take back some of what folding
                 is meant to give the map. */}
