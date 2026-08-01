@@ -13,6 +13,29 @@ export function AuthProvider({ children }) {
 		() => sessionStorage.getItem("seagrass-local-mode") === "1",
 	);
 
+	// Signing in supersedes local mode, and nothing used to say so. `signOut`
+	// cleared the flag but signing IN did not, and it lives in sessionStorage,
+	// so a session that entered local mode and then signed in kept localMode
+	// true alongside a genuine user. The cloud fleet was gated on `!localMode`,
+	// so that account's drones and settings were quietly read from and written
+	// to this browser's storage instead of the account — in that tab only.
+	// Open a second tab, no flag, real cloud fleet, none of the first tab's
+	// work in it: "my settings don't save" and "adding a drone does nothing"
+	// were the same bug.
+	//
+	// The entry point is gone now — "Continue without account" was removed — so
+	// only a tab that was already in local mode can still reach this. Kept
+	// anyway: it costs two lines, and it is what makes a stale flag harmless
+	// rather than something DroneContext has to keep trusting.
+	const applySession = (session) => {
+		const nextUser = session?.user ?? null;
+		setUser(nextUser);
+		if (nextUser) {
+			sessionStorage.removeItem("seagrass-local-mode");
+			setLocalMode(false);
+		}
+	};
+
 	useEffect(() => {
 		if (!supabaseConfigured) {
 			setLoading(false);
@@ -27,12 +50,12 @@ export function AuthProvider({ children }) {
 		let active = true;
 		supabase.auth.getSession().then(({ data }) => {
 			if (!active) return;
-			setUser(data.session?.user ?? null);
+			applySession(data.session);
 			setLoading(false);
 		});
 
 		const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-			setUser(session?.user ?? null);
+			applySession(session);
 			setLoading(false);
 		});
 
@@ -64,6 +87,10 @@ export function AuthProvider({ children }) {
 		user,
 		loading,
 		localMode,
+		// SettingsPage reads this off useAuth() and always got undefined, so its
+		// Account section told anyone in local mode to "configure Supabase in
+		// .env" however configured Supabase actually was.
+		supabaseConfigured,
 		authed: !!user || localMode,
 		signIn,
 		signUp,
