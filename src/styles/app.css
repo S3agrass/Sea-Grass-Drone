@@ -949,6 +949,15 @@
   line-height: 1;
 }
 .strip-collapse:hover { color: var(--ink); background: var(--rail); }
+
+/* The instrument strip's toggle floats in the corner rather than sitting in a
+   header row, so an open strip is exactly as tall as it was before this
+   existed. Collapsed, the strip is just the button. */
+.inst-cluster { position: relative; }
+.inst-collapse { position: absolute; top: 2px; right: 6px; z-index: 2; }
+.inst-cluster.collapsed { display: block; padding: 2px 6px; min-height: 0; }
+.inst-cluster.collapsed > *:not(.inst-collapse) { display: none; }
+.inst-cluster.collapsed .inst-collapse { position: static; }
 .sonar-panel.collapsed .panel-head { margin-bottom: 0; }
 
 .sonar-panel .panel-head { margin-bottom: 8px; gap: 10px; justify-content: flex-start; }

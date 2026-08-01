@@ -12,12 +12,16 @@ import ControlPage from '../pages/ControlPage';
 
 // Leaflet needs a real layout engine; jsdom has none, so the map itself is
 // stubbed. What matters here is the deck's layout state, not tile rendering.
+let lastMapProps;
 vi.mock('../components/DroneMap', () => ({
-  default: ({ focused, onToggleFocus }) => (
-    <button onClick={onToggleFocus}>
-      {focused ? '⤡ Exit focus' : '⛶ Focus map'}
-    </button>
-  ),
+  default: (props) => {
+    lastMapProps = props;
+    return (
+      <button onClick={props.onToggleFocus}>
+        {props.focused ? '⤡ Exit focus' : '⛶ Focus map'}
+      </button>
+    );
+  },
 }));
 
 vi.mock('../components/CameraView', () => ({ default: () => <div>camera</div> }));
@@ -27,10 +31,11 @@ vi.mock('../components/ConnectionPanel', () => ({ default: () => <div>link</div>
 vi.mock('../components/TopBar', () => ({ default: () => <div>topbar</div> }));
 vi.mock('../components/Toasts', () => ({ default: () => null }));
 
+let telemetry = {};
 vi.mock('../context/DroneContext', () => ({
   useDrone: () => ({
     activeDrone: { id: 'd1', name: 'Sim' },
-    telemetry: {},
+    telemetry,
     sonar: {},
     pid: {},
     headingHold: {},
@@ -50,6 +55,65 @@ function renderDeck() {
 
 beforeEach(() => {
   localStorage.clear();
+  telemetry = {};
+});
+
+describe('instrument strip fold', () => {
+  // Row 1 — map and camera — is the deck's only 1fr, so it takes whatever the
+  // strips give up. Folding this is the way to make that row taller while
+  // keeping the camera on screen, which focus mode does not.
+  it('starts open', () => {
+    const { container } = renderDeck();
+    expect(container.querySelector('.inst-cluster')).not.toHaveClass('collapsed');
+  });
+
+  it('folds and unfolds', async () => {
+    const user = userEvent.setup();
+    const { container } = renderDeck();
+
+    await user.click(screen.getByRole('button', { expanded: true }));
+    expect(container.querySelector('.inst-cluster')).toHaveClass('collapsed');
+
+    await user.click(screen.getByRole('button', { expanded: false }));
+    expect(container.querySelector('.inst-cluster')).not.toHaveClass('collapsed');
+  });
+
+  it('remembers the fold across a reload', () => {
+    localStorage.setItem('seagrass-inst-collapsed', '1');
+    const { container } = renderDeck();
+    expect(container.querySelector('.inst-cluster')).toHaveClass('collapsed');
+  });
+
+  it('keeps the instruments mounted while folded', () => {
+    // Hidden by CSS, like the panels in focus mode: the link panel keeps its
+    // state rather than remounting every time the strip is reopened.
+    localStorage.setItem('seagrass-inst-collapsed', '1');
+    renderDeck();
+    expect(screen.getByText('link')).toBeInTheDocument();
+  });
+});
+
+describe('drone position on the deck', () => {
+  // The Pixhawk reports 0/0 until it has a GPS fix. Passed through, it put the
+  // drone at Null Island and ran the route line from every waypoint off the
+  // bottom-right of the map towards it.
+  it('withholds a position while there is no GPS fix', () => {
+    telemetry = { lat: 0, lon: 0 };
+    renderDeck();
+    expect(lastMapProps.dronePos).toBe(null);
+  });
+
+  it('passes a real position through', () => {
+    telemetry = { lat: 37.8065, lon: -122.4305 };
+    renderDeck();
+    expect(lastMapProps.dronePos).toEqual([37.8065, -122.4305]);
+  });
+
+  it('withholds a position when telemetry has none yet', () => {
+    telemetry = {};
+    renderDeck();
+    expect(lastMapProps.dronePos).toBe(null);
+  });
 });
 
 describe('map focus mode', () => {

@@ -17,6 +17,7 @@ import {
   HeadingHoldGauge,
 } from "../components/Instruments";
 import { useDrone } from "../context/DroneContext";
+import { hasFix } from "../lib/geo";
 
 export default function ControlPage() {
   const {
@@ -35,13 +36,27 @@ export default function ControlPage() {
     localStorage.setItem("seagrass-map-focus", mapFocus ? "1" : "0");
   }, [mapFocus]);
 
+  // The instrument strip folds, like the sonar one below it. Row 1 (map and
+  // camera) is the deck's only 1fr, so it swallows whatever the strips give up
+  // — folding this hands its whole height to the map and the camera, and unlike
+  // focus mode it keeps the camera on screen. Persisted: an operator who wants
+  // the readouts out of the way wants them out of the way for the dive.
+  const [instCollapsed, setInstCollapsed] = useState(
+    () => localStorage.getItem("seagrass-inst-collapsed") === "1",
+  );
+  useEffect(() => {
+    localStorage.setItem("seagrass-inst-collapsed", instCollapsed ? "1" : "0");
+  }, [instCollapsed]);
+
   const [waypoints, setWaypoints] = useState([]);
   const [trail, setTrail] = useState([]);
   const lastTrailPoint = useRef(null);
 
+  // hasFix, not a null check: the Pixhawk reports 0/0 before it has a GPS fix,
+  // and 0 is not null. See src/lib/geo.js for what that did to the map.
   const dronePos = useMemo(
     () =>
-      telemetry.lat != null && telemetry.lon != null
+      hasFix(telemetry.lat, telemetry.lon)
         ? [telemetry.lat, telemetry.lon]
         : null,
     [telemetry.lat, telemetry.lon],
@@ -104,7 +119,22 @@ export default function ControlPage() {
             off the map's width. As a wide tile in this strip it costs three
             columns of a row that had spare capacity, and the map gets the
             whole rail back. */}
-        <div className="inst-cluster">
+        <div className={`inst-cluster${instCollapsed ? " collapsed" : ""}`}>
+            {/* Absolutely positioned so it costs the strip no height while
+                open — a header row here would take back some of what folding
+                is meant to give the map. */}
+            <button
+              className="strip-collapse inst-collapse"
+              onClick={() => setInstCollapsed((c) => !c)}
+              aria-expanded={!instCollapsed}
+              title={
+                instCollapsed
+                  ? "Show the instruments"
+                  : "Hide the instruments and give the space to the map and camera"
+              }
+            >
+              {instCollapsed ? "▸ Instruments" : "▾"}
+            </button>
             <ConnectionPanel />
             <Compass heading={telemetry.heading} />
             {/* Depth, altitude and climb in one tile; speed and battery in
