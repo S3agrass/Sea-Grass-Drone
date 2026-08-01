@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import ParticleTitle from "../components/ParticleTitle";
 import { supabaseConfigured } from "../lib/supabase";
 
 export default function LoginPage() {
@@ -92,7 +93,7 @@ export default function LoginPage() {
 				</div>
 
 				<div className="login-hero-inner">
-					<div className="login-brand">SEAGRASS</div>
+					<ParticleTitle text="SEAGRASS" className="login-brand" />
 
 					<div className="login-tagline">
 						Autonomous ocean vehicle command. Connect, pilot, and survey from
