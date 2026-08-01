@@ -419,6 +419,44 @@
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
 }
+/* Two columns inside one tile. This is what makes combining tiles a saving
+   rather than a cost: the strip is a single row, so its height is its tallest
+   tile — merging two tiles by stacking their contents would make that tile
+   taller and push the map, camera and sonar down. Side by side, the merged
+   tile is the same height as the two it replaced and saves a box's worth of
+   padding, border and eyebrow. */
+.inst-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--s3);
+  align-items: start;
+}
+.inst-split > * { min-width: 0; }
+
+/* Divider between the halves, so two columns of numbers do not read as one
+   run-on grid of eight. */
+.inst-split > * + * {
+  padding-left: var(--s3);
+  border-left: 1px solid var(--line-soft);
+}
+
+/* Qualifier on a label — "ALT baro" — where the distinction matters more than
+   a footnote under the tile would carry it. */
+.inst-line-hint {
+  color: var(--faint);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+}
+
+/* The engage control lives inside the autopilot tile now. */
+.btn-small {
+  padding: 3px 8px;
+  font-size: var(--t-small);
+  border-radius: var(--radius-sm);
+  background: var(--rail);
+  align-self: start;
+}
+
 /* The sonar sits in the rail now; it no longer spans the deck. */
 .deck-right > .sonar-panel { grid-column: auto; width: 100%; }
 
