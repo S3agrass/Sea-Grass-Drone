@@ -604,3 +604,192 @@ export function CruisePower({ speed, battery, maxSpeed = 5 }) {
     </div>
   );
 }
+
+/* ────────────────────────────────────────────────────────────────────────────
+   Combined tiles.
+
+   The instrument strip is one row, so its height is the height of its TALLEST
+   tile — merging two tiles by stacking their contents makes the strip taller,
+   not shorter, and row 1 (map, camera, sonar) pays for it. These merge
+   SIDEWAYS: two columns of the same three lines, one box's worth of chrome
+   instead of two. Each saves a tile's padding, border and eyebrow — about
+   40px of width apiece — and nothing gets taller.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+/** Depth, altitude, climb, speed and battery: the five "how is it doing"
+ *  numbers, previously two tiles that always read together anyway. */
+export function Vitals({ depth, altitude, climb, speed, battery, maxDepth = 10, maxSpeed = 5 }) {
+  const depthPct = depth == null ? 0 : Math.min(100, (depth / maxDepth) * 100);
+  const spdPct = speed == null ? 0 : Math.min(100, (speed / maxSpeed) * 100);
+  const pct = battery == null ? 0 : Math.max(0, Math.min(100, battery));
+  const climbTone =
+    climb == null ? "var(--faint)" : climb >= 0 ? "var(--teal)" : "var(--amber)";
+  const battTone =
+    battery == null ? "var(--faint)"
+      : pct > 40 ? "var(--teal)"
+        : pct > 20 ? "var(--amber)"
+          : "var(--red)";
+
+  return (
+    <div className="inst inst-wide">
+      <div className="eyebrow">Vitals</div>
+      <div className="inst-split">
+        <div className="inst-lines">
+          <div className="inst-line">
+            <span className="inst-line-label">DEPTH</span>
+            <span className="inst-line-value mono">{fmt(depth)}</span>
+            <span className="inst-line-unit mono">m</span>
+          </div>
+          <div className="inst-linebar">
+            <div className="inst-linebar-fill" style={{ width: `${depthPct}%` }} />
+          </div>
+          <div className="inst-line">
+            {/* Alt is air pressure and drifts; depth is the one to fly by. The
+                two look interchangeable side by side and are not, which is why
+                the label says which is which rather than relying on a note. */}
+            <span className="inst-line-label">ALT<span className="inst-line-hint"> baro</span></span>
+            <span className="inst-line-value mono">{fmt(altitude, 2)}</span>
+            <span className="inst-line-unit mono">m</span>
+          </div>
+          <div className="inst-line">
+            <span className="inst-line-label">CLIMB</span>
+            <span className="inst-line-value mono" style={{ color: climbTone }}>
+              {climb == null
+                ? "—"
+                : `${climb >= 0 ? "▲" : "▼"} ${Math.abs(climb).toFixed(2)}`}
+            </span>
+            <span className="inst-line-unit mono">m/s</span>
+          </div>
+        </div>
+
+        <div className="inst-lines">
+          <div className="inst-line">
+            <span className="inst-line-label">SPD</span>
+            <span className="inst-line-value mono">{fmt(speed)}</span>
+            <span className="inst-line-unit mono">kn</span>
+          </div>
+          <div className="inst-linebar">
+            <div className="inst-linebar-fill" style={{ width: `${spdPct}%` }} />
+          </div>
+          <div className="inst-line">
+            <span className="inst-line-label">BATT</span>
+            <span className="inst-line-value mono" style={{ color: battTone }}>
+              {battery == null ? "—" : Math.round(pct)}
+            </span>
+            <span className="inst-line-unit mono">%</span>
+          </div>
+          <div className="inst-linebar">
+            <div
+              className="inst-linebar-fill"
+              style={{ width: `${pct}%`, background: battTone }}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Both controllers in one tile. They are the same kind of thing read the same
+ *  way, and only one of them steers: the alt-hold side is display-only, which
+ *  its tag says outright rather than in a paragraph under a moving bar. */
+export function Autopilot({
+  headingHold = {},
+  pid = {},
+  armed = false,
+  onEngage,
+  onRelease,
+}) {
+  const { engaged = false, suspended = false, setpoint: hSet, heading, error: hErr,
+          output: hOut, ok: hOk = false } = headingHold;
+  const { setpoint: pSet, measurement, error: pErr, output: pOut, ok: pOk = false } = pid;
+
+  const state = !engaged ? "OFF" : suspended ? "MANUAL" : "HOLD";
+  const tone =
+    state === "HOLD" ? "var(--teal)"
+      : state === "MANUAL" ? "var(--amber)"
+        : "var(--faint)";
+  const hOutTone = !hOk ? "var(--faint)" : (hOut ?? 0) >= 0 ? "var(--teal)" : "var(--amber)";
+  const hOutPct = hOut == null ? 0 : Math.min(100, Math.abs(hOut) * 100);
+  const blocked = !engaged && !armed;
+
+  return (
+    <div className="inst inst-wide">
+      <div className="eyebrow">Autopilot</div>
+      <div className="inst-split">
+        <div className="pid">
+          <div className="pid-row mono">
+            <span className="pid-label">hdg</span>
+            <span className="pid-tag mono" style={{ color: tone, borderColor: tone }}>
+              {state}
+            </span>
+            <span className="pid-label">hold</span>
+            <span className="pid-num">{hSet == null ? "—" : `${fmt(hSet, 0)}°`}</span>
+          </div>
+          <div className="pid-row mono">
+            <span className="pid-label">now</span>
+            <span className="pid-num">{heading == null ? "—" : `${fmt(heading, 0)}°`}</span>
+            <span className="pid-label">err</span>
+            <span className="pid-num" style={{ color: hOk ? "var(--amber)" : undefined }}>
+              {hErr == null ? "—" : `${fmt(hErr, 1)}°`}
+            </span>
+          </div>
+          <div className="pid-track" title="steering command −1…+1">
+            <div className="pid-mid" />
+            <div
+              className="pid-fill"
+              style={{
+                width: `${hOutPct / 2}%`,
+                background: hOutTone,
+                left: (hOut ?? 0) >= 0 ? "50%" : `${50 - hOutPct / 2}%`,
+              }}
+            />
+          </div>
+          <button
+            className={`btn btn-small ${engaged ? "btn-danger" : ""}`}
+            onClick={engaged ? onRelease : onEngage}
+            disabled={blocked}
+            title={
+              blocked
+                ? "Arm the vehicle before engaging heading hold"
+                : engaged
+                  ? "Release heading hold"
+                  : "Hold the current heading"
+            }
+          >
+            {engaged ? "Release" : "Hold heading"}
+          </button>
+        </div>
+
+        <div className="pid">
+          <div className="pid-row mono">
+            <span className="pid-label">alt</span>
+            {/* The server is explicit that this output drives nothing — no
+                vertical control authority is wired. The tag says so where the
+                state tag sits on the half that does steer, so the two are not
+                read as equals. */}
+            <span className="pid-tag mono" style={{ color: "var(--faint)", borderColor: "var(--faint)" }}>
+              MONITOR
+            </span>
+            <span className="pid-label">set</span>
+            <span className="pid-num">{fmt(pSet, 2)}</span>
+          </div>
+          <div className="pid-row mono">
+            <span className="pid-label">meas</span>
+            <span className="pid-num">{fmt(measurement, 2)}</span>
+            <span className="pid-label">err</span>
+            <span className="pid-num" style={{ color: pOk ? "var(--amber)" : undefined }}>
+              {fmt(pErr, 2)}
+            </span>
+          </div>
+          <div className="pid-row mono">
+            <span className="pid-label">out</span>
+            <span className="pid-num" style={{ color: "var(--faint)" }}>{fmt(pOut, 3)}</span>
+            <span className="pid-label" />
+            <span className="pid-num" />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

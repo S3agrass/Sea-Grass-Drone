@@ -58,6 +58,76 @@ beforeEach(() => {
   telemetry = {};
 });
 
+describe('panel sizing', () => {
+  // Sizes are stored in px, not ratios: the rail has to fit a keypad and a
+  // 16:9 feed whatever the window is doing, and a proportional rail on a small
+  // laptop lands below both.
+  it('leaves the deck to the stylesheet until something is dragged', () => {
+    // Writing a default at load would freeze every screen to whatever size the
+    // first one happened to be, losing the theme's clamp() across windows.
+    const { container } = renderDeck();
+    const deck = container.querySelector('.deck');
+    expect(deck.style.getPropertyValue('--deck-right-w')).toBe('');
+    expect(deck.style.getPropertyValue('--deck-strip-h')).toBe('');
+  });
+
+  it('applies stored sizes as the deck variables', () => {
+    localStorage.setItem('seagrass-rail-w', '520');
+    localStorage.setItem('seagrass-strip-h', '180');
+    const { container } = renderDeck();
+    const deck = container.querySelector('.deck');
+    expect(deck.style.getPropertyValue('--deck-right-w')).toBe('520px');
+    expect(deck.style.getPropertyValue('--deck-strip-h')).toBe('180px');
+  });
+
+  it('ignores a stored size that is not a usable number', () => {
+    localStorage.setItem('seagrass-rail-w', 'wide-ish');
+    const { container } = renderDeck();
+    expect(container.querySelector('.deck').style.getPropertyValue('--deck-right-w')).toBe('');
+  });
+
+  it('offers a splitter for the rail and for the strip', () => {
+    renderDeck();
+    expect(screen.getByRole('separator', { name: /rail width/i })).toBeInTheDocument();
+    expect(screen.getByRole('separator', { name: /strip height/i })).toBeInTheDocument();
+  });
+
+  it('hides the strip splitter when the strip is folded away', () => {
+    // Nothing to resize, and the handle would sit on the fold's own edge.
+    localStorage.setItem('seagrass-inst-collapsed', '1');
+    renderDeck();
+    expect(screen.queryByRole('separator', { name: /strip height/i })).toBeNull();
+  });
+});
+
+describe('deck layout', () => {
+  // The sonar was a full-width strip of its own, so the deck spent a whole row
+  // — about 145px — on it. Row 1, map and camera, is the only 1fr and paid for
+  // all of it. In the rail it costs the map nothing.
+  it('puts the sonar in the rail, not in a row of its own', () => {
+    const { container } = renderDeck();
+    expect(container.querySelector('.deck-right')).toContainElement(
+      screen.getByText('sonar'),
+    );
+    expect(container.querySelector('.deck > .sonar-panel')).toBeNull();
+  });
+
+  it('leaves the instruments the full width of the deck', () => {
+    // Half the width forces ten tile-widths of instruments onto two rows, which
+    // costs more height than the sonar row it was meant to save.
+    const { container } = renderDeck();
+    expect(container.querySelector('.deck > .inst-cluster')).toBeInTheDocument();
+  });
+
+  it('keeps focus mode able to hide everything but the map', () => {
+    // Focus mode hides `.deck > *:not(.deck-map)`, so both survivors have to
+    // stay direct children of the deck.
+    const { container } = renderDeck();
+    const kids = [...container.querySelector('.deck').children];
+    expect(kids.every((k) => k.matches('.deck-map, .deck-right, .inst-cluster'))).toBe(true);
+  });
+});
+
 describe('instrument strip fold', () => {
   // Row 1 — map and camera — is the deck's only 1fr, so it takes whatever the
   // strips give up. Folding this is the way to make that row taller while

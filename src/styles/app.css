@@ -393,12 +393,18 @@
      Two columns, not three: the left rail is gone and the map starts at the
      deck's edge. */
   grid-template-columns: minmax(0, 1fr) var(--deck-right-w);
-  /* Row 1 takes the slack; rows 2 and 3 are the instrument and sonar strips,
-     both full-width and sized by their content. */
-  grid-template-rows: minmax(0, 1fr) auto auto;
+  /* Two rows now, not three. The instrument and sonar strips share row 2
+     side by side instead of stacking, so the deck pays for the taller of the
+     two rather than both. Row 1 is still the only 1fr and still swallows
+     everything they give up. */
+  /* auto until the operator drags the splitter, which sets --deck-strip-h.
+     Row 1 is still the only 1fr, so whatever the strip is given or gives up
+     lands on the map, camera and sonar. */
+  grid-template-rows: minmax(0, 1fr) var(--deck-strip-h, auto);
   gap: var(--deck-gap);
   padding: var(--deck-pad);
 }
+
 
 /* Focus mode — the map takes the whole deck.
 
@@ -416,6 +422,97 @@
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
 }
+/* SPLITTERS — drag to resize, double-click or Home to hand the panel back to
+   the stylesheet's own sizing.
+
+   They sit in the gap between panels, wider in hit area than in appearance:
+   8px of grab for a 2px line, which is roughly the floor for a pointer target
+   and the reason the visible grip is separate from the handle. */
+.resizer {
+  position: absolute;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  touch-action: none;   /* or a drag scrolls the page on a trackpad/touchscreen */
+}
+.resizer-grip {
+  background: var(--line-soft);
+  border-radius: 2px;
+  transition: background 0.15s;
+}
+.resizer:hover .resizer-grip,
+.resizer:focus-visible .resizer-grip { background: var(--teal); }
+.resizer:focus-visible { outline: none; }
+
+/* Column splitter: the rail's leading edge, full height of the rail. */
+.resizer-vertical {
+  top: 0;
+  bottom: 0;
+  left: calc(var(--deck-gap) / -2 - 4px);
+  width: 8px;
+  cursor: col-resize;
+}
+.resizer-vertical .resizer-grip { width: 2px; height: 44px; }
+
+/* Row splitter: the strip's top edge. Stops short of the fold button so the
+   two controls in that corner cannot be hit by accident. */
+.resizer-horizontal {
+  left: 0;
+  right: 28px;
+  top: calc(var(--deck-gap) / -2 - 4px);
+  height: 8px;
+  cursor: row-resize;
+}
+.resizer-horizontal .resizer-grip { height: 2px; width: 44px; }
+
+/* Given an explicit height the strip may be shorter than its tiles, so it has
+   to be able to scroll — a dragged-down strip that clips the battery reading
+   would be a worse outcome than a scrollbar. */
+.inst-cluster { min-height: 0; overflow: auto; }
+
+/* Two columns inside one tile. This is what makes combining tiles a saving
+   rather than a cost: the strip is a single row, so its height is its tallest
+   tile — merging two tiles by stacking their contents would make that tile
+   taller and push the map, camera and sonar down. Side by side, the merged
+   tile is the same height as the two it replaced and saves a box's worth of
+   padding, border and eyebrow. */
+.inst-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--s3);
+  align-items: start;
+}
+.inst-split > * { min-width: 0; }
+
+/* Divider between the halves, so two columns of numbers do not read as one
+   run-on grid of eight. */
+.inst-split > * + * {
+  padding-left: var(--s3);
+  border-left: 1px solid var(--line-soft);
+}
+
+/* Qualifier on a label — "ALT baro" — where the distinction matters more than
+   a footnote under the tile would carry it. */
+.inst-line-hint {
+  color: var(--faint);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+}
+
+/* The engage control lives inside the autopilot tile now. */
+.btn-small {
+  padding: 3px 8px;
+  font-size: var(--t-small);
+  border-radius: var(--radius-sm);
+  background: var(--rail);
+  align-self: start;
+}
+
+/* The sonar sits in the rail now; it no longer spans the deck. */
+.deck-right > .sonar-panel { grid-column: auto; width: 100%; }
+
 .deck.map-focus > *:not(.deck-map) {
   display: none;
 }
@@ -1300,9 +1397,15 @@
   object-fit: contain;
 }
 
+/* 16:9, matching what the Pi actually sends: camera_stream.py encodes
+   1280x720. The box was 4/3, so object-fit: contain letterboxed every frame —
+   at the current rail width that reserved about 90px of black above and below
+   a picture that was never going to fill it. Correcting the ratio makes the
+   panel exactly as tall as the video and hands the difference to the rest of
+   the rail. */
 .camera-feed {
   position: relative;
-  aspect-ratio: 4 / 3;
+  aspect-ratio: 16 / 9;
   background: var(--abyss);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-sm);

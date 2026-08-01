@@ -6,18 +6,28 @@ import CameraView from "../components/CameraView";
 import GamepadControl from "../components/GamepadControl";
 import ConnectionPanel from "../components/ConnectionPanel";
 import SonarView from "../components/SonarView";
+import Resizer from "../components/Resizer";
 import Toasts from "../components/Toasts";
 import {
-  Compass,
   SonarGauge,
-  VerticalStack,
-  CruisePower,
   AttitudeIndicator,
-  PIDGauge,
-  HeadingHoldGauge,
+  Vitals,
+  Autopilot,
 } from "../components/Instruments";
 import { useDrone } from "../context/DroneContext";
 import { hasFix } from "../lib/geo";
+
+/** A stored panel size, or null when the operator has never set one. Anything
+ *  unparseable is treated as unset rather than trusted into the layout. */
+function readSize(key) {
+  const raw = Number(localStorage.getItem(key));
+  return Number.isFinite(raw) && raw > 0 ? raw : null;
+}
+
+function writeSize(key, value) {
+  if (value == null) localStorage.removeItem(key);
+  else localStorage.setItem(key, String(value));
+}
 
 export default function ControlPage() {
   const {
@@ -47,6 +57,18 @@ export default function ControlPage() {
   useEffect(() => {
     localStorage.setItem("seagrass-inst-collapsed", instCollapsed ? "1" : "0");
   }, [instCollapsed]);
+
+  // Operator-set panel sizes. null means "whatever the stylesheet says", which
+  // is how a deck that has never been dragged still follows the theme's clamp()
+  // across window sizes — storing a default the moment the page loads would
+  // freeze every screen to whatever the first one happened to be.
+  const [railW, setRailW] = useState(() => readSize("seagrass-rail-w"));
+  const [stripH, setStripH] = useState(() => readSize("seagrass-strip-h"));
+  useEffect(() => writeSize("seagrass-rail-w", railW), [railW]);
+  useEffect(() => writeSize("seagrass-strip-h", stripH), [stripH]);
+
+  const railRef = useRef(null);
+  const stripRef = useRef(null);
 
   const [waypoints, setWaypoints] = useState([]);
   const [trail, setTrail] = useState([]);
@@ -87,7 +109,13 @@ export default function ControlPage() {
     <div className="app-shell">
       <TopBar />
       <Toasts />
-      <div className={`deck ${mapFocus ? "map-focus" : ""}`}>
+      <div
+        className={`deck ${mapFocus ? "map-focus" : ""}`}
+        style={{
+          ...(railW ? { "--deck-right-w": `${railW}px` } : null),
+          ...(stripH ? { "--deck-strip-h": `${stripH}px` } : null),
+        }}
+      >
         <main className="deck-map">
           <DroneMap
             dronePos={dronePos}
@@ -101,8 +129,25 @@ export default function ControlPage() {
           />
         </main>
 
-        <aside className="deck-right">
+        <aside className="deck-right" ref={railRef}>
+          <Resizer
+            orientation="vertical"
+            value={railW}
+            min={300}
+            max={900}
+            measure={() => railRef.current?.getBoundingClientRect().width ?? 420}
+            onChange={setRailW}
+            onReset={() => setRailW(null)}
+            label="Camera and sonar rail width"
+          />
           <CameraView />
+          {/* The sonar lives in the rail now, next to the other sensor. As a
+              full-width strip of its own it cost the deck a whole row — about
+              145px — and row 1 is the only 1fr, so the map paid for all of it.
+              The echogram gets less time history at this width; that is the
+              trade for a map that is ~120px taller. Fold it if you want the
+              rail's height back for the camera. */}
+          <SonarView />
           <GamepadControl />
         </aside>
 
@@ -119,7 +164,22 @@ export default function ControlPage() {
             off the map's width. As a wide tile in this strip it costs three
             columns of a row that had spare capacity, and the map gets the
             whole rail back. */}
-        <div className={`inst-cluster${instCollapsed ? " collapsed" : ""}`}>
+        <div
+          className={`inst-cluster${instCollapsed ? " collapsed" : ""}`}
+          ref={stripRef}
+        >
+          {!instCollapsed && (
+            <Resizer
+              orientation="horizontal"
+              value={stripH}
+              min={64}
+              max={520}
+              measure={() => stripRef.current?.getBoundingClientRect().height ?? 150}
+              onChange={setStripH}
+              onReset={() => setStripH(null)}
+              label="Instrument strip height"
+            />
+          )}
             {/* Absolutely positioned so it costs the strip no height while
                 open — a header row here would take back some of what folding
                 is meant to give the map. */}
@@ -136,17 +196,21 @@ export default function ControlPage() {
               {instCollapsed ? "▸ Instruments" : "▾"}
             </button>
             <ConnectionPanel />
-            <Compass heading={telemetry.heading} />
-            {/* Depth, altitude and climb in one tile; speed and battery in
-                another. Ten boxes each carrying an eyebrow, a border and its
-                own padding cost more height than what was in them, and the
-                strip's height comes straight off the map and the camera. */}
-            <VerticalStack
+            {/* Compass is gone: heading is on the attitude tile, and the map
+                carries its own heading arrow on the vehicle itself — a third
+                copy of one number was a whole tile of the strip. */}
+            <AttitudeIndicator
+              roll={telemetry.roll}
+              pitch={telemetry.pitch}
+              yaw={telemetry.yaw}
+            />
+            <Vitals
               depth={telemetry.depth}
               altitude={telemetry.altitude}
               climb={telemetry.climb}
+              speed={telemetry.groundspeed}
+              battery={telemetry.battery}
             />
-            <CruisePower speed={telemetry.groundspeed} battery={telemetry.battery} />
             <SonarGauge
               distance={sonar.distance_m}
               raw={sonar.raw_m}
@@ -154,35 +218,16 @@ export default function ControlPage() {
               quality={sonar.quality}
               ok={sonar.ok}
             />
-            <AttitudeIndicator
-              roll={telemetry.roll}
-              pitch={telemetry.pitch}
-              yaw={telemetry.yaw}
-            />
-            <HeadingHoldGauge
-              engaged={headingHold.engaged}
-              suspended={headingHold.suspended}
-              setpoint={headingHold.setpoint}
-              heading={headingHold.heading}
-              error={headingHold.error}
-              output={headingHold.output}
-              ok={headingHold.ok}
+            <Autopilot
+              headingHold={headingHold}
+              pid={pid}
               armed={armed}
               onEngage={headingHoldOn}
               onRelease={headingHoldOff}
             />
-            <PIDGauge
-              setpoint={pid.setpoint}
-              measurement={pid.measurement}
-              error={pid.error}
-              output={pid.output}
-              ok={pid.ok}
-            />
         </div>
 
-        {/* Full-width strip under the three columns — the echogram needs
-            horizontal room for time history, which the 250px rail can't give. */}
-        <SonarView />
+
       </div>
     </div>
   );
