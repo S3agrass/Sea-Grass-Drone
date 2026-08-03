@@ -260,6 +260,11 @@ export default function CameraView() {
 
   // When the camera subprocess starts/stops on the Pi, or the stream URL
   // changes, reset the feed state so the WHEP hook re-runs.
+  //
+  // credentialMode belongs here for the same reason retryKey does: a demotion
+  // means another attempt is starting. Without it the "error" left behind by the
+  // attempt that was just refused stays on screen through the whole of the
+  // successful negotiation that follows, so a recovery looks like a fault.
   useEffect(() => {
     if (!wantFeed) {
       setFeedState("off");
@@ -267,7 +272,7 @@ export default function CameraView() {
     }
     if (type === "webrtc") setFeedState("connecting");
     // mjpeg state is driven by img onLoad/onError below
-  }, [wantFeed, type, retryKey]);
+  }, [wantFeed, type, credentialMode, retryKey]);
 
   // WebRTC WHEP connection — only runs when camera is active and type is webrtc.
   //

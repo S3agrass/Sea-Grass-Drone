@@ -140,8 +140,23 @@ a Supabase session. What changed is that a signed-in *browser* no longer holds i
 **Break-glass:** if identity verification refuses a signed-in operator — wrong
 clock, keys never fetched, `DRONE_ID` mismatch — the app notices and retries with
 the drone's own token automatically, so you are not locked out of your vehicle.
-The connection banner will say so. Fix the underlying cause and reconnect to go
-back to identity.
+The connection banner briefly reads "Reconnecting with the drone's access
+token…". Fix the underlying cause and reconnect to go back to identity.
+
+That fallback is deliberately quiet: it recovers on its own, and an error message
+for something already fixed one step later is noise. The cost of quiet is that
+identity can be broken for weeks without anyone noticing, so **the vehicle's log
+is the place to check** — it names the reason on every refusal:
+
+```bash
+journalctl -u drone-server | grep -iE "operator auth|auth refused"
+```
+
+`not an owner of this vehicle` means the lookup found a different owner (usually
+a `DRONE_ID` that does not match the Fleet UI's Drone ID). A `shared token only`
+boot line means identity never started — PyJWT missing, or no owner resolvable.
+Either way the vehicle keeps working on the shared token, which is exactly why it
+is worth checking rather than assuming.
 
 To turn identity off entirely, unset `SUPABASE_SERVICE_KEY` (or
 `SEAGRASS_OWNER_UIDS`) and restart; the boot log will confirm shared-token-only.

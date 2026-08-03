@@ -140,6 +140,36 @@ describe('camera negotiation', () => {
     await waitFor(() => expect(whepCalls().length).toBe(1));
   });
 
+  it('clears a failed attempt when the credential changes', async () => {
+    // The refused attempt leaves feedState "error". Without resetting it on a
+    // credential change, that error sits on screen through the whole of the
+    // successful negotiation that follows — so a recovery reads as a fault.
+    global.fetch = vi.fn(async (url) => {
+      if (String(url).includes('turn-credentials')) {
+        return { ok: true, json: async () => ({ iceServers: [] }) };
+      }
+      return { ok: false, status: 401, text: async () => 'unauthorized' };
+    });
+
+    const { rerender, queryByText } = render(<CameraView />);
+    await waitFor(() => expect(queryByText(/camera error/i)).toBeTruthy());
+
+    // Demotion. The retry is deliberately left hanging: the question is what the
+    // operator sees WHILE it is in flight. If the assertion waited for it to
+    // succeed, "live" would clear the error by itself and the test would pass
+    // with or without the reset.
+    global.fetch = vi.fn(async (url) => {
+      if (String(url).includes('turn-credentials')) {
+        return { ok: true, json: async () => ({ iceServers: [] }) };
+      }
+      return new Promise(() => {}); // never settles
+    });
+    mockCtx = baseCtx({ credentialMode: 'drone', operatorCredential: 'drone-token' });
+    rerender(<CameraView />);
+
+    await waitFor(() => expect(queryByText(/camera error/i)).toBeNull());
+  });
+
   it('does not spend a request warming TURN before it has a credential', async () => {
     // /turn-credentials is authenticated; an early call earns a 401 and parks a
     // shared in-flight promise the first real caller would inherit.
