@@ -17,7 +17,17 @@ import { DroneProvider, useDrone } from '../context/DroneContext';
 const { mockLink, emitToLink } = vi.hoisted(() => {
   const subscribers = [];
   const link = {
-    subscribe: (fn) => { subscribers.push(fn); return () => {}; },
+    // A real unsubscribe, matching DroneLink.subscribe. With a no-op here every
+    // re-run of the effect leaves its previous listener attached, so an event
+    // gets handled several times over by closures holding stale props — which
+    // production never does, and which quietly turns one toast into several.
+    subscribe: (fn) => {
+      subscribers.push(fn);
+      return () => {
+        const i = subscribers.indexOf(fn);
+        if (i >= 0) subscribers.splice(i, 1);
+      };
+    },
     connect: vi.fn(),
     disconnect: vi.fn(),
     send: vi.fn(() => true),
@@ -120,6 +130,58 @@ describe('operator credential', () => {
       emitToLink({ type: 'status', status: 'error', detail: 'x', authFailed: true });
     });
     expect(ctx().operatorCredential).toBe(DRONE_TOKEN);
+  });
+
+  // The server sends its refusal BEFORE closing the socket, so it lands while a
+  // retry is still coming. Showing it turned a detour into an eight-second red
+  // toast reading "Invalid access token" on a connection that then succeeded.
+  const refuse = () => {
+    emitToLink({ type: 'message', data: { type: 'error', message: 'Invalid access token' } });
+    emitToLink({ type: 'status', status: 'error', detail: 'Access refused', authFailed: true });
+  };
+
+  it('says nothing about a refusal it is about to recover from', async () => {
+    const ctx = renderContext();
+    await waitFor(() => expect(ctx().activeDrone).toBeTruthy());
+
+    act(() => { refuse(); });
+
+    await waitFor(() => expect(ctx().operatorCredential).toBe(DRONE_TOKEN));
+    expect(ctx().toasts).toHaveLength(0);
+    // And reports a reconnect, not a dead link.
+    expect(ctx().linkStatus).toBe('connecting');
+    expect(ctx().linkDetail).toMatch(/reconnect/i);
+  });
+
+  it('does raise the refusal when there is nothing left to try', async () => {
+    // No drone token to fall back to: this is a real dead end and must be loud.
+    localStorage.setItem('seagrass-fleet', JSON.stringify([{ ...DRONE, token: '' }]));
+    const ctx = renderContext();
+    await waitFor(() => expect(ctx().activeDrone).toBeTruthy());
+
+    act(() => { refuse(); });
+
+    await waitFor(() => expect(ctx().toasts.length).toBe(1));
+    expect(ctx().toasts[0].level).toBe('error');
+    expect(ctx().toasts[0].message).toMatch(/invalid access token/i);
+  });
+
+  it('raises the held refusal if the fallback is refused too', async () => {
+    const ctx = renderContext();
+    await waitFor(() => expect(ctx().activeDrone).toBeTruthy());
+
+    act(() => { refuse(); });
+    await waitFor(() => expect(ctx().operatorCredential).toBe(DRONE_TOKEN));
+    expect(ctx().toasts).toHaveLength(0);
+
+    // The drone token is refused as well — both credentials are wrong, and the
+    // operator has to be told rather than left watching it retry in silence.
+    act(() => {
+      emitToLink({ type: 'status', status: 'error', detail: 'Access refused', authFailed: true });
+    });
+
+    await waitFor(() => expect(ctx().toasts.length).toBe(1));
+    expect(ctx().toasts[0].message).toMatch(/invalid access token/i);
   });
 
   it('retries identity for a drone with no token of its own', async () => {

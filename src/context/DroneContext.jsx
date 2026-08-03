@@ -439,6 +439,21 @@ export function DroneProvider({ children }) {
     setCredentialMode("identity");
   }, [activeDroneId, accessToken]);
 
+  // Is there still a credential left to try? Both the demotion below and the
+  // decision to stay quiet about a refusal read this, so the app cannot end up
+  // alarming the operator about a failure it is one step away from fixing.
+  const canDemote =
+    credentialMode === "identity" && !!accessToken && !!activeDrone?.token;
+
+  // The server's refusal, and whether the operator has been told about it yet.
+  //
+  // Held rather than shown while a retry is still coming: if the retry works
+  // nobody needs to see it, and if it does not, this is what gets raised. The
+  // `reported` flag keeps one refusal to one message — the server sends its
+  // reason and then closes the socket, which are two events describing a single
+  // rejection, and without it both spoke.
+  const authRefusal = useRef({ message: null, reported: false });
+
   const selectDrone = useCallback((id) => {
     setActiveDroneId(id);
     if (id) localStorage.setItem("seagrass-active-drone", String(id));
@@ -454,13 +469,31 @@ export function DroneProvider({ children }) {
         // rather than the operator being unauthorised. Demote and retry once,
         // instead of leaving them stuck holding a credential that would work.
         if (event.authFailed) {
-          setCredentialMode((mode) => {
-            if (mode === "identity" && accessToken && activeDrone?.token) {
-              setTimeout(() => link.connect(activeDrone.host, activeDrone.token), 0);
-              return "drone";
-            }
-            return mode;
-          });
+          if (canDemote) {
+            setCredentialMode("drone");
+            setTimeout(() => link.connect(activeDrone.host, activeDrone.token), 0);
+            // Report the truth: this is a reconnect in progress, not a dead
+            // link. Letting droneLink's "error" through would put a red banner
+            // and an eight-second toast in front of something that resolves
+            // itself a moment later.
+            setLinkStatus("connecting");
+            setLinkDetail("Reconnecting with the drone's access token…");
+            return;
+          }
+          // Nothing left to try. Now it is a real failure, and the server's own
+          // wording is more useful than droneLink's generic close reason —
+          // unless it has already been shown, in which case saying it twice
+          // just makes one rejection look like two.
+          if (!authRefusal.current.reported) {
+            pushToast(
+              "error",
+              authRefusal.current.message || "Access refused by the drone",
+            );
+          }
+          authRefusal.current = { message: null, reported: false };
+        }
+        if (event.status === "connected") {
+          authRefusal.current = { message: null, reported: false };
         }
         setLinkStatus(event.status);
         setLinkDetail(event.detail || "");
@@ -538,12 +571,23 @@ export function DroneProvider({ children }) {
           // Server-side operator alert (arm rejection, PreArm reason, …).
           pushToast(m.level === "error" ? "error" : "warn", m.message);
         } else if (m.type === "error") {
-          pushToast("error", m.message);
+          // The server sends its refusal BEFORE closing the socket, so this
+          // arrives while the app still has a credential left to try. Holding it
+          // is what stops "Invalid access token" flashing up on a connection
+          // that is about to succeed on the next attempt. The 4401 handler above
+          // decides whether it is ever shown.
+          if (canDemote) {
+            authRefusal.current = { message: m.message, reported: false };
+          } else {
+            pushToast("error", m.message);
+            authRefusal.current = { message: m.message, reported: true };
+          }
         }
       }
     });
-    // accessToken/activeDrone are read by the auth-failure demotion above.
-  }, [link, pushToast, accessToken, activeDrone]);
+    // canDemote/activeDrone drive the auth-failure demotion and the decision to
+    // hold the server's refusal rather than show it.
+  }, [link, pushToast, canDemote, activeDrone]);
 
   /* ---------- demo mode simulation ---------- */
   useEffect(() => {
