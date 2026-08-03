@@ -88,9 +88,9 @@ export default class DroneLink {
     for (const fn of this.listeners) fn(event);
   }
 
-  _setStatus(status, detail) {
+  _setStatus(status, detail, extra = {}) {
     this.status = status;
-    this._emit({ type: "status", status, detail });
+    this._emit({ type: "status", status, detail, ...extra });
   }
 
   connect(url, token = "") {
@@ -140,7 +140,15 @@ export default class DroneLink {
       clearInterval(this._keepAlive);
       if (e.code === 4401) {
         this._shouldReconnect = false;
-        this._setStatus("error", "Invalid access token — check Settings");
+        // Flagged, because the credential we sent may simply be the wrong KIND
+        // rather than wrong. A signed-in browser presents its Supabase session
+        // token, and a drone that cannot look up its owners refuses it — while
+        // the drone's own token, sitting in the fleet entry, would have worked.
+        // DroneContext watches for this and retries with that instead of
+        // stranding the operator here.
+        this._setStatus("error", "Access refused by the drone", {
+          authFailed: true,
+        });
         return;
       }
       if (this._shouldReconnect) {

@@ -561,10 +561,9 @@ class BoundedThreadingHTTPServer(server.ThreadingHTTPServer):
 
 
 def main():
-    # Same keys the control server uses, fetched independently: this is a
-    # separate process and may outlive or start before that one.
-    if auth.is_jwt_enabled():
-        auth.refresh_jwks()
+    # Same keys and owner list the control server uses, resolved independently:
+    # this is a separate process and may outlive or start before that one.
+    auth.init()
     address = ('', MEDIA_HTTP_PORT)
     httpd = BoundedThreadingHTTPServer(address, MediaHandler)
     print(f"Media server listening on http://0.0.0.0:{MEDIA_HTTP_PORT}  (dir={MEDIA_DIR})")

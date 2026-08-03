@@ -2444,13 +2444,11 @@ async def main():
     print(f"Auto-capture: {'ON' if AUTOCAPTURE else 'off'}"
           + (f" (conf >= {AUTOCAPTURE_MIN_CONF}, every {AUTOCAPTURE_COOLDOWN_S:.0f}s)"
              if AUTOCAPTURE else ""))
-    # Refresh the operator signing keys once at boot, on a thread — it is a
-    # network call and must not sit in front of the event loop starting. A
-    # failure here is survivable: verification reads the on-disk cache, which is
-    # the whole reason the cache exists. A vehicle at sea with no uplink still
-    # authenticates its operator.
-    if auth.is_jwt_enabled():
-        await asyncio.to_thread(auth.refresh_jwks)
+    # Signing keys and the owner list, on a thread — both are network calls and
+    # must not sit in front of the event loop starting. Failure is survivable:
+    # each reads its on-disk cache, which is the whole reason the caches exist.
+    # A vehicle at sea with no uplink still authenticates its operator.
+    await asyncio.to_thread(auth.init)
 
     ssl_ctx = _build_ws_ssl_context()
     scheme = "wss" if ssl_ctx else "ws"

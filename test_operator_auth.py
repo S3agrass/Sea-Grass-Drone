@@ -172,3 +172,134 @@ class TestStatusLine:
         auth, _ = env
         assert auth.is_jwt_enabled()
         assert "Supabase identity" in auth.status_line()
+
+
+@pytest.fixture
+def db_env(tmp_path, monkeypatch):
+    """A vehicle that learns its owners from Supabase rather than from a
+    hand-typed list — the configuration every drone gets by default."""
+    signing_key = ec.generate_private_key(ec.SECP256R1())
+    jwks = tmp_path / "jwks.json"
+    jwks.write_text(json.dumps({"keys": [_jwk_from_public_key(signing_key, "k1")]}))
+
+    monkeypatch.setenv("SEAGRASS_TOKEN", SHARED)
+    monkeypatch.setenv("SUPABASE_URL", ISSUER_BASE)
+    monkeypatch.setenv("SUPABASE_SERVICE_KEY", "service-role-key")
+    monkeypatch.setenv("DRONE_ID", "seagrass-one")
+    monkeypatch.setenv("SEAGRASS_OWNER_UIDS", "")  # nothing typed by hand
+    monkeypatch.setenv("SEAGRASS_JWKS_CACHE", str(jwks))
+    monkeypatch.setenv("SEAGRASS_OWNERS_CACHE", str(tmp_path / "owners.json"))
+    monkeypatch.syspath_prepend(os.path.join(os.path.dirname(__file__), "server"))
+
+    import auth
+    importlib.reload(auth)
+    return auth, signing_key, tmp_path
+
+
+def _fake_lookup(auth, monkeypatch, rows, fail=False):
+    """Stand in for the REST call to `drones`."""
+    class _Resp:
+        def __init__(self, payload):
+            self._payload = json.dumps(payload).encode()
+
+        def read(self):
+            return self._payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def urlopen(req, timeout=None):
+        if fail:
+            raise OSError("no uplink")
+        assert "drone_id=eq.seagrass-one" in req.full_url
+        # service_role, not the anon key — this read must bypass RLS.
+        assert req.headers["Apikey"] == "service-role-key"
+        return _Resp(rows)
+
+    monkeypatch.setattr(auth.urllib.request, "urlopen", urlopen)
+
+
+class TestOwnersFromDatabase:
+    def test_owner_registered_in_supabase_can_drive_with_no_env_config(
+        self, db_env, monkeypatch
+    ):
+        # The point of the whole change: nobody edited a file on the Pi.
+        auth, key, _ = db_env
+        _fake_lookup(auth, monkeypatch, [{"owner": OWNER}])
+        assert auth.refresh_owners()
+
+        assert auth.is_jwt_enabled()
+        ok, subject, reason = auth.verify_operator(make_token(key))
+        assert ok, reason
+        assert subject == OWNER
+
+    def test_a_different_account_still_cannot_drive(self, db_env, monkeypatch):
+        auth, key, _ = db_env
+        _fake_lookup(auth, monkeypatch, [{"owner": OWNER}])
+        auth.refresh_owners()
+
+        ok, _, reason = auth.verify_operator(make_token(key, sub=STRANGER))
+        assert not ok and "owner" in reason
+
+    def test_revoking_in_the_database_revokes_on_the_vehicle(
+        self, db_env, monkeypatch
+    ):
+        auth, key, _ = db_env
+        _fake_lookup(auth, monkeypatch, [{"owner": OWNER}])
+        auth.refresh_owners()
+        assert auth.verify_operator(make_token(key))[0]
+
+        # Drone transferred away, or the registration deleted. An empty result
+        # has to be honoured or revocation is impossible.
+        _fake_lookup(auth, monkeypatch, [])
+        auth.refresh_owners()
+        assert not auth.verify_operator(make_token(key))[0]
+        # ...and the shared token still gets the operator back in.
+        assert auth.verify_operator(SHARED)[0]
+
+    def test_a_failed_lookup_keeps_the_previous_owners(self, db_env, monkeypatch):
+        # An uplink dropping mid-dive must not deauthorise whoever is steering.
+        auth, key, _ = db_env
+        _fake_lookup(auth, monkeypatch, [{"owner": OWNER}])
+        auth.refresh_owners()
+
+        _fake_lookup(auth, monkeypatch, [], fail=True)
+        assert not auth.refresh_owners()
+        assert auth.verify_operator(make_token(key))[0]
+
+    def test_owners_survive_a_restart_with_no_network(self, db_env, monkeypatch):
+        auth, key, tmp_path = db_env
+        _fake_lookup(auth, monkeypatch, [{"owner": OWNER}])
+        auth.refresh_owners()
+
+        # Restart the module with the lookup failing: the cache written above is
+        # what lets a vehicle boot at sea and still know its operator.
+        importlib.reload(auth)
+        assert auth.allowed_owners() == set()  # not loaded yet
+        _fake_lookup(auth, monkeypatch, [], fail=True)
+        auth.init(background_refresh=False)
+        assert auth.verify_operator(make_token(key))[0]
+
+    def test_env_override_is_additive(self, db_env, monkeypatch):
+        # The manual list still works, for a vehicle that cannot reach Supabase.
+        monkeypatch.setenv("SEAGRASS_OWNER_UIDS", STRANGER)
+        import auth
+        importlib.reload(auth)
+        _fake_lookup(auth, monkeypatch, [{"owner": OWNER}])
+        auth.refresh_owners()
+
+        assert auth.allowed_owners() == {OWNER, STRANGER}
+
+    def test_cache_from_another_drone_id_is_ignored(self, db_env, monkeypatch):
+        # A cache file copied between vehicles, or a DRONE_ID change, must not
+        # silently authorise the previous drone's owner.
+        auth, _, tmp_path = db_env
+        (tmp_path / "owners.json").write_text(
+            json.dumps({"drone_id": "some-other-drone", "owners": [STRANGER]})
+        )
+        importlib.reload(auth)
+        auth._load_cached_owners()
+        assert auth.allowed_owners() == set()
