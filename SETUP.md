@@ -70,6 +70,51 @@ nano ~/.seagrass-env   # paste the drone's "Access token" from the Fleet UI
   `PIXHAWK_BAUD`, `SEAGRASS_PORT`). It is chmod 600 and never committed.
 - Without a token set the server refuses to start — this is intentional.
 
+### Operator identity (recommended)
+
+By default the vehicle accepts one shared secret, `SEAGRASS_TOKEN`. That token
+is stored in the browser and never expires, so anyone who obtains a copy has
+permanent control. Configuring operator identity replaces it for signed-in
+browsers: the browser presents its **Supabase session token**, which expires in
+about an hour and refreshes itself, and the Pi verifies it against the project's
+**public** key. The vehicle holds nothing that could mint a token.
+
+```bash
+# In ~/.seagrass-env
+SUPABASE_URL=https://<your-project>.supabase.co
+SEAGRASS_OWNER_UIDS=<your Supabase user id>   # comma-separated for several
+```
+
+Find your user id in the app: **Settings → Account → Operator ID**.
+
+Then install the dependency and restart — **the install is not optional**:
+
+```bash
+pip install -r ~/Sea-Grass-Drone/server/requirements.txt --break-system-packages
+sudo systemctl restart drone-server
+```
+
+`drone-server` prints which mode is live at boot:
+
+```
+Operator auth: Supabase identity for 1 owner(s), shared token as fallback
+Operator auth: shared token only (SEAGRASS_OWNER_UIDS unset)
+```
+
+If it says "shared token only" when you expected identity, the log gives the
+reason — usually a missing `SEAGRASS_OWNER_UIDS` or PyJWT not installed.
+
+**`SEAGRASS_TOKEN` deliberately keeps working.** This Pi has no real-time clock,
+so a vehicle that boots offline can have a wrong clock and reject perfectly valid
+tokens as expired. Being unable to drive the boat until someone SSHes into it is
+a worse outcome than a long-lived secret existing. The CLI tools
+(`terminal_control.py`) and the camera's own RTSP push use it too, neither having
+a Supabase session. What changed is that a signed-in *browser* no longer holds it.
+
+**Break-glass:** if identity verification locks you out — wrong clock, keys never
+fetched — the drone's token from the Fleet UI still connects. To disable identity
+entirely, comment out `SEAGRASS_OWNER_UIDS` and restart.
+
 ### Daily use
 
 ```bash

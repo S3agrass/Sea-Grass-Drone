@@ -7,6 +7,7 @@ const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
 	const [user, setUser] = useState(null);
+	const [accessToken, setAccessToken] = useState("");
 	const [loading, setLoading] = useState(true);
 
 	const [localMode, setLocalMode] = useState(
@@ -30,6 +31,13 @@ export function AuthProvider({ children }) {
 	const applySession = (session) => {
 		const nextUser = session?.user ?? null;
 		setUser(nextUser);
+		// The vehicle authenticates operators by this token now, rather than by a
+		// per-drone secret kept in localStorage. Captured here because this runs
+		// on every auth event including TOKEN_REFRESHED, so the value in context
+		// is always the current one — which is what lets the camera and media
+		// pages read it synchronously while rendering an <img src> without ever
+		// serving a stale token.
+		setAccessToken(session?.access_token ?? "");
 		if (nextUser) {
 			sessionStorage.removeItem("seagrass-local-mode");
 			setLocalMode(false);
@@ -87,6 +95,9 @@ export function AuthProvider({ children }) {
 		user,
 		loading,
 		localMode,
+		// Empty in local mode (no Supabase session), which is exactly when
+		// callers must fall back to the drone's own token.
+		accessToken,
 		// SettingsPage reads this off useAuth() and always got undefined, so its
 		// Account section told anyone in local mode to "configure Supabase in
 		// .env" however configured Supabase actually was.

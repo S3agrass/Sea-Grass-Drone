@@ -208,6 +208,16 @@ export default function SettingsPage() {
                 : "Running in local mode — configure Supabase in .env to enable accounts."
               : `Signed in as ${user?.email}`}
           </div>
+          {!localMode && user?.id && (
+            // The vehicle authorises operators by this id: it goes in
+            // SEAGRASS_OWNER_UIDS in the Pi's ~/.seagrass-env. Shown here so
+            // setting up a drone doesn't need a trip to the Supabase dashboard
+            // to find a value the signed-in app already knows.
+            <div className="settings-muted">
+              Operator ID (add to <code>SEAGRASS_OWNER_UIDS</code> on the drone):{" "}
+              <code>{user.id}</code>
+            </div>
+          )}
           <div className="settings-actions">
             <button
               className="btn"

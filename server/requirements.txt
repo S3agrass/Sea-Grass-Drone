@@ -16,6 +16,15 @@ pymavlink        # MAVLink bridge to the Pixhawk
 # older release the hook silently fails to guard anything.
 websockets>=14   # async WebSocket server
 
+# Verifies the operator's Supabase session token (server/auth.py). The [crypto]
+# extra pulls in `cryptography`, which is what ES256 needs — Supabase signs with
+# an elliptic-curve key and PyJWT alone cannot check that signature.
+#
+# INSTALL THIS BEFORE RESTARTING after a pull. Without it the vehicle silently
+# falls back to shared-token-only auth: it keeps working, but the owner list is
+# not enforced and browsers presenting a session token are refused.
+pyjwt[crypto]>=2.8
+
 # --- vision (object detection + underwater filter) ---
 onnxruntime               # MIT   — CPU inference engine for the YOLOX ONNX model
 opencv-python-headless>=4.5  # Apache-2.0 — underwater filter + image ops (headless: no GUI deps)

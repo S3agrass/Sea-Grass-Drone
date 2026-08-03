@@ -63,7 +63,6 @@ Run standalone (for testing without drone_server.py):
     python3 server/media_server.py
 """
 
-import hmac
 import json
 import os
 import shutil
@@ -74,6 +73,8 @@ import urllib.error
 import urllib.request
 from http import server
 from urllib.parse import parse_qs, unquote, urlparse
+
+import auth
 
 MEDIA_HTTP_PORT = int(os.environ.get("MEDIA_HTTP_PORT", "8000"))
 MEDIA_DIR = os.environ.get("MEDIA_DIR", os.path.expanduser("~/seagrass-media"))
@@ -341,7 +342,10 @@ class MediaHandler(server.BaseHTTPRequestHandler):
             supplied = header[len("Bearer "):]
         else:
             supplied = parse_qs(urlparse(self.path).query).get("token", [""])[0]
-        return hmac.compare_digest(supplied.encode("utf-8"), TOKEN.encode("utf-8"))
+        # A signed-in operator sends their Supabase session token here; the
+        # shared secret still works for CLI tools and local-mode browsers.
+        ok, _, _ = auth.verify_operator(supplied)
+        return ok
 
     def _mediamtx_auth(self):
         """Authorise one MediaMTX publish/read, per server/mediamtx.yml's
@@ -373,11 +377,13 @@ class MediaHandler(server.BaseHTTPRequestHandler):
         except (ValueError, OSError):
             return self._deny()
 
-        supplied = body.get("password")
-        if not isinstance(supplied, str):
-            return self._deny()
-        if not hmac.compare_digest(supplied.encode("utf-8"), TOKEN.encode("utf-8")):
-            print(f"MediaMTX auth denied: bad token for "
+        # The password is whatever the viewer or publisher presented: a browser
+        # sends its Supabase session token, camera_stream.py sends the shared
+        # secret. Both are settled by the same verifier.
+        ok, subject, reason = auth.verify_operator(body.get("password"))
+        if not ok:
+            who = f" (user {subject})" if subject else ""
+            print(f"MediaMTX auth denied{who}: {reason} for "
                   f"{body.get('action')!r} on {body.get('path')!r}", flush=True)
             return self._deny()
 
@@ -555,9 +561,14 @@ class BoundedThreadingHTTPServer(server.ThreadingHTTPServer):
 
 
 def main():
+    # Same keys the control server uses, fetched independently: this is a
+    # separate process and may outlive or start before that one.
+    if auth.is_jwt_enabled():
+        auth.refresh_jwks()
     address = ('', MEDIA_HTTP_PORT)
     httpd = BoundedThreadingHTTPServer(address, MediaHandler)
     print(f"Media server listening on http://0.0.0.0:{MEDIA_HTTP_PORT}  (dir={MEDIA_DIR})")
+    print(auth.status_line())
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
