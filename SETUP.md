@@ -8,30 +8,39 @@ For full architecture details see [ARCHITECTURE.md](./ARCHITECTURE.md). This gui
 
 ```bash
 npm install
-cp .env.example .env   # fill in Firebase credentials (see step 2)
+cp .env.example .env   # fill in Supabase credentials (see step 2)
 npm run dev            # http://localhost:5173
 npm run electron:dev   # or run as the desktop app
 ```
 
 ---
 
-## 2. Firebase (authentication)
+## 2. Supabase Auth (authentication)
 
-1. Go to [console.firebase.google.com](https://console.firebase.google.com) and create a project.
-2. Authentication → Sign-in method → enable **Email/Password**.
-3. Project Settings → Your apps → Add a Web app → copy the config object.
-4. Fill in `.env`:
-```
-VITE_FIREBASE_API_KEY=AIza...
-VITE_FIREBASE_AUTH_DOMAIN=your-project.firebaseapp.com
-VITE_FIREBASE_PROJECT_ID=your-project-id
-VITE_FIREBASE_STORAGE_BUCKET=your-project.appspot.com
-VITE_FIREBASE_MESSAGING_SENDER_ID=123456789
-VITE_FIREBASE_APP_ID=1:123:web:abc
-```
-5. Restart `npm run dev`. The login page will now sign users in with Firebase.
+Authentication is Supabase, not Firebase. Firebase is **hosting only** — it needs no keys in `.env` (see `firebase.json`).
 
-**Sign up:** use the "Create account" tab on the login page. If you want to manage users directly, use the Firebase console Authentication → Users tab.
+1. In your Supabase project: **Authentication → Providers → Email** → make sure it is enabled.
+2. Decide on **Confirm email**, in the same panel. Leaving it on is the safer default, but be aware of what it means: a new account cannot sign in until the emailed link is clicked, and Supabase's built-in SMTP is rate-limited to a handful of messages an hour. If those emails do not arrive, operators are locked out of accounts that look perfectly fine in the dashboard.
+3. **Authentication → URL Configuration**:
+   - **Site URL** — `https://seagrassrobotics.com`
+   - **Redirect URLs** — add `https://seagrassrobotics.com/desktop/#/reset-password`, plus `http://localhost:5173/#/reset-password` for local development.
+
+   Password-reset links are rejected if their redirect is not on this list; Supabase quietly falls back to the Site URL, which drops people on the login page holding a code nothing ever exchanges.
+4. **Project Settings → API** → copy the URL and the `anon` key into `.env` (see [step 3](#3-supabase-cloud-fleet-registry--captured-media)).
+
+**Sign up:** use the "Create account" tab on the login page. To manage users directly, use **Authentication → Users** in the Supabase dashboard.
+
+**If someone cannot sign in**, click into their row there — the list view does not show it, but the detail panel has `confirmed_at` and `last_sign_in_at`:
+
+| Detail panel | Cause | Fix |
+| --- | --- | --- |
+| `confirmed_at` empty | Never confirmed the sign-up email | Confirm them from the dashboard, or have them use **Resend confirmation email** on the login page |
+| `confirmed_at` set, `last_sign_in_at` empty | Password was never right | **Forgot password?** on the login page |
+| Not listed at all | Account predates the auth migration — see below | Sign up again |
+
+> **Accounts created before 30 July 2026 do not exist.** Authentication moved from Firebase Auth to Supabase Auth on that date, and no user migration was ever written — Firebase credentials were never copied across. Anyone from before then must create a new account. Their old drone registrations are gone too: the pre-migration client recorded the literal string `"local"` as the owner of every row, so those rows could not be attributed to anybody and `supabase-schema.sql` deletes them. Captured **media survives** — re-register the drone with the same **Drone ID** and it reappears.
+
+**Never deleting an account to fix a sign-in problem.** `drones.owner` is `references auth.users(id) on delete cascade`, so removing the user destroys every drone registration they own, including the per-drone token, which is not recoverable from anywhere in the app. Every case in the table above is fixable without deleting anything.
 
 ---
 
@@ -481,8 +490,8 @@ Nothing is deleted from the card; the cloud is a backup.
 **Why Supabase and not Firebase.** Cloud Storage for Firebase has required the
 paid Blaze plan since September 2024 — on the free Spark plan you get no buckets
 at all and calls return 402/403. Supabase's free tier includes 1 GB of file
-storage with no credit card. Firebase keeps auth and hosting; only the media
-bytes moved.
+storage with no credit card. Firebase keeps hosting only — auth followed the
+media to Supabase in July 2026 (see [step 2](#2-supabase-auth-authentication)).
 
 **Photos only, by default.** At the default `REC_BITRATE` of 4 Mbit/s a recording
 is roughly **1.8 GB per hour**, so video cannot fit a 1 GB allowance. The
@@ -506,11 +515,12 @@ paid tier and everything already on the card uploads.
    Media page fills in live as a surfacing drone drains its backlog. Without it
    the page still works, it just needs a manual refresh.
 
-> **Access note.** The app signs in with Firebase, not Supabase, so the browser
-> only ever holds the anon key and the media policies grant read to `anon`.
-> Captures are effectively *unlisted* rather than access-controlled — anyone with
-> the anon key (it ships in the client bundle) could read them. Fine for survey
-> footage; move auth to Supabase before storing anything sensitive.
+> **Access note.** The app signs in with Supabase, so `auth.uid()` is a real
+> value inside Postgres and the media policies are enforced per account: a row
+> is readable only by someone who owns a drone with the matching Drone ID. This
+> used to be a Firebase sign-in, where `auth.uid()` was always NULL, the only
+> workable policy was `using (true)`, and captures were effectively *unlisted*
+> rather than access-controlled. That is no longer the case.
 
 ### On the Pi
 

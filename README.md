@@ -6,7 +6,7 @@ A ground control station for an underwater/surface drone (ROV/USV) built on a Ra
 
 ```bash
 npm install
-cp .env.example .env   # fill in Firebase credentials
+cp .env.example .env   # fill in Supabase credentials
 npm run dev            # browser at http://localhost:5173
 ```
 

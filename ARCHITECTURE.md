@@ -30,7 +30,7 @@ This document explains the full system: what every layer does, how data flows th
 │                                                         │
 │  ┌─────────┐  ┌──────────┐  ┌──────────────────────┐  │
 │  │ LoginPage│  │FleetPage │  │    ControlPage        │  │
-│  │ Firebase │  │ Drone    │  │  Map · Camera · Helm  │  │
+│  │ Supabase │  │ Drone    │  │  Map · Camera · Helm  │  │
 │  │  auth    │  │ registry │  │  Instruments          │  │
 │  └─────────┘  └──────────┘  └──────────────────────┘  │
 │                                    │           │        │
@@ -76,7 +76,7 @@ Both connections travel over **Tailscale** (an encrypted mesh VPN) when operatin
 | React 19 + Vite | UI framework and build tool |
 | React Router v7 (hash routing) | Navigation — hash mode required for Electron file:// protocol |
 | Leaflet + react-leaflet | Interactive map with drone position and waypoints |
-| Firebase (Auth only) | Email/password authentication |
+| Supabase Auth | Email/password authentication, password reset, email confirmation |
 | Supabase (optional) | Cloud fleet registry (drone list); falls back to localStorage if not configured |
 | Electron | Desktop app packaging |
 | Vitest + Testing Library | Unit and component tests |
@@ -114,7 +114,8 @@ Sea-Grass-Drone/
 │   ├── App.jsx              # Router, AuthProvider, DroneProvider
 │   │
 │   ├── pages/
-│   │   ├── LoginPage.jsx    # Firebase email/password sign-in + sign-up
+│   │   ├── LoginPage.jsx    # Supabase email/password sign-in + sign-up
+│   │   ├── ResetPasswordPage.jsx # Lands password-recovery links (?code=)
 │   │   ├── FleetPage.jsx    # Drone list, add/edit/remove drones
 │   │   ├── ControlPage.jsx  # Main cockpit view
 │   │   └── SettingsPage.jsx # App settings, demo mode, key map reference
@@ -126,20 +127,15 @@ Sea-Grass-Drone/
 │   │   ├── DroneMap.jsx      # Leaflet map, drone marker, trail, waypoints
 │   │   ├── KeyboardControl.jsx # WASD/QE/LK helm pad + E-STOP
 │   │   ├── Instruments.jsx   # Compass, DepthMeter, SpeedGauge, BatteryMeter
-│   │   └── ProtectedRoute.jsx # Auth guard (unused — inline in App.jsx)
 │   │
 │   ├── context/
 │   │   ├── AuthContext.jsx   # Supabase auth state, session, signIn/Out
 │   │   └── DroneContext.jsx  # DroneLink instance, fleet, telemetry, camera state
 │   │
 │   ├── lib/
+│   │   ├── auth.js           # signIn/up/out, password reset, confirmation resend
 │   │   ├── droneLink.js      # WebSocket client class — all drone communication
-│   │   └── supabase.js       # Supabase client (null when env vars absent)
-│   │
-│   ├── firebase/
-│   │   ├── config.js         # Firebase app init, reads VITE_FIREBASE_* env vars
-│   │   ├── auth.js           # login(), register(), logout() wrappers
-│   │   └── firestore.js      # Stub — Firestore helpers go here if added later
+│   │   └── supabase.js       # Supabase client (PKCE flow; null when env absent)
 │   │
 │   ├── styles/
 │   │   ├── theme.css         # CSS variables — colours, fonts, radius, animation
@@ -174,9 +170,12 @@ Sea-Grass-Drone/
 ```
 LoginPage
   │
-  ├─ Sign in → Firebase signInWithEmailAndPassword()
-  ├─ Sign up → Firebase createUserWithEmailAndPassword()
-  └─ (future) Local mode → enterLocalMode() — skips Firebase entirely
+  ├─ Sign in  → supabase.auth.signInWithPassword()
+  ├─ Sign up  → supabase.auth.signUp()
+  ├─ Forgot   → supabase.auth.resetPasswordForEmail()
+  │              └─ emailed link → /#/reset-password?code=…
+  │                   └─ exchangeCodeForSession() → updateUser({ password })
+  └─ Resend   → supabase.auth.resend({ type: 'signup' })
        │
        ▼
   AuthContext
@@ -203,14 +202,19 @@ Note the consequence: with Supabase unconfigured there is now no way into the ap
 
 ### Environment variables required
 ```
-VITE_FIREBASE_API_KEY
-VITE_FIREBASE_AUTH_DOMAIN
-VITE_FIREBASE_PROJECT_ID
-VITE_FIREBASE_STORAGE_BUCKET
-VITE_FIREBASE_MESSAGING_SENDER_ID
-VITE_FIREBASE_APP_ID
-VITE_FIREBASE_MEASUREMENT_ID  (optional — only needed for Analytics)
+VITE_SUPABASE_URL
+VITE_SUPABASE_ANON_KEY
 ```
+
+The `VITE_FIREBASE_*` variables are dead — they went with the auth migration. Firebase Hosting needs no keys in `.env` (see `firebase.json`).
+
+### Account recovery
+
+The client runs the **PKCE** flow (`src/lib/supabase.js`), not Supabase's default implicit flow. The implicit flow returns recovery tokens in the URL *fragment*, and the app is mounted on a `HashRouter` that already owns the fragment. PKCE puts a short-lived `?code=` in the query string instead, which the router ignores.
+
+`ResetPasswordPage` is routed **outside** `<Protected>` on purpose: exchanging the code signs the user in, and `LoginPage` redirects anyone authed to `/fleet` — so a guarded route would bounce them off the password form before they could use it.
+
+The redirect URL must be allow-listed in **Authentication → URL Configuration**, or Supabase falls back to the Site URL and the code is never exchanged. See [SETUP.md](SETUP.md#2-supabase-auth-authentication).
 
 ---
 

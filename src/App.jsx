@@ -2,6 +2,7 @@ import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { DroneProvider } from "./context/DroneContext";
 import LoginPage from "./pages/LoginPage";
+import ResetPasswordPage from "./pages/ResetPasswordPage";
 import FleetPage from "./pages/FleetPage";
 import ControlPage from "./pages/ControlPage";
 import MediaPage from "./pages/MediaPage";
@@ -29,6 +30,12 @@ export default function App() {
         <DroneProvider>
           <Routes>
             <Route path="/" element={<LoginPage />} />
+            {/* Deliberately NOT wrapped in <Protected>, and ahead of the
+                catch-all. Exchanging the recovery code signs the user in, and
+                LoginPage sends anyone authed to /fleet — so this has to be a
+                route an authed user is allowed to sit on, or the password form
+                would never be reachable. */}
+            <Route path="/reset-password" element={<ResetPasswordPage />} />
             <Route
               path="/fleet"
               element={

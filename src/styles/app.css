@@ -16,6 +16,14 @@
   height: 100vh;
 }
 
+/* The reset page has no hero half — just the card, centred. */
+.login-standalone {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+}
+.login-standalone .login-panel { width: 100%; }
+
 /* No overflow:hidden here. It existed only to stop the expanding sonar rings
    spilling out, but it also clipped the brand's particle canvas back to roughly
    the panel's padding — reinstating the very rectangle BLEED exists to remove.
@@ -197,6 +205,21 @@
   font-size: 13px;
   margin-bottom: 14px;
 }
+
+/* A button that reads as a link. Kept a <button> rather than an <a> because it
+   runs an action and goes nowhere — an anchor without an href is not reachable
+   by keyboard and is announced as nothing useful. */
+.login-link {
+  display: inline-block;
+  margin: -4px 0 16px;
+  padding: 0;
+  font-size: 12px;
+  color: var(--teal);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.login-link:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .login-submit { width: 100%; padding: 12px; font-size: 14px; }
 .login-muted { color: var(--muted); line-height: 1.6; font-size: 13px; }
