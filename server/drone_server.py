@@ -97,7 +97,16 @@ if not TOKEN:
 # (terminal_control.py, keyboard_control.py, the test scripts) don't send one,
 # and they are gated by the token like everything else. Origin is only meaningful
 # as a defence against browsers, which always send it.
+#
+# The custom domain comes FIRST because it is where the GCS actually lives. This
+# list was originally derived from .firebaserc alone, which meant the deployed
+# app — served from seagrassrobotics.com — had every handshake refused, and the
+# UI reported the vehicle as disconnected while it sat there with a perfectly
+# good Pixhawk heartbeat. If the app is ever served from another hostname, it
+# goes here or in SEAGRASS_ALLOWED_ORIGINS, or the link silently stops working.
 _DEFAULT_ORIGINS = (
+    "https://seagrassrobotics.com,"
+    "https://www.seagrassrobotics.com,"
     "https://seagrass-d8e39.web.app,"
     "https://seagrass-d8e39.firebaseapp.com,"
     "http://localhost:5173,"
