@@ -121,6 +121,20 @@ async function connectWHEP(url, videoEl, signal, mediaBase, token = "") {
     if (videoEl && e.streams[0]) {
       videoEl.srcObject = e.streams[0];
     }
+    // Ask the jitter buffer to hold as little as it can get away with.
+    //
+    // The default target is tuned for smooth playback of conversational video
+    // and will happily sit on a few hundred milliseconds. For a vehicle the
+    // operator is steering by this picture, latency beats smoothness: a
+    // late frame is worse than a dropped one. Chromium honours this hint;
+    // where it isn't supported the assignment is simply ignored.
+    if (e.receiver && "playoutDelayHint" in e.receiver) {
+      try {
+        e.receiver.playoutDelayHint = 0;
+      } catch {
+        // Non-fatal: a browser that rejects the value just keeps its default.
+      }
+    }
   };
 
   // Receive-only — we never send media from the browser.

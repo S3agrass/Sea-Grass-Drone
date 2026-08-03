@@ -63,6 +63,10 @@ WIDTH = int(os.environ.get("CAM_WIDTH", "1280"))
 HEIGHT = int(os.environ.get("CAM_HEIGHT", "720"))
 FPS = int(os.environ.get("CAM_FPS", "30"))
 BITRATE = int(os.environ.get("CAM_BITRATE", "2000"))
+# Keyframe every N frames. Expressed in seconds because that is what it means to
+# an operator: the longest a newly opened feed can sit black before it can start
+# decoding. Raise it to save bitrate, at the cost of a slower-appearing feed.
+KEYFRAME_INTERVAL = max(1, int(FPS * float(os.environ.get("CAM_KEYFRAME_S", "1"))))
 
 # Detection frame tap: when DETECT_FRAME is set, a second (low-res, low-fps)
 # GStreamer branch is teed off the same camera source and continuously
@@ -179,7 +183,19 @@ def build_gst_cmd():
         "videoconvert", "!",
         *boost,
         *(["videoconvert", "!"] if boost else []),
-        "x264enc", "tune=zerolatency", f"bitrate={BITRATE}", "speed-preset=ultrafast", "!",
+        # key-int-max is the difference between a feed that appears at once and
+        # one that appears eventually. x264's default is ~250 frames, so at 30fps
+        # a keyframe every ~8 seconds — and a WebRTC viewer cannot decode a
+        # single pixel until one arrives. Nothing can ask for one on demand
+        # either: this is an RTSP *push*, so a new viewer's PLI has no path back
+        # to this encoder. Every operator opening the page waited a random 0-8s
+        # on a black rectangle, which read as "the camera is broken" rather than
+        # "the camera is waiting".
+        #
+        # One per second costs a few percent of bitrate at this resolution and
+        # bounds that wait at ~1s.
+        "x264enc", "tune=zerolatency", f"bitrate={BITRATE}", "speed-preset=ultrafast",
+        f"key-int-max={KEYFRAME_INTERVAL}", "!",
         "video/x-h264,profile=baseline", "!",
         "rtspclientsink", f"location={RTSP_SINK}", "protocols=tcp",
     ]
@@ -207,7 +223,16 @@ def build_gst_cmd():
 
     cmd = ["gst-launch-1.0", "-e", *src, "tee", "name=t", "t.", "!", "queue", "!", *h264_branch]
     for branch in taps:
-        cmd += ["t.", "!", "queue", "!", *branch]
+        # Leaky, unlike the H.264 branch's queue. A tee runs at the speed of its
+        # slowest branch: if multifilesink blocks — a busy SD card is enough —
+        # this queue fills, back-pressures the tee, and stutters the operator's
+        # video for the sake of a snapshot nobody is waiting on. Dropping old
+        # frames here is free, because both taps are already frame-dropping
+        # (videorate) and only ever keep the most recent file.
+        #
+        # The H.264 queue stays non-leaky on purpose: dropping frames feeding an
+        # encoder produces a worse picture, not a later one.
+        cmd += ["t.", "!", "queue", "leaky=downstream", "max-size-buffers=2", "!", *branch]
     return cmd
 
 
