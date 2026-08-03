@@ -29,28 +29,34 @@ const ICE_GATHER_MAX_MS = 1500;
 const ICE_GATHER_GRACE_MS = 300;
 
 // Module-level so it survives remounts and the connect/reconnect cycle.
-let turnCache = { base: null, at: 0, iceServers: null, inflight: null };
+let turnCache = { base: null, token: null, at: 0, iceServers: null, inflight: null };
 
 /** ICE servers for `mediaBase`, cached. Safe to call speculatively — that is
  *  the point: warming this while the page is still connecting takes the fetch
  *  off the critical path entirely. */
-export async function getIceServers(mediaBase) {
+export async function getIceServers(mediaBase, token = "") {
   if (!mediaBase) return STUN_ONLY;
   const fresh =
     turnCache.base === mediaBase &&
+    turnCache.token === token &&
     turnCache.iceServers &&
     Date.now() - turnCache.at < TURN_CACHE_TTL_MS;
   if (fresh) return turnCache.iceServers;
   // Deliberately not passed the caller's AbortSignal: this result is shared, so
   // one torn-down negotiation must not cancel the fetch another is waiting on.
-  if (!turnCache.inflight || turnCache.base !== mediaBase) {
+  if (!turnCache.inflight || turnCache.base !== mediaBase || turnCache.token !== token) {
     turnCache = {
       base: mediaBase,
+      token,
       at: 0,
       iceServers: null,
       inflight: (async () => {
         try {
-          const resp = await fetch(`${mediaBase}/turn-credentials`);
+          // Authenticated: this endpoint mints real Cloudflare TURN credentials
+          // against the project's account, and relay bandwidth is billed.
+          const resp = await fetch(`${mediaBase}/turn-credentials`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+          });
           const data = await resp.json();
           if (Array.isArray(data.iceServers) && data.iceServers.length) {
             turnCache.iceServers = data.iceServers;
@@ -99,13 +105,13 @@ function waitForCandidates(pc) {
 // WHEP (WebRTC-HTTP Egress Protocol) client for MediaMTX.
 // POSTs an SDP offer to the WHEP URL; MediaMTX replies with an SDP answer;
 // the browser then plays the H.264 stream in a <video> element.
-async function connectWHEP(url, videoEl, signal, mediaBase) {
+async function connectWHEP(url, videoEl, signal, mediaBase, token = "") {
   // TURN credentials come from the Pi's media_server.py, not hardcoded here —
   // they're short-lived and its secret never reaches the browser. Falls back to
   // STUN-only if mediaBase is unknown or the fetch fails; that still works on
   // networks whose NAT/firewall allows direct inbound UDP, just not the common
   // home-router case this exists for.
-  const iceServers = await getIceServers(mediaBase);
+  const iceServers = await getIceServers(mediaBase, token);
   if (signal.aborted) return null;
 
   const pc = new RTCPeerConnection({ iceServers });
@@ -131,9 +137,16 @@ async function connectWHEP(url, videoEl, signal, mediaBase) {
 
   if (signal.aborted) { pc.close(); return null; }
 
+  // MediaMTX authenticates readers now (server/mediamtx.yml delegates to
+  // media_server.py), so the WHEP request carries the drone's token as HTTP
+  // Basic credentials. The username is fixed and ignored; only the password is
+  // checked. Without this the feed comes back 401 instead of connecting.
   const resp = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/sdp" },
+    headers: {
+      "Content-Type": "application/sdp",
+      ...(token ? { Authorization: `Basic ${btoa(`seagrass:${token}`)}` } : {}),
+    },
     body: pc.localDescription.sdp,
     signal,
   });
@@ -163,6 +176,9 @@ export default function CameraView() {
     recordStop,
     capturePhoto,
   } = useDrone();
+  // media_server.py authenticates /turn-credentials now — same shared secret the
+  // control link uses.
+  const camToken = activeDrone?.token || "";
 
   const streamUrl = activeDrone?.camera_url || "";
   const type = streamType(streamUrl);
@@ -202,8 +218,8 @@ export default function CameraView() {
   // in front of the peer connection being built at all, and by the time the
   // camera is wanted the answer is usually already cached.
   useEffect(() => {
-    if (mediaBase) getIceServers(mediaBase).catch(() => {});
-  }, [mediaBase]);
+    if (mediaBase) getIceServers(mediaBase, camToken).catch(() => {});
+  }, [mediaBase, camToken]);
 
   // When the camera subprocess starts/stops on the Pi, or the stream URL
   // changes, reset the feed state so the WHEP hook re-runs.
@@ -230,7 +246,7 @@ export default function CameraView() {
     const controller = new AbortController();
     let pc = null;
 
-    connectWHEP(streamUrl, videoRef.current, controller.signal, mediaBase)
+    connectWHEP(streamUrl, videoRef.current, controller.signal, mediaBase, camToken)
       .then((conn) => {
         if (!conn) return; // aborted
         pc = conn;
@@ -253,7 +269,7 @@ export default function CameraView() {
       pc?.close();
       if (videoRef.current) videoRef.current.srcObject = null;
     };
-  }, [wantFeed, type, streamUrl, mediaBase, retryKey]);
+  }, [wantFeed, type, streamUrl, mediaBase, camToken, retryKey]);
 
   // Detection overlay — draw normalized bounding boxes onto a canvas sized to
   // the displayed feed. Boxes arrive as fractions (0-1) of the full source

@@ -10,7 +10,11 @@
 
 # --- drone control (existing) ---
 pymavlink        # MAVLink bridge to the Pixhawk
-websockets       # async WebSocket server
+# >=14: drone_server.py's origin check is a process_request(connection, request)
+# hook returning connection.respond(...), which is the asyncio implementation's
+# signature. The legacy one passes (path, headers) and expects a tuple, so on an
+# older release the hook silently fails to guard anything.
+websockets>=14   # async WebSocket server
 
 # --- vision (object detection + underwater filter) ---
 onnxruntime               # MIT   — CPU inference engine for the YOLOX ONNX model

@@ -91,8 +91,14 @@ describe('MediaPage', () => {
     renderPage();
     expect(await screen.findByText('rec-1.mp4')).toBeInTheDocument();
     expect(screen.getByText('photo-1.jpg')).toBeInTheDocument();
+    // The token rides in the query string: this href, and the <img>/<video>
+    // srcs beside it, are fetched by the browser itself, which cannot be given
+    // an Authorization header. media_server.py now rejects these unauthenticated.
     const dl = within(card('rec-1.mp4')).getByText(/download/i).closest('a');
-    expect(dl).toHaveAttribute('href', 'http://pi.local:8000/media/rec-1.mp4');
+    expect(dl).toHaveAttribute(
+      'href',
+      'http://pi.local:8000/media/rec-1.mp4?token=secret',
+    );
   });
 
   it('sorts newest first', async () => {

@@ -11,8 +11,13 @@ the vehicle. Light is on ch7 so it never fights steering.
     Q/E -> ch3 vertical        L/K -> ch7 light
 
 Security:
-  - Set SEAGRASS_TOKEN in the environment; every client must send it in a
-    {"type": "hello", "token": "..."} message before any command is accepted.
+  - Set SEAGRASS_TOKEN in the environment; it is mandatory, and every client
+    must send it in a {"type": "hello", "token": "..."} message before ANY
+    command is accepted and before any telemetry is sent. A socket that has not
+    authenticated within HELLO_DEADLINE_S is closed.
+  - Browsers do not apply same-origin policy to WebSockets, so a page the
+    operator merely visits can open a socket here. SEAGRASS_ALLOWED_ORIGINS
+    gates that; see ALLOWED_ORIGINS below.
   - For remote use, put this behind a Cloudflare Tunnel (wss://) instead of
     exposing port 8765 to the internet.
 
@@ -31,6 +36,7 @@ Run:
 """
 
 import asyncio
+import hmac
 import json
 import math
 import os
@@ -72,9 +78,51 @@ WS_PORT = int(os.environ.get("SEAGRASS_PORT", "8765"))
 # scripts/renew-tls-cert.sh and its systemd timer.
 WS_TLS_CERT = os.environ.get("WS_TLS_CERT", "")
 WS_TLS_KEY = os.environ.get("WS_TLS_KEY", "")
-TOKEN = os.environ.get("SEAGRASS_TOKEN", "")  # empty = auth disabled (LAN only!)
+TOKEN = os.environ.get("SEAGRASS_TOKEN", "")
 if not TOKEN:
     raise SystemExit("SEAGRASS_TOKEN must be set — export it before running this script.")
+
+# Origins allowed to open the control WebSocket from a browser.
+#
+# Same-origin policy does NOT cover WebSockets: without this check, any page the
+# operator happens to have open can connect to the vehicle. The token still gates
+# commands, but an unchecked origin is a free telemetry tap at minimum.
+#
+# file:// and the literal "null" are load-bearing, not padding: the packaged
+# desktop app loads its bundle off disk (electron/main.cjs, win.loadFile), so
+# Chromium sends one or the other. Drop them and the browser build keeps working
+# while the desktop app silently stops connecting.
+#
+# A request with NO Origin header at all is allowed through: non-browser clients
+# (terminal_control.py, keyboard_control.py, the test scripts) don't send one,
+# and they are gated by the token like everything else. Origin is only meaningful
+# as a defence against browsers, which always send it.
+_DEFAULT_ORIGINS = (
+    "https://seagrass-d8e39.web.app,"
+    "https://seagrass-d8e39.firebaseapp.com,"
+    "http://localhost:5173,"
+    "file://,"
+    "null"
+)
+ALLOWED_ORIGINS = {
+    o.strip()
+    for o in os.environ.get("SEAGRASS_ALLOWED_ORIGINS", _DEFAULT_ORIGINS).split(",")
+    if o.strip()
+}
+
+# How long a socket may stay unauthenticated before it is closed. Without a
+# deadline an un-helloed connection sits there indefinitely; with it, the cost of
+# holding one open is bounded.
+HELLO_DEADLINE_S = 10.0
+
+# Failed-hello backoff, per source IP. A rejected token closes the socket, and
+# reconnecting is free, so without this the token can be guessed at network speed.
+# Delay is applied before the rejection is sent, so it costs the attacker wall
+# clock on every attempt past the grace count.
+AUTH_FAIL_GRACE = 3          # failures before delaying at all
+AUTH_FAIL_MAX_DELAY_S = 8.0  # ceiling on the backoff
+AUTH_FAIL_RESET_S = 300.0    # clean-slate after this long without a failure
+_auth_failures = {}          # ip -> (count, last_failure_ts)
 WATCHDOG_S = 1.5
 # Separate, much longer watchdog for AUTONOMOUS motion (heading hold).
 #
@@ -1799,9 +1847,58 @@ def read_telemetry():
 helm_holder = None  # only one client controls the drone at a time
 
 
+def _token_ok(supplied):
+    """Constant-time token check. `supplied` comes straight out of client JSON,
+    so it may be any type at all — anything that isn't a string is simply wrong,
+    not an error worth raising."""
+    if not isinstance(supplied, str):
+        return False
+    return hmac.compare_digest(supplied.encode("utf-8"), TOKEN.encode("utf-8"))
+
+
+def _auth_delay(ip):
+    """Seconds to stall before answering a bad hello from `ip`. Doubles per
+    failure past AUTH_FAIL_GRACE, capped, and forgotten after a quiet period so a
+    fat-fingered operator isn't penalised an hour later."""
+    count, last = _auth_failures.get(ip, (0, 0.0))
+    if last and time.time() - last > AUTH_FAIL_RESET_S:
+        count = 0
+    if count < AUTH_FAIL_GRACE:
+        return 0.0
+    return min(AUTH_FAIL_MAX_DELAY_S, 2.0 ** (count - AUTH_FAIL_GRACE))
+
+
+def _note_auth_failure(ip):
+    count, last = _auth_failures.get(ip, (0, 0.0))
+    if last and time.time() - last > AUTH_FAIL_RESET_S:
+        count = 0
+    _auth_failures[ip] = (count + 1, time.time())
+
+
+def _origin_allowed(origin):
+    # No Origin header: a non-browser client (see ALLOWED_ORIGINS). Allowed, and
+    # still token-gated.
+    if origin is None:
+        return True
+    return origin in ALLOWED_ORIGINS
+
+
+async def reject_disallowed_origin(connection, request):
+    """websockets `process_request` hook: refuse the handshake outright when the
+    Origin isn't allowlisted, before client_handler ever runs. Returning a
+    response object aborts; returning None lets the connection proceed."""
+    origin = request.headers.get("Origin")
+    if _origin_allowed(origin):
+        return None
+    print(f"Rejected WebSocket handshake from disallowed origin: {origin!r}")
+    return connection.respond(403, "Origin not allowed\n")
+
+
 async def client_handler(ws):
     global helm_holder, client_count
-    authed = not TOKEN
+    authed = False
+    stream_tasks = []
+    connected_at = time.time()
     last_seen = time.time()
     client_count += 1
     print(f"Client connected: {ws.remote_address}")
@@ -1961,10 +2058,32 @@ async def client_handler(ws):
                 await send({"type": "motors", **motor_readout})
             await asyncio.sleep(0.1)
 
-    tele_task = asyncio.create_task(telemetry_loop())
-    detect_task = asyncio.create_task(detections_loop())
-    motors_task = asyncio.create_task(motors_loop())
-    sonar_task = asyncio.create_task(sonar_profile_loop())
+    def start_streams():
+        """Spin up the outbound feeds. Called ONLY after a good hello.
+
+        These used to start at connect time, which meant the whole telemetry
+        stream — position, depth, heading, sonar, detections — went to anyone who
+        completed a WebSocket handshake, with the token gating only the inbound
+        commands. Authenticating the socket but not what it is told is not
+        authentication. Idempotent, because a client may send hello twice."""
+        if stream_tasks:
+            return
+        stream_tasks.extend([
+            asyncio.create_task(telemetry_loop()),
+            asyncio.create_task(detections_loop()),
+            asyncio.create_task(motors_loop()),
+            asyncio.create_task(sonar_profile_loop()),
+        ])
+
+    async def hello_deadline():
+        """Close a socket that never authenticates. Nothing is streaming to it —
+        start_streams() hasn't run — but it still holds a connection slot."""
+        await asyncio.sleep(HELLO_DEADLINE_S)
+        if not authed:
+            print(f"No hello within {HELLO_DEADLINE_S:.0f}s, closing {ws.remote_address}")
+            await ws.close(code=4401, reason="unauthorized")
+
+    deadline_task = asyncio.create_task(hello_deadline())
     try:
         async for raw in ws:
             last_seen = time.time()
@@ -1976,11 +2095,28 @@ async def client_handler(ws):
             mtype = msg.get("type")
 
             if mtype == "hello":
-                if TOKEN and msg.get("token") != TOKEN:
+                if not _token_ok(msg.get("token")):
+                    # Stall before answering. The socket is about to close and
+                    # reconnecting costs nothing, so this delay is the only thing
+                    # standing between the token and an offline-speed guessing run.
+                    ip = ws.remote_address[0] if ws.remote_address else "?"
+                    delay = _auth_delay(ip)
+                    _note_auth_failure(ip)
+                    # Never stall past the hello deadline. Otherwise the deadline
+                    # task closes the socket mid-sleep and the reply below is
+                    # never sent — an operator who mistyped their token twice
+                    # sees a silent disconnect instead of being told why. Costs
+                    # the attacker nothing: their socket is closed either way,
+                    # and the deadline is the longer wait of the two.
+                    remaining = HELLO_DEADLINE_S - (time.time() - connected_at) - 0.25
+                    delay = min(delay, max(0.0, remaining))
+                    if delay:
+                        await asyncio.sleep(delay)
                     await send({"type": "error", "message": "Invalid access token"})
                     await ws.close(code=4401, reason="unauthorized")
                     return
                 authed = True
+                start_streams()
                 await send({"type": "hello_ok"})
                 await state()
                 continue
@@ -2101,10 +2237,10 @@ async def client_handler(ws):
                 )
     finally:
         client_count -= 1
-        tele_task.cancel()
-        detect_task.cancel()
-        motors_task.cancel()
-        sonar_task.cancel()
+        deadline_task.cancel()
+        # May be empty: a socket that never authenticated never started them.
+        for task in stream_tasks:
+            task.cancel()
         if client_count == 0:
             # Last operator left — drop PID state so the next session re-captures
             # its hold altitude fresh rather than resuming a stale setpoint.
@@ -2203,6 +2339,10 @@ def _build_ws_ssl_context():
             "got only one."
         )
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    # Pinned rather than inherited. Recent CPython already defaults here, but the
+    # floor for a control link shouldn't be a property of whichever interpreter
+    # the Pi happens to be running.
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain(WS_TLS_CERT, WS_TLS_KEY)
     return ctx
 
@@ -2250,8 +2390,15 @@ async def main():
              if AUTOCAPTURE else ""))
     ssl_ctx = _build_ws_ssl_context()
     scheme = "wss" if ssl_ctx else "ws"
-    async with websockets.serve(client_handler, WS_HOST, WS_PORT, ssl=ssl_ctx):
+    async with websockets.serve(
+        client_handler,
+        WS_HOST,
+        WS_PORT,
+        ssl=ssl_ctx,
+        process_request=reject_disallowed_origin,
+    ):
         print(f"Seagrass drone server listening on {scheme}://{WS_HOST}:{WS_PORT}")
+        print(f"Allowed browser origins: {', '.join(sorted(ALLOWED_ORIGINS))}")
         await asyncio.Future()
 
 

@@ -72,7 +72,7 @@ export default function MediaPage() {
     }
     setLocalStatus("loading");
     try {
-      const resp = await fetch(`${mediaBase}/media`);
+      const resp = await fetch(`${mediaBase}/media`, { headers: authHeaders() });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
       setLocal(data.media || []);
@@ -80,7 +80,7 @@ export default function MediaPage() {
     } catch {
       setLocalStatus("error");
     }
-  }, [mediaBase]);
+  }, [mediaBase, authHeaders]);
 
   useEffect(() => {
     refresh();
@@ -140,10 +140,16 @@ export default function MediaPage() {
     (item) => {
       const cloudUrl = item.storagePath ? urls[item.storagePath] : null;
       if (cloudUrl) return cloudUrl;
-      if (item.onDrone && mediaBase) return `${mediaBase}/media/${item.name}`;
+      // Token in the query string, not a header: the browser issues these
+      // requests itself from <img src>/<video src> below, where there is no
+      // opportunity to set one. The media server accepts either form.
+      if (item.onDrone && mediaBase) {
+        const q = token ? `?token=${encodeURIComponent(token)}` : "";
+        return `${mediaBase}/media/${encodeURIComponent(item.name)}${q}`;
+      }
       return undefined;
     },
-    [urls, mediaBase],
+    [urls, mediaBase, token],
   );
 
   async function remove(item) {

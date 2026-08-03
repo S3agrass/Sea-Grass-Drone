@@ -54,6 +54,7 @@ Run standalone (for testing without drone_server.py):
 import os
 import subprocess
 import sys
+from urllib.parse import quote
 
 MEDIAMTX_HOST = os.environ.get("MEDIAMTX_HOST", "127.0.0.1")
 MEDIAMTX_RTSP_PORT = int(os.environ.get("MEDIAMTX_RTSP_PORT", "8554"))
@@ -95,7 +96,23 @@ GAMMA = float(os.environ.get("CAM_GAMMA", "1.3"))
 CONTRAST = float(os.environ.get("CAM_CONTRAST", "1.15"))
 SATURATION = float(os.environ.get("CAM_SATURATION", "1.2"))
 
-RTSP_SINK = f"rtsp://{MEDIAMTX_HOST}:{MEDIAMTX_RTSP_PORT}/{STREAM_NAME}"
+# MediaMTX authenticates publishers now (see server/mediamtx.yml), so the push
+# URL carries credentials. The username is fixed and meaningless — media_server's
+# /mediamtx-auth only checks the password against SEAGRASS_TOKEN — but MediaMTX
+# will not forward a password without a user, so it has to be there.
+#
+# The token is percent-encoded: it goes into the userinfo part of a URL, and an
+# unescaped '@' or '/' in a generated token would silently re-point the push at a
+# different host or path rather than failing.
+RTSP_USER = "seagrass"
+_RTSP_TOKEN = os.environ.get("SEAGRASS_TOKEN", "")
+if not _RTSP_TOKEN:
+    raise SystemExit("SEAGRASS_TOKEN must be set — MediaMTX rejects unauthenticated publishers.")
+_RTSP_AUTH = f"{RTSP_USER}:{quote(_RTSP_TOKEN, safe='')}@"
+RTSP_SINK = f"rtsp://{_RTSP_AUTH}{MEDIAMTX_HOST}:{MEDIAMTX_RTSP_PORT}/{STREAM_NAME}"
+# Safe to print. The real URL now embeds the token, and this process's stdout is
+# redirected to a log file by drone_server.start_camera().
+RTSP_SINK_SAFE = f"rtsp://{RTSP_USER}:***@{MEDIAMTX_HOST}:{MEDIAMTX_RTSP_PORT}/{STREAM_NAME}"
 
 # GStreamer pipeline:
 #   libcamerasrc  — reads from ArduCam via libcamera (Pi 5 / ArduCam IMX519 etc.)
@@ -195,7 +212,7 @@ def build_gst_cmd():
 
 
 def main():
-    print(f"Seagrass camera: {WIDTH}x{HEIGHT}@{FPS}fps  →  {RTSP_SINK}")
+    print(f"Seagrass camera: {WIDTH}x{HEIGHT}@{FPS}fps  →  {RTSP_SINK_SAFE}")
     print(f"Browsers connect via WHEP:  http://{MEDIAMTX_HOST}:8889/{STREAM_NAME}/whep")
     if DETECT_FRAME:
         print(

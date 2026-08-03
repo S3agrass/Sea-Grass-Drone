@@ -51,16 +51,28 @@ def fetch_ice_servers():
         return json.loads(resp.read().decode("utf-8"))["iceServers"]
 
 
+def _yaml_str(value):
+    """Quote a value for YAML.
+
+    These strings come off the network and are written into a config file that a
+    root-run service then restarts against. Unquoted, a credential containing a
+    colon, a '#', or a newline would silently reshape the document — turning a
+    rotated credential into a broken (or differently-shaped) MediaMTX config
+    rather than an obvious failure. Single-quoted YAML escapes one character,
+    the quote itself, by doubling it."""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 def render_block(ice_servers):
     lines = ["webrtcICEServers2:"]
     for entry in ice_servers:
         urls = entry.get("urls")
         for url in (urls if isinstance(urls, list) else [urls]):
-            lines.append(f"  - url: {url}")
+            lines.append(f"  - url: {_yaml_str(url)}")
             if entry.get("username"):
-                lines.append(f"    username: {entry['username']}")
+                lines.append(f"    username: {_yaml_str(entry['username'])}")
             if entry.get("credential"):
-                lines.append(f"    password: {entry['credential']}")
+                lines.append(f"    password: {_yaml_str(entry['credential'])}")
     return lines
 
 

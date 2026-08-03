@@ -26,8 +26,25 @@ Environment variables:
     SNAPSHOT_FRAME    JPEG file camera_stream.py's snapshot tap continuously
                       overwrites; /photo copies whatever is there right now.
                       default: /tmp/seagrass-camera-snapshot.jpg
-    SEAGRASS_TOKEN    Shared secret for mutating endpoints (photo/delete).
-                      Empty = LAN-trust mode (matches drone_server.py).
+    SEAGRASS_TOKEN    Shared secret. REQUIRED — this process exits without it,
+                      matching drone_server.py. Gates every endpoint except
+                      /health: captured media is dive footage, and
+                      /turn-credentials spends metered Cloudflare bandwidth.
+                      Supply it as `Authorization: Bearer <token>` or, for URLs
+                      the browser loads directly (<img>/<video> src), a ?token=
+                      query parameter.
+    SEAGRASS_ALLOWED_ORIGINS
+                      Comma-separated CORS allowlist, same default and meaning
+                      as drone_server.py's. Replaces a blanket `*`.
+    STREAM_NAME       MediaMTX path this vehicle publishes. default: cam
+
+This process also backs MediaMTX's authentication: server/mediamtx.yml points
+its authHTTPAddress at POST /mediamtx-auth here, so watching or publishing the
+camera requires the same SEAGRASS_TOKEN as everything else. That endpoint is
+localhost-only and takes its credential from the request body, not a header —
+see _mediamtx_auth. Consequence worth knowing: MediaMTX cannot authorise a
+viewer while this process is down, so the camera and the media API now fail
+together rather than separately.
     TURN_KEY_ID           Cloudflare Realtime TURN key ID.
     TURN_KEY_API_TOKEN    Its secret — never sent to the browser; kept here,
                            server-side, to mint short-lived credentials per
@@ -39,19 +56,41 @@ Run standalone (for testing without drone_server.py):
     python3 server/media_server.py
 """
 
+import hmac
 import json
 import os
 import shutil
+import sys
 import time
 import urllib.error
 import urllib.request
 from http import server
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote, urlparse
 
 MEDIA_HTTP_PORT = int(os.environ.get("MEDIA_HTTP_PORT", "8000"))
 MEDIA_DIR = os.environ.get("MEDIA_DIR", os.path.expanduser("~/seagrass-media"))
 SNAPSHOT_FRAME = os.environ.get("SNAPSHOT_FRAME", "/tmp/seagrass-camera-snapshot.jpg")
+# The single MediaMTX path this vehicle publishes. Must match camera_stream.py's
+# STREAM_NAME — /mediamtx-auth refuses to authorise anything else.
+STREAM_NAME = os.environ.get("STREAM_NAME", "cam")
 TOKEN = os.environ.get("SEAGRASS_TOKEN", "")
+if not TOKEN:
+    raise SystemExit("SEAGRASS_TOKEN must be set — export it before running this script.")
+
+# See drone_server.py's ALLOWED_ORIGINS for what each default entry is for; this
+# list is deliberately the same one, and both read the same env var.
+_DEFAULT_ORIGINS = (
+    "https://seagrass-d8e39.web.app,"
+    "https://seagrass-d8e39.firebaseapp.com,"
+    "http://localhost:5173,"
+    "file://,"
+    "null"
+)
+ALLOWED_ORIGINS = {
+    o.strip()
+    for o in os.environ.get("SEAGRASS_ALLOWED_ORIGINS", _DEFAULT_ORIGINS).split(",")
+    if o.strip()
+}
 
 # Cloudflare Realtime TURN — see module docstring. Short-lived (1 hour) so a
 # leaked credential from a single /turn-credentials response is only useful
@@ -152,15 +191,75 @@ def safe_media_path(name):
 
 class MediaHandler(server.BaseHTTPRequestHandler):
     def _cors(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
+        # Echo the request's origin when it's allowlisted, rather than "*". A
+        # wildcard here let any page on the internet read the responses below,
+        # which is how a listing of the operator's dive footage became
+        # cross-origin readable.
+        origin = self.headers.get("Origin")
+        if origin and origin in ALLOWED_ORIGINS:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
 
+    def _route(self):
+        """Path with any query string stripped. Every routing decision must go
+        through this: ?token= now rides along on the URLs the browser loads
+        directly, and matching it against the raw self.path would 404 /media and
+        push "clip.mp4?token=x" into safe_media_path, which rejects it on the
+        extension check."""
+        return urlparse(self.path).path
+
     def _authed(self):
-        if not TOKEN:
-            return True  # LAN-trust mode
+        """Token from the Authorization header, or ?token= for URLs the browser
+        fetches on its own. <img src> and <video src> cannot carry a header, and
+        those are exactly the requests serving the media files. Request logging
+        is suppressed (see log_message), so the query form doesn't land in logs."""
         header = self.headers.get("Authorization", "")
-        return header == f"Bearer {TOKEN}"
+        if header.startswith("Bearer "):
+            supplied = header[len("Bearer "):]
+        else:
+            supplied = parse_qs(urlparse(self.path).query).get("token", [""])[0]
+        return hmac.compare_digest(supplied.encode("utf-8"), TOKEN.encode("utf-8"))
+
+    def _mediamtx_auth(self):
+        """Authorise one MediaMTX publish/read, per server/mediamtx.yml's
+        authHTTPAddress hook.
+
+        MediaMTX POSTs a JSON body describing the attempt and reads only the
+        status code: 2xx allows, anything else denies. The password carries the
+        vehicle's SEAGRASS_TOKEN, so the camera path ends up gated by the same
+        secret as the control link, with no second credential to rotate.
+
+        Localhost only. MediaMTX runs beside this process on the Pi, and this
+        endpoint is a bare yes/no on a token — reachable from off-box it would be
+        an oracle for guessing that token with no browser in the way."""
+        peer = self.client_address[0] if self.client_address else ""
+        if peer not in ("127.0.0.1", "::1"):
+            return self._deny()
+
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            body = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+        except (ValueError, OSError):
+            return self._deny()
+
+        supplied = body.get("password")
+        if not isinstance(supplied, str):
+            return self._deny()
+        if not hmac.compare_digest(supplied.encode("utf-8"), TOKEN.encode("utf-8")):
+            print(f"MediaMTX auth denied: bad token for "
+                  f"{body.get('action')!r} on {body.get('path')!r}")
+            return self._deny()
+
+        # Scope to the one path this vehicle serves. Without it a valid token
+        # authorises publishing to any path name, so an attacker holding the
+        # token could park a stream somewhere the operator never looks.
+        if body.get("path") not in (STREAM_NAME, ""):
+            print(f"MediaMTX auth denied: path {body.get('path')!r} is not {STREAM_NAME!r}")
+            return self._deny()
+
+        self._send_json({"ok": True})
 
     def _send_json(self, obj, status=200):
         body = json.dumps(obj).encode("utf-8")
@@ -180,27 +279,37 @@ class MediaHandler(server.BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        if self.path == '/health':
-            self._send_json({"status": "ok"})
-        elif self.path == '/turn-credentials':
+        route = self._route()
+        # /health stays open: it is a liveness probe carrying no data, and
+        # systemd/curl checks shouldn't need the secret to ask whether the
+        # process is up.
+        if route == '/health':
+            return self._send_json({"status": "ok"})
+        if not self._authed():
+            return self._deny()
+        if route == '/turn-credentials':
             self._send_json(_fetch_turn_credentials())
-        elif self.path == '/media':
+        elif route == '/media':
             self._send_json({"media": list_media()})
-        elif self.path.startswith('/media/'):
-            self._serve_media(self.path[len('/media/'):])
+        elif route.startswith('/media/'):
+            self._serve_media(route[len('/media/'):])
         else:
             self.send_error(404)
 
     def do_POST(self):
+        # Ahead of _authed(): MediaMTX is not one of our clients and sends no
+        # Bearer token — the credential it is asking us to check is in the body.
+        if self._route() == '/mediamtx-auth':
+            return self._mediamtx_auth()
         if not self._authed():
             return self._deny()
-        if self.path == '/photo':
+        if self._route() == '/photo':
             name = capture_photo()
             if name:
                 self._send_json({"name": name, "url": f"/media/{name}"})
             else:
                 self._send_json({"error": "no snapshot available yet"}, status=503)
-        elif self.path in ('/record/start', '/record/stop'):
+        elif self._route() in ('/record/start', '/record/stop'):
             self._send_json(
                 {"error": "recording is not supported on the WebRTC camera path"},
                 status=501,
@@ -211,8 +320,9 @@ class MediaHandler(server.BaseHTTPRequestHandler):
     def do_DELETE(self):
         if not self._authed():
             return self._deny()
-        if self.path.startswith('/media/'):
-            path = safe_media_path(self.path[len('/media/'):])
+        route = self._route()
+        if route.startswith('/media/'):
+            path = safe_media_path(route[len('/media/'):])
             if not path or not os.path.isfile(path):
                 return self._send_json({"error": "not found"}, status=404)
             try:
