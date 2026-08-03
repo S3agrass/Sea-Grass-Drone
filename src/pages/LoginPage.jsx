@@ -17,7 +17,12 @@ export default function LoginPage() {
 
 	if (authed) return <Navigate to="/fleet" replace />;
 
-	async function handleSubmit() {
+	async function handleSubmit(e) {
+		// Now driven by the form's onSubmit, so the browser's own submit paths —
+		// Enter in any field, the button, assistive-tech activation — all land
+		// here. Without this the page would navigate and lose the entry.
+		e?.preventDefault();
+
 		setError("");
 		setNotice("");
 
@@ -86,14 +91,36 @@ export default function LoginPage() {
 	return (
 		<div className="login">
 			<div className="login-hero">
-				<div className="login-rings">
-					<span />
-					<span />
-					<span />
+				<div className="login-rings" aria-hidden="true">
+					<div className="login-rings-origin">
+						<span />
+						<span />
+						<span />
+					</div>
 				</div>
 
 				<div className="login-hero-inner">
-					<ParticleTitle text="SEAGRASS" className="login-brand" />
+					{/* Wordmark lockup. ROBOTICS is a sibling of the particle canvas,
+					    never inside it — ParticleTitle sizes its canvas from the host
+					    box, so anything extra in there would distort the dot field. */}
+					<div className="login-lockup">
+						<ParticleTitle text="SEAGRASS" className="login-brand" />
+
+						{/* Set as individual letters spread by flexbox, which is what
+						    makes the word span exactly the width of SEAGRASS above it
+						    whatever the font does — a fixed letter-spacing would drift
+						    the moment the display face or size changed. The letters are
+						    hidden from assistive tech and one clean word is announced
+						    instead, so it is not read out "R, O, B, O...". */}
+						<div className="login-brand-sub">
+							<span className="visually-hidden">Robotics</span>
+							<span className="login-brand-sub-letters" aria-hidden="true">
+								{[..."ROBOTICS"].map((letter, i) => (
+									<span key={`${letter}-${i}`}>{letter}</span>
+								))}
+							</span>
+						</div>
+					</div>
 
 					<div className="login-tagline">
 						Autonomous ocean vehicle command. Connect, pilot, and survey from
@@ -109,15 +136,23 @@ export default function LoginPage() {
 			</div>
 
 			<div className="login-panel">
-				<div className="login-card">
+				<form className="login-card" onSubmit={handleSubmit} noValidate>
 					<div className="eyebrow">Operator access</div>
 
 					<h1 className="login-title">
 						{tab === "signin" ? "Sign in" : "Create account"}
 					</h1>
 
-					<div className="login-tabs">
+					{/* type="button" is load-bearing now that this sits inside a form:
+					    the default is type="submit", so switching tabs would have
+					    submitted the credentials instead. */}
+					<div className="login-tabs" role="tablist" aria-label="Account action">
 						<button
+							type="button"
+							role="tab"
+							id="tab-signin"
+							aria-selected={tab === "signin"}
+							aria-controls="login-fields"
 							className={tab === "signin" ? "active" : ""}
 							onClick={() => setTab("signin")}
 						>
@@ -125,6 +160,11 @@ export default function LoginPage() {
 						</button>
 
 						<button
+							type="button"
+							role="tab"
+							id="tab-signup"
+							aria-selected={tab === "signup"}
+							aria-controls="login-fields"
 							className={tab === "signup" ? "active" : ""}
 							onClick={() => setTab("signup")}
 						>
@@ -132,47 +172,75 @@ export default function LoginPage() {
 						</button>
 					</div>
 
-					<label className="field">
-						<span className="eyebrow">Email</span>
+					<div
+						id="login-fields"
+						role="tabpanel"
+						aria-labelledby={tab === "signin" ? "tab-signin" : "tab-signup"}
+					>
+						<label className="field" htmlFor="login-email">
+							<span className="eyebrow">Email</span>
 
-						<input
-							type="email"
-							value={email}
-							autoComplete="email"
-							placeholder="you@seagrass.io"
-							onChange={(e) => setEmail(e.target.value)}
-							onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
-						/>
-					</label>
+							<input
+								id="login-email"
+								name="email"
+								type="email"
+								value={email}
+								autoComplete="email"
+								placeholder="you@seagrass.io"
+								aria-invalid={error ? true : undefined}
+								aria-describedby="login-status"
+								onChange={(e) => setEmail(e.target.value)}
+							/>
+						</label>
 
-					<label className="field">
-						<span className="eyebrow">Password</span>
+						<label className="field" htmlFor="login-password">
+							<span className="eyebrow">Password</span>
 
-						<input
-							type="password"
-							value={password}
-							autoComplete={
-								tab === "signin" ? "current-password" : "new-password"
-							}
-							placeholder="••••••••"
-							onChange={(e) => setPassword(e.target.value)}
-							onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
-						/>
-					</label>
+							<input
+								id="login-password"
+								name="password"
+								type="password"
+								value={password}
+								autoComplete={
+									tab === "signin" ? "current-password" : "new-password"
+								}
+								placeholder="••••••••"
+								aria-invalid={error ? true : undefined}
+								aria-describedby={
+									tab === "signup" ? "password-req login-status" : "login-status"
+								}
+								onChange={(e) => setPassword(e.target.value)}
+							/>
+						</label>
 
-					{!supabaseConfigured && (
-						<div className="login-notice">
-							Supabase is not configured — accounts are unavailable until
-							VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set.
-						</div>
-					)}
-					{error && <div className="login-error">{error}</div>}
-					{notice && <div className="login-notice">{notice}</div>}
+						{tab === "signup" && (
+							<p id="password-req" className="field-help">
+								Must be at least 6 characters.
+							</p>
+						)}
+					</div>
+
+					{/* One live region wrapping every outcome. Errors and confirmations
+					    were previously rendered as plain divs: sighted users saw the
+					    message appear, screen-reader users got nothing at all and were
+					    left guessing why sign-in did not proceed. role="alert" is
+					    assertive because a failed sign-in blocks the whole task. */}
+					<div id="login-status" role="alert" aria-live="assertive">
+						{!supabaseConfigured && (
+							<div className="login-notice">
+								Supabase is not configured — accounts are unavailable until
+								VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set.
+							</div>
+						)}
+						{error && <div className="login-error">{error}</div>}
+						{notice && <div className="login-notice">{notice}</div>}
+					</div>
 
 					<button
+						type="submit"
 						className="btn btn-primary login-submit"
-						onClick={handleSubmit}
 						disabled={busy || !supabaseConfigured}
+						aria-busy={busy}
 					>
 						{busy
 							? "Working…"
@@ -180,7 +248,7 @@ export default function LoginPage() {
 								? "Sign in"
 								: "Create account"}
 					</button>
-				</div>
+				</form>
 
 				<div className="login-foot mono">SEAGRASS GCS · v2.0</div>
 			</div>

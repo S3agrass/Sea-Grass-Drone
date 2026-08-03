@@ -38,6 +38,16 @@ const WAVE_FREQ_Y = 0.01;
 
 const ALPHA_CUTOFF = 40; // out of 255 — below this a pixel is antialiasing fuzz
 
+// Slack around the word, in CSS px per side. Sized to the text box exactly, a
+// dot scattered by the cursor was sliced off along the element's edge and the
+// effect read as a rectangle. Everything is drawn in canvas space — the host box
+// grown by this on all four sides — so the word still lands dead centre.
+const BLEED = 220;
+// Belt to BLEED's braces: a dot approaching the boundary fades out over this
+// many px rather than being clipped, so no straight line can appear whatever the
+// layout does. The resting word sits BLEED from the edge, well clear of it.
+const EDGE_FADE = 90;
+
 export default function ParticleTitle({ text, className = "" }) {
   const hostRef = useRef(null);
   const canvasRef = useRef(null);
@@ -64,18 +74,28 @@ export default function ParticleTitle({ text, className = "" }) {
     let particles = [];
     let frame = 0;
     const pointer = { x: -1e4, y: -1e4, active: false };
+    // Canvas size in CSS px, kept for the per-frame clear and the edge fade. The
+    // host's own rect is BLEED smaller on each side.
+    let viewW = 0;
+    let viewH = 0;
 
     const build = () => {
       const rect = host.getBoundingClientRect();
-      const w = Math.max(1, Math.round(rect.width));
-      const h = Math.max(1, Math.round(rect.height));
-      if (w < 2 || h < 2) return;
+      const hostW = Math.max(1, Math.round(rect.width));
+      const hostH = Math.max(1, Math.round(rect.height));
+      if (hostW < 2 || hostH < 2) return;
+      const w = hostW + BLEED * 2;
+      const h = hostH + BLEED * 2;
+      viewW = w;
+      viewH = h;
 
       const dpr = window.devicePixelRatio || 1;
       canvas.width = Math.round(w * dpr);
       canvas.height = Math.round(h * dpr);
       canvas.style.width = `${w}px`;
       canvas.style.height = `${h}px`;
+      canvas.style.left = `${-BLEED}px`;
+      canvas.style.top = `${-BLEED}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
       // Take the type off the element actually being replaced, so the canvas
@@ -145,13 +165,18 @@ export default function ParticleTitle({ text, className = "" }) {
       ctx.clearRect(0, 0, w, h);
       // The rasterised word has done its job as a source of positions and
       // colours; from here the dots are the only thing drawn.
-      measure.style.visibility = "hidden";
+      //
+      // opacity, NOT visibility. visibility:hidden takes the element out of the
+      // accessibility tree, so the word this component exists to display was
+      // announced to nobody the moment the canvas took over. opacity:0 leaves it
+      // exposed to assistive tech, keeps it in flow (build() measures the host's
+      // box), and leaves its computed type and colours intact for the rebuild.
+      measure.style.opacity = "0";
     };
 
     const draw = (now) => {
       const t = now / 1000;
-      const rect = host.getBoundingClientRect();
-      ctx.clearRect(0, 0, rect.width, rect.height);
+      ctx.clearRect(0, 0, viewW, viewH);
 
       for (const p of particles) {
         p.vx += (p.tx - p.x) * SPRING;
@@ -180,21 +205,35 @@ export default function ParticleTitle({ text, className = "" }) {
           WAVE_AMPLITUDE;
         const twinkle = 0.86 + 0.14 * Math.sin(t * 2.1 + p.phase);
 
+        // Distance to the nearest canvas edge, ramped over EDGE_FADE, so a dot
+        // that reaches the boundary is already invisible and the clip never
+        // shows up as a line.
+        const edge = Math.max(
+          0,
+          Math.min(1, Math.min(p.x, p.y, viewW - p.x, viewH - p.y) / EDGE_FADE),
+        );
+
         ctx.beginPath();
         ctx.arc(p.x, p.y + wave, 1.35 * (0.6 + p.base * 0.4), 0, 6.2832);
         ctx.fillStyle = `rgba(${p.r},${p.g},${p.b},${Math.min(
           1,
-          (0.72 + p.base * 0.38) * twinkle,
+          (0.72 + p.base * 0.38) * twinkle * edge,
         ).toFixed(3)})`;
         ctx.fill();
       }
       frame = requestAnimationFrame(draw);
     };
 
+    // Tracked on the window rather than the host. Listening on the element meant
+    // repulsion cut out the moment the cursor crossed the word's own box, which
+    // announced that rectangle as clearly as the clipping did. REPEL_RADIUS
+    // already limits the effect, so a global cursor position is enough.
+    // Coordinates are converted into canvas space, which starts BLEED above and
+    // left of the host.
     const onPointerMove = (e) => {
       const rect = host.getBoundingClientRect();
-      pointer.x = e.clientX - rect.left;
-      pointer.y = e.clientY - rect.top;
+      pointer.x = e.clientX - rect.left + BLEED;
+      pointer.y = e.clientY - rect.top + BLEED;
       pointer.active = true;
     };
     const onPointerLeave = () => {
@@ -210,8 +249,8 @@ export default function ParticleTitle({ text, className = "" }) {
     // reflow without this leaves the word anchored to the old box.
     const ro = new ResizeObserver(build);
     ro.observe(host);
-    host.addEventListener("pointermove", onPointerMove);
-    host.addEventListener("pointerleave", onPointerLeave);
+    window.addEventListener("pointermove", onPointerMove);
+    document.addEventListener("pointerleave", onPointerLeave);
 
     // Webfonts land after first paint. Sampling before Sora arrives rasterises
     // the fallback face, and the dots would spell the word in the wrong type.
@@ -220,18 +259,19 @@ export default function ParticleTitle({ text, className = "" }) {
     return () => {
       cancelAnimationFrame(frame);
       ro.disconnect();
-      host.removeEventListener("pointermove", onPointerMove);
-      host.removeEventListener("pointerleave", onPointerLeave);
-      if (measure) measure.style.visibility = "";
+      window.removeEventListener("pointermove", onPointerMove);
+      document.removeEventListener("pointerleave", onPointerLeave);
+      if (measure) measure.style.opacity = "";
     };
   }, [text]);
 
   return (
     <div ref={hostRef} className={`particle-title ${className}`}>
-      {/* Real text, always in the DOM: it is what screen readers announce, what
-          a selection copies, and what stays on screen when the effect does not
-          run (reduced motion, no 2D context). The canvas only hides it once it
-          has something to show. */}
+      {/* Real text, always in the DOM and always in the accessibility tree: it
+          is what screen readers announce, what a selection copies, and what
+          stays on screen when the effect does not run (reduced motion, no 2D
+          context). The canvas only fades it out once it has something to show —
+          see the note on opacity in build(). */}
       <span ref={textRef} className="particle-title-text">
         {text}
       </span>

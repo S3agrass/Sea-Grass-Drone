@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>Launch Ground Control — Seagrass</title>
-<meta name="description" content="Open the Seagrass ground control station."/>
+<title>Launch Ground Control — Seagrass Robotics</title>
+<meta name="description" content="Open the Seagrass Robotics ground control station."/>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
@@ -27,6 +27,41 @@ body{
   -webkit-font-smoothing:antialiased;
   min-height:100vh;display:flex;flex-direction:column;
 }
+
+/* ACCESSIBILITY — mirrors the landing page's utilities. */
+@media(prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{
+    animation-duration:.01ms!important;
+    animation-iteration-count:1!important;
+    transition-duration:.01ms!important;
+  }
+}
+.visually-hidden{
+  position:absolute!important;
+  width:1px;height:1px;
+  margin:-1px;padding:0;border:0;
+  overflow:hidden;
+  clip:rect(0 0 0 0);clip-path:inset(50%);
+  white-space:nowrap;
+}
+:focus-visible{
+  outline:3px solid var(--teal);
+  outline-offset:3px;
+  border-radius:2px;
+}
+.skip-link{
+  position:absolute;left:50%;top:0;
+  transform:translate(-50%,-140%);
+  z-index:200;
+  background:var(--teal);color:var(--navy);
+  font-family:'JetBrains Mono',monospace;
+  font-size:.8rem;font-weight:500;letter-spacing:.05em;
+  padding:.7rem 1.2rem;
+  border-radius:0 0 6px 6px;
+  transition:transform .18s ease;
+}
+.skip-link:focus{transform:translate(-50%,0)}
 
 /* NAV — same shell as the landing page */
 nav{
@@ -171,21 +206,23 @@ footer{
 </head>
 <body>
 
-<nav>
-  <a class="nav-logo" href="/"><em>sea</em>grass</a>
-  <a class="nav-back" href="/">← BACK TO SITE</a>
+<a class="skip-link" href="#main">Skip to main content</a>
+
+<nav aria-label="Primary">
+  <a class="nav-logo" href="/"><em>sea</em>grass robotics</a>
+  <a class="nav-back" href="/"><span aria-hidden="true">←</span> BACK TO SITE</a>
 </nav>
 
-<main class="stage">
-  <div class="stage-grid"></div>
-  <div class="stage-glow"></div>
+<main class="stage" id="main" aria-labelledby="launch-h">
+  <div class="stage-grid" aria-hidden="true"></div>
+  <div class="stage-glow" aria-hidden="true"></div>
 
-  <div class="sonar">
+  <div class="sonar" aria-hidden="true">
     <div class="ring"></div>
     <div class="ring"></div>
     <div class="ring"></div>
     <div class="sonar-core">
-      <svg viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <svg viewBox="0 0 28 28" fill="none" focusable="false" xmlns="http://www.w3.org/2000/svg">
         <circle cx="14" cy="14" r="4" fill="#00D4BB" opacity=".9"/>
         <line x1="14" y1="10" x2="14" y2="3" stroke="#00D4BB" stroke-width="1.5" stroke-linecap="round"/>
         <line x1="14" y1="18" x2="14" y2="25" stroke="#00D4BB" stroke-width="1.5" stroke-linecap="round"/>
@@ -200,29 +237,31 @@ footer{
   </div>
 
   <div class="badge">
-    <div class="badge-dot"></div>
+    <div class="badge-dot" aria-hidden="true"></div>
     Ground Control Station
   </div>
 
-  <h1>Take the helm of<br/><em>the fleet</em></h1>
+  <h1 id="launch-h">Take the helm of<br/><em>the fleet</em></h1>
   <p class="sub">
     The ground control station is a separate application: live camera, telemetry,
-    mission control and recorded media for every Seagrass vehicle. It asks you to
-    sign in with your Seagrass account.
+    mission control and recorded media for every Seagrass Robotics vehicle. It asks
+    you to sign in with your Seagrass Robotics account.
   </p>
 
   <div class="actions">
-    <a class="btn" href="/desktop/">Open ground control →</a>
+    <a class="btn" href="/desktop/">Open ground control <span aria-hidden="true">→</span></a>
     <a class="btn btn-ghost" href="/">Back to site</a>
   </div>
 
   <p class="leaving">
-    NEXT STOP · <span>seagrassrobotics.com/desktop</span>
+    <span aria-hidden="true">NEXT STOP · </span>
+    <span class="visually-hidden">The ground control station is at </span>
+    <span>seagrassrobotics.com/desktop</span>
   </p>
 </main>
 
 <footer>
-  <div>© 2026 Seagrass</div>
+  <div>© 2026 Seagrass Robotics</div>
   <div>Autonomous Ocean Intelligence</div>
 </footer>
 

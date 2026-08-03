@@ -40,7 +40,7 @@ describe('ParticleTitle', () => {
     // getContext is null in jsdom. The text must not be hidden — that only
     // happens once the canvas actually has particles to show instead.
     render(<ParticleTitle text="SEAGRASS" />);
-    expect(screen.getByText('SEAGRASS')).not.toHaveStyle({ visibility: 'hidden' });
+    expect(screen.getByText('SEAGRASS')).not.toHaveStyle({ opacity: '0' });
   });
 
   it('does not animate when the OS asks for reduced motion', () => {
@@ -83,11 +83,14 @@ function stubContext() {
 }
 
 describe('ParticleTitle — with a drawable canvas', () => {
-  it('hands over to the particles, hiding the source text', () => {
+  it('hands over to the particles, fading the source text', () => {
     stubContext();
     render(<ParticleTitle text="SEAGRASS" />);
-    // Hidden, not removed: it comes straight back if the effect stops.
-    expect(screen.getByText('SEAGRASS')).toHaveStyle({ visibility: 'hidden' });
+    // Faded, not removed: it comes straight back if the effect stops.
+    expect(screen.getByText('SEAGRASS')).toHaveStyle({ opacity: '0' });
+    // ...and specifically NOT visibility:hidden, which would drop the word out
+    // of the accessibility tree and leave screen readers with a nameless canvas.
+    expect(screen.getByText('SEAGRASS')).not.toHaveStyle({ visibility: 'hidden' });
   });
 
   it('draws the word from its own type metrics, per character', () => {

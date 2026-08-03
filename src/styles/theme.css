@@ -190,6 +190,22 @@ button:focus-visible, input:focus-visible, a:focus-visible {
   outline-offset: 2px;
 }
 
+/* Off-screen but still announced. Unlike display:none or visibility:hidden,
+   this leaves the element in the accessibility tree — for text that has been
+   broken up visually and needs a clean spoken version alongside it. */
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 input, select {
   font-family: var(--font-body);
   background: var(--abyss);
