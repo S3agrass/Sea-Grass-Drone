@@ -1924,6 +1924,13 @@ async def client_handler(ws):
                 "recording": recording,
                 "rec_elapsed_s": int(time.time() - rec_started_at) if recording else 0,
                 "autorecord": autorecord_enabled,
+                # This vehicle's own name for itself, so the operator never has
+                # to retype it. It has to match the drones row for operator
+                # identity to work (the owner lookup keys on it) and for media
+                # to be scoped, and until now the only way it got there was
+                # someone copying it accurately into an optional-looking text
+                # box. The app fills a blank one in from this and stops asking.
+                "drone_id": auth.DRONE_ID,
             }
         )
 
