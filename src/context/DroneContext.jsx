@@ -140,7 +140,7 @@ function loadLocalFleet() {
 }
 
 export function DroneProvider({ children }) {
-  const { user, localMode, accessToken } = useAuth();
+  const { user, localMode, accessToken, loading: authLoading } = useAuth();
   const linkRef = useRef(null);
   if (!linkRef.current) linkRef.current = new DroneLink();
   const link = linkRef.current;
@@ -751,6 +751,17 @@ export function DroneProvider({ children }) {
     // disagree: a page still reading activeDrone.token would keep sending the
     // long-lived secret the JWT work exists to retire.
     operatorCredential,
+    // Which KIND of credential is live. Consumers that hold a long-lived
+    // connection key on this rather than on operatorCredential: the token text
+    // changes whenever supabase-js refreshes the session, roughly hourly, and
+    // rebuilding a working WebRTC connection because a string changed costs a
+    // visible dropout for no gain. This changes only when the answer actually
+    // differs — a demotion, or a different drone.
+    credentialMode,
+    // False while the Supabase session is still resolving. accessToken starts
+    // empty and fills in asynchronously, so anything that negotiates with a
+    // credential must wait rather than connect twice.
+    credentialReady: !authLoading,
     selectDrone,
     connect,
     disconnect,
