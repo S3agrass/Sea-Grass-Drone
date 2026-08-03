@@ -79,6 +79,38 @@ export async function mediaUrl(storagePath) {
 }
 
 /**
+ * Sign many paths in one request. Returns a { storagePath: url } map, omitting
+ * anything that failed so the caller can retry just those.
+ *
+ * The caller used to loop mediaUrl() over the grid, which is a network round
+ * trip per capture — a couple of hundred dives is a couple of hundred requests,
+ * each landing in its own state update and re-render. Storage exposes a batch
+ * form; this is it.
+ */
+export async function mediaUrls(storagePaths) {
+	if (!supabase) return {};
+	const paths = [...new Set(storagePaths.filter(Boolean))];
+	if (!paths.length) return {};
+
+	const { data, error } = await supabase.storage
+		.from(BUCKET)
+		.createSignedUrls(paths, SIGNED_URL_TTL_S);
+	if (error) return {};
+
+	const out = {};
+	(data || []).forEach((entry, i) => {
+		// createSignedUrls reports per-path failures inline rather than throwing:
+		// a bad path comes back with `error` set and no url, and the rest of the
+		// batch is still good. Results are returned in request order, so the
+		// index is the fallback if `path` is ever absent.
+		if (entry?.signedUrl && !entry.error) {
+			out[entry.path ?? paths[i]] = entry.signedUrl;
+		}
+	});
+	return out;
+}
+
+/**
  * Remove a capture from the cloud: the stored object first, then the row. That
  * order can leave an orphaned row if the second call fails, which is
  * recoverable — the reverse would leave bytes in the bucket that nothing lists,
