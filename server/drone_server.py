@@ -47,6 +47,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import websockets
@@ -2356,6 +2357,48 @@ def _build_ws_ssl_context():
     return ctx
 
 
+def warn_on_origin_mismatch():
+    """Say something at boot if the allowlist looks like it excludes the site
+    this vehicle is actually operated from.
+
+    This exists because of a real outage. The allowlist was seeded from the
+    Firebase project's hostnames while the GCS is served from a custom domain,
+    so every handshake from the real UI was refused. The vehicle logged
+    "Pixhawk heartbeat OK" the whole time and the operator saw a dead drone —
+    the two facts were minutes apart in the same journal and still took a while
+    to connect, because nothing said they were related.
+
+    A heuristic, not a check: it compares the allowlist against the camera host
+    the fleet is pointed at, which is the one hostname this process knows about
+    that is chosen by the operator rather than by us. Matching on registrable
+    domain rather than exact host, since the camera lives on a subdomain
+    (cam.example.com) while the GCS is usually the apex."""
+    def registrable(host):
+        parts = [p for p in host.split(".") if p]
+        return ".".join(parts[-2:]) if len(parts) >= 2 else host
+
+    camera_host = urllib.parse.urlparse(CAMERA_HTTP).hostname or ""
+    if not camera_host or camera_host in ("127.0.0.1", "localhost"):
+        return  # says nothing about where the browser is
+
+    allowed_domains = {
+        registrable(urllib.parse.urlparse(o).hostname or "")
+        for o in ALLOWED_ORIGINS
+        if o.startswith("http")
+    }
+    if registrable(camera_host) in allowed_domains:
+        return
+
+    print(
+        f"WARNING: no allowed origin shares a domain with the camera host "
+        f"({camera_host}). If the GCS is served from that domain, every browser "
+        f"connection will be refused and the UI will report this vehicle as "
+        f"disconnected while it is running perfectly. Set "
+        f"SEAGRASS_ALLOWED_ORIGINS if so.",
+        flush=True,
+    )
+
+
 async def main():
     connect_pixhawk()
     # Announce ourselves as a GCS at 1 Hz on a dedicated daemon thread, for the
@@ -2408,6 +2451,7 @@ async def main():
     ):
         print(f"Seagrass drone server listening on {scheme}://{WS_HOST}:{WS_PORT}")
         print(f"Allowed browser origins: {', '.join(sorted(ALLOWED_ORIGINS))}")
+        warn_on_origin_mismatch()
         await asyncio.Future()
 
 
