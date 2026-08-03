@@ -43,3 +43,49 @@ export const logout = async () => {
   const { error } = await supabase.auth.signOut();
   if (error) throw error;
 };
+
+/** Where Supabase sends someone after they click an emailed link. The GCS is
+ *  served under /desktop/ (see scripts/assemble-hosting.mjs) and routes on a
+ *  hash, so this is the origin plus that sub-path plus the hash route.
+ *
+ *  This exact URL has to be allow-listed in the Supabase dashboard under
+ *  Authentication -> URL Configuration -> Redirect URLs. Supabase silently
+ *  falls back to the project's Site URL when it is not, which sends people to
+ *  the login page with a code no one ever exchanges. */
+const resetRedirect = () =>
+  `${window.location.origin}/desktop/#/reset-password`;
+
+/** Emails a password-recovery link. Resolves either way — Supabase does not
+ *  reveal whether an address has an account, and neither should we. */
+export const sendPasswordReset = async (email) => {
+  if (!supabaseConfigured) return notConfigured();
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: resetRedirect(),
+  });
+  if (error) throw error;
+};
+
+/** Re-sends the sign-up confirmation email. Only useful for an account that
+ *  exists and has never been confirmed — the state where sign-in fails with
+ *  email_not_confirmed and there was previously no way out of it from the app. */
+export const resendConfirmation = async (email) => {
+  if (!supabaseConfigured) return notConfigured();
+  const { error } = await supabase.auth.resend({ type: "signup", email });
+  if (error) throw error;
+};
+
+/** Sets a new password for whoever the current session belongs to. Only called
+ *  from the reset page, where that session came from a recovery code. */
+export const updatePassword = async (password) => {
+  if (!supabaseConfigured) return notConfigured();
+  const { error } = await supabase.auth.updateUser({ password });
+  if (error) throw error;
+};
+
+/** Trades the `?code=` on a recovery link for a real session. */
+export const exchangeRecoveryCode = async (code) => {
+  if (!supabaseConfigured) return notConfigured();
+  const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+  if (error) throw error;
+  return data;
+};

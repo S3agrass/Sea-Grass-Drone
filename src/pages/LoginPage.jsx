@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import ParticleTitle from "../components/ParticleTitle";
+import { sendPasswordReset, resendConfirmation } from "../lib/auth";
 import { supabaseConfigured } from "../lib/supabase";
 
 export default function LoginPage() {
@@ -14,6 +15,10 @@ export default function LoginPage() {
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState("");
 	const [notice, setNotice] = useState("");
+	// Set when sign-in failed specifically because the account was never
+	// confirmed. That is the one failure the operator can fix themselves, so it
+	// gets its own action rather than being buried in the message.
+	const [unconfirmed, setUnconfirmed] = useState(false);
 
 	if (authed) return <Navigate to="/fleet" replace />;
 
@@ -25,6 +30,7 @@ export default function LoginPage() {
 
 		setError("");
 		setNotice("");
+		setUnconfirmed(false);
 
 		if (!email || !password) {
 			setError("Enter an email and password.");
@@ -78,6 +84,7 @@ export default function LoginPage() {
 				setError("Please enter a valid email address.");
 			} else if (code === "email_not_confirmed" || msg.includes("not confirmed")) {
 				setError("Confirm your email address first — check your inbox.");
+				setUnconfirmed(true);
 			} else if (code === "over_request_rate_limit" || msg.includes("rate limit")) {
 				setError("Too many attempts. Wait a minute and try again.");
 			} else {
@@ -87,6 +94,57 @@ export default function LoginPage() {
 			setBusy(false);
 		}
 	}
+
+	// Shared by both recovery actions: they need an address, they report through
+	// the same live region as sign-in, and they must never disclose whether an
+	// account exists — so the confirmation reads the same either way.
+	async function runRecovery(action, confirmation) {
+		setError("");
+		setNotice("");
+
+		if (!email) {
+			setError("Enter your email address first, then try again.");
+			document.getElementById("login-email")?.focus();
+			return;
+		}
+
+		setBusy(true);
+		try {
+			await action(email);
+			setNotice(confirmation);
+			setUnconfirmed(false);
+		} catch (err) {
+			const code = err.code ?? "";
+			const msg = (err.message ?? "").toLowerCase();
+
+			if (
+				code === "over_email_send_rate_limit" ||
+				code === "over_request_rate_limit" ||
+				msg.includes("rate limit") ||
+				msg.includes("security purposes")
+			) {
+				setError("Too many emails requested. Wait a minute and try again.");
+			} else if (code === "validation_failed" || msg.includes("invalid email")) {
+				setError("Please enter a valid email address.");
+			} else {
+				setError(err.message);
+			}
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	const handleForgotPassword = () =>
+		runRecovery(
+			sendPasswordReset,
+			`If an account exists for ${email}, a password reset link is on its way. The link expires in one hour.`,
+		);
+
+	const handleResendConfirmation = () =>
+		runRecovery(
+			resendConfirmation,
+			`Confirmation link re-sent to ${email}. Click it, then sign in.`,
+		);
 
 	return (
 		<div className="login">
@@ -218,6 +276,19 @@ export default function LoginPage() {
 								Must be at least 6 characters.
 							</p>
 						)}
+
+						{/* type="button" is load-bearing inside this form — the default
+						    is submit, which would fire a sign-in attempt instead. */}
+						{tab === "signin" && (
+							<button
+								type="button"
+								className="login-link"
+								disabled={busy || !supabaseConfigured}
+								onClick={handleForgotPassword}
+							>
+								Forgot password?
+							</button>
+						)}
 					</div>
 
 					{/* One live region wrapping every outcome. Errors and confirmations
@@ -235,6 +306,21 @@ export default function LoginPage() {
 						{error && <div className="login-error">{error}</div>}
 						{notice && <div className="login-notice">{notice}</div>}
 					</div>
+
+					{/* Only offered when sign-in actually failed on a missing
+					    confirmation. Before this there was no way out of that state
+					    from inside the app at all — the account existed, the password
+					    was right, and the only fix was someone with dashboard access. */}
+					{unconfirmed && (
+						<button
+							type="button"
+							className="login-link"
+							disabled={busy}
+							onClick={handleResendConfirmation}
+						>
+							Resend confirmation email
+						</button>
+					)}
 
 					<button
 						type="submit"
