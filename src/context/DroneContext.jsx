@@ -160,6 +160,19 @@ export function DroneProvider({ children }) {
 
   const [linkStatus, setLinkStatus] = useState("disconnected");
   const [linkDetail, setLinkDetail] = useState("");
+
+  // Which credential this drone actually accepts: the operator's Supabase
+  // session ("identity") or the drone's own long-lived token ("drone").
+  //
+  // Identity is tried first and is the point of the whole design, but a vehicle
+  // that cannot work out who owns it — no DRONE_ID match in the drones table,
+  // an older Pi, no uplink on first boot — will refuse a perfectly good session
+  // token. Without this the operator is simply stuck, staring at "check
+  // Settings", holding a drone token that would have worked. So a refusal
+  // demotes to the drone token once, and every surface follows: the control
+  // link, the camera and the media API all read the same resolved value, so
+  // they cannot end up disagreeing about which credential is live.
+  const [credentialMode, setCredentialMode] = useState("identity");
   const [armed, setArmed] = useState(false);
   const [flightMode, setFlightMode] = useState("MANUAL");
   const [pixhawkOk, setPixhawkOk] = useState(false);
@@ -413,6 +426,19 @@ export function DroneProvider({ children }) {
     [fleet, activeDroneId],
   );
 
+  // What every surface presents to this vehicle. See credentialMode above for
+  // why it can demote to the drone's own token.
+  const operatorCredential =
+    credentialMode === "identity"
+      ? accessToken || activeDrone?.token || ""
+      : activeDrone?.token || "";
+
+  // A different drone knows a different set of owners, so the demotion does not
+  // carry across. Signing in is likewise a fresh chance for identity to work.
+  useEffect(() => {
+    setCredentialMode("identity");
+  }, [activeDroneId, accessToken]);
+
   const selectDrone = useCallback((id) => {
     setActiveDroneId(id);
     if (id) localStorage.setItem("seagrass-active-drone", String(id));
@@ -423,6 +449,19 @@ export function DroneProvider({ children }) {
   useEffect(() => {
     return link.subscribe((event) => {
       if (event.type === "status") {
+        // Refused while presenting the operator's session token, with a drone
+        // token available: the vehicle most likely cannot resolve its owners
+        // rather than the operator being unauthorised. Demote and retry once,
+        // instead of leaving them stuck holding a credential that would work.
+        if (event.authFailed) {
+          setCredentialMode((mode) => {
+            if (mode === "identity" && accessToken && activeDrone?.token) {
+              setTimeout(() => link.connect(activeDrone.host, activeDrone.token), 0);
+              return "drone";
+            }
+            return mode;
+          });
+        }
         setLinkStatus(event.status);
         setLinkDetail(event.detail || "");
         if (event.status !== "connected") {
@@ -503,7 +542,8 @@ export function DroneProvider({ children }) {
         }
       }
     });
-  }, [link, pushToast]);
+    // accessToken/activeDrone are read by the auth-failure demotion above.
+  }, [link, pushToast, accessToken, activeDrone]);
 
   /* ---------- demo mode simulation ---------- */
   useEffect(() => {
@@ -571,13 +611,8 @@ export function DroneProvider({ children }) {
 
   const connect = useCallback(() => {
     if (!activeDrone?.host) return;
-    // Prefer the operator's Supabase session token over the drone's own secret.
-    // The vehicle verifies it against the project's public key and checks the
-    // user is one of its owners, so a signed-in browser no longer has to hold a
-    // permanent vehicle credential at all. The per-drone token remains for local
-    // mode, which has no session, and as break-glass if the Pi cannot verify.
-    link.connect(activeDrone.host, accessToken || activeDrone.token || "");
-  }, [link, activeDrone, accessToken]);
+    link.connect(activeDrone.host, operatorCredential);
+  }, [link, activeDrone, operatorCredential]);
 
   const disconnect = useCallback(() => link.disconnect(), [link]);
 
@@ -715,7 +750,7 @@ export function DroneProvider({ children }) {
     // API and MediaMTX all take the same thing. One value so the three cannot
     // disagree: a page still reading activeDrone.token would keep sending the
     // long-lived secret the JWT work exists to retire.
-    operatorCredential: accessToken || activeDrone?.token || "",
+    operatorCredential,
     selectDrone,
     connect,
     disconnect,

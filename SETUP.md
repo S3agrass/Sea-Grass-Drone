@@ -70,24 +70,50 @@ nano ~/.seagrass-env   # paste the drone's "Access token" from the Fleet UI
   `PIXHAWK_BAUD`, `SEAGRASS_PORT`). It is chmod 600 and never committed.
 - Without a token set the server refuses to start — this is intentional.
 
-### Operator identity (recommended)
+### Operator identity
 
 By default the vehicle accepts one shared secret, `SEAGRASS_TOKEN`. That token
 is stored in the browser and never expires, so anyone who obtains a copy has
-permanent control. Configuring operator identity replaces it for signed-in
-browsers: the browser presents its **Supabase session token**, which expires in
-about an hour and refreshes itself, and the Pi verifies it against the project's
-**public** key. The vehicle holds nothing that could mint a token.
+permanent control. Operator identity replaces it for signed-in browsers: the
+browser presents its **Supabase session token**, which expires in about an hour
+and refreshes itself, and the Pi verifies it against the project's **public**
+key. The vehicle holds nothing that could mint a token.
+
+**The vehicle works out who owns it by itself.** On startup, and every few
+minutes after, it looks up its own row in the `drones` table and takes the owner
+from there — using `SUPABASE_SERVICE_KEY` and `DRONE_ID`, which the media
+uploader already needs. Registering a drone in the app is therefore enough to be
+able to drive it, and transferring or revoking it takes effect on the vehicle
+without anyone SSHing in.
+
+So if media upload is already configured (section 9), there is nothing to add
+here beyond the dependency below. Check the boot log:
+
+```
+Operator auth: Supabase identity for 1 operator(s) registered in Supabase, shared token as fallback
+```
+
+> **`DRONE_ID` must match the drone's "Drone ID" in the Fleet UI.** That is what
+> ties the vehicle to its row. If they disagree the vehicle finds no owner, says
+> so at boot, and stays on the shared token:
+>
+> ```
+> No owner registered for drone_id='seagrass'. Operator identity cannot be
+> checked; the shared token still works.
+> ```
+
+`SEAGRASS_OWNER_UIDS` is an optional override, additive to whatever the database
+says. Use it for a vehicle that cannot reach Supabase, or to authorise someone
+who is not the registered owner:
 
 ```bash
-# In ~/.seagrass-env
-SUPABASE_URL=https://<your-project>.supabase.co
-SEAGRASS_OWNER_UIDS=<your Supabase user id>   # comma-separated for several
+# In ~/.seagrass-env — normally unnecessary
+SEAGRASS_OWNER_UIDS=<a Supabase user id>   # comma-separated for several
 ```
 
 Find your user id in the app: **Settings → Account → Operator ID**.
 
-Then install the dependency and restart — **the install is not optional**:
+Install the dependency and restart — **the install is not optional**:
 
 ```bash
 pip install -r ~/Sea-Grass-Drone/server/requirements.txt --break-system-packages
@@ -111,9 +137,14 @@ a worse outcome than a long-lived secret existing. The CLI tools
 (`terminal_control.py`) and the camera's own RTSP push use it too, neither having
 a Supabase session. What changed is that a signed-in *browser* no longer holds it.
 
-**Break-glass:** if identity verification locks you out — wrong clock, keys never
-fetched — the drone's token from the Fleet UI still connects. To disable identity
-entirely, comment out `SEAGRASS_OWNER_UIDS` and restart.
+**Break-glass:** if identity verification refuses a signed-in operator — wrong
+clock, keys never fetched, `DRONE_ID` mismatch — the app notices and retries with
+the drone's own token automatically, so you are not locked out of your vehicle.
+The connection banner will say so. Fix the underlying cause and reconnect to go
+back to identity.
+
+To turn identity off entirely, unset `SUPABASE_SERVICE_KEY` (or
+`SEAGRASS_OWNER_UIDS`) and restart; the boot log will confirm shared-token-only.
 
 ### Daily use
 
