@@ -61,7 +61,15 @@ drop policy if exists "Users can remove their own drones" on public.drones;
 -- per drone — but take a copy first if you want them:
 --   select * from public.drones;
 -- Captured media is NOT touched by this.
-delete from public.drones where owner !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
+--
+-- `owner::text` rather than a bare `owner`, so this survives re-running. Once
+-- the alter below has happened, owner is a uuid, and `!~*` has no uuid operator
+-- — the whole script died here with "operator does not exist: uuid !~* unknown"
+-- on any project that had already migrated, despite the file promising it was
+-- safe to re-run. Cast, and it is a no-op second time around: every uuid
+-- matches the pattern, so nothing is deleted.
+delete from public.drones
+where owner::text !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
 
 -- Now the column can carry a genuine Supabase user id again.
 alter table public.drones alter column owner type uuid using owner::uuid;
