@@ -88,6 +88,8 @@ if not TOKEN:
 # See drone_server.py's ALLOWED_ORIGINS for what each default entry is for; this
 # list is deliberately the same one, and both read the same env var.
 _DEFAULT_ORIGINS = (
+    "https://seagrassrobotics.com,"
+    "https://www.seagrassrobotics.com,"
     "https://seagrass-d8e39.web.app,"
     "https://seagrass-d8e39.firebaseapp.com,"
     "http://localhost:5173,"
