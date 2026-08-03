@@ -460,6 +460,62 @@ export function DroneProvider({ children }) {
     else localStorage.removeItem("seagrass-active-drone");
   }, []);
 
+  // Read through refs so reconcileDroneId stays referentially stable. It is
+  // called from the link subscriber, and depending on these directly would
+  // re-subscribe that effect every time the fleet or the active drone changed.
+  const activeDroneRef = useRef(null);
+  activeDroneRef.current = activeDrone;
+  const saveDroneRef = useRef(null);
+  saveDroneRef.current = saveDrone;
+
+  // What the connected vehicle calls itself, and whether that disagrees with
+  // what the fleet entry says. Surfaced so Settings can show the real value
+  // instead of asking someone to retype it.
+  const [reportedDroneId, setReportedDroneId] = useState("");
+  const [droneIdMismatch, setDroneIdMismatch] = useState(null);
+  // One save attempt per drone, so a failed write does not retry on every state
+  // message for the rest of the session.
+  const droneIdFilled = useRef(new Set());
+
+  /**
+   * Reconcile the vehicle's own id with the fleet entry.
+   *
+   * This value has to match for operator identity to work at all — the Pi looks
+   * up its owner in `drones` by exactly this string — and it also scopes the
+   * Media page. Until now the only way it got set was somebody copying it
+   * accurately into a field labelled "optional" whose help text suggested
+   * leaving it blank. Blank silently disabled identity auth with no symptom
+   * anywhere in the UI, which is how it stayed off.
+   *
+   * Blank is filled in from the vehicle, because there is nothing to weigh: we
+   * are connected to that drone and it just told us its name. A DIFFERENT value
+   * is never overwritten — someone may have set it deliberately, and quietly
+   * rewriting an operator's data to work around a design problem is not a fix.
+   */
+  const reconcileDroneId = useCallback(
+    (reported) => {
+      setReportedDroneId(reported);
+      const drone = activeDroneRef.current;
+      if (!drone) return;
+
+      const current = drone.drone_id || "";
+      if (current === reported) {
+        setDroneIdMismatch(null);
+        return;
+      }
+      if (current) {
+        setDroneIdMismatch({ reported, configured: current });
+        return;
+      }
+
+      setDroneIdMismatch(null);
+      if (droneIdFilled.current.has(drone.id)) return;
+      droneIdFilled.current.add(drone.id);
+      saveDroneRef.current({ ...drone, drone_id: reported });
+    },
+    [],
+  );
+
   /* ---------- link events ---------- */
   useEffect(() => {
     return link.subscribe((event) => {
@@ -532,6 +588,7 @@ export function DroneProvider({ children }) {
           setRecording(Boolean(m.recording));
           setRecElapsed(m.rec_elapsed_s || 0);
           setAutoRecordFlag(Boolean(m.autorecord));
+          if (m.drone_id) reconcileDroneId(m.drone_id);
         } else if (m.type === "telemetry") {
           setTelemetry((t) => ({ ...t, ...m }));
         } else if (m.type === "detections") {
@@ -586,8 +643,10 @@ export function DroneProvider({ children }) {
       }
     });
     // canDemote/activeDrone drive the auth-failure demotion and the decision to
-    // hold the server's refusal rather than show it.
-  }, [link, pushToast, canDemote, activeDrone]);
+    // hold the server's refusal rather than show it. reconcileDroneId is stable
+    // by construction (refs, empty deps) and listed to satisfy the linter
+    // without re-subscribing.
+  }, [link, pushToast, canDemote, activeDrone, reconcileDroneId]);
 
   /* ---------- demo mode simulation ---------- */
   useEffect(() => {
@@ -802,6 +861,11 @@ export function DroneProvider({ children }) {
     // visible dropout for no gain. This changes only when the answer actually
     // differs — a demotion, or a different drone.
     credentialMode,
+    // The connected vehicle's own id, and a disagreement with the fleet entry
+    // if there is one. Settings renders these instead of asking anyone to type
+    // the value from memory.
+    reportedDroneId,
+    droneIdMismatch,
     // False while the Supabase session is still resolving. accessToken starts
     // empty and fills in asynchronously, so anything that negotiates with a
     // credential must wait rather than connect twice.

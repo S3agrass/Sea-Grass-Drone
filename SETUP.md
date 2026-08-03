@@ -113,6 +113,13 @@ SEAGRASS_OWNER_UIDS=<a Supabase user id>   # comma-separated for several
 
 Find your user id in the app: **Settings → Account → Operator ID**.
 
+`DRONE_ID` does not need to be typed anywhere else. The vehicle reports it to
+the app on connect, and a drone whose **Drone ID** field is blank is filled in
+automatically — that field has to match for the owner lookup to find anything,
+and it used to be an optional-looking text box that silently disabled operator
+identity when left empty. If it is already set to something different the app
+will not overwrite it, and says so on the Settings page.
+
 Install the dependency and restart — **the install is not optional**:
 
 ```bash

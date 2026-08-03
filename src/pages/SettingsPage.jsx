@@ -16,7 +16,14 @@ export default function SettingsPage() {
     autoRecord,
     setAutoRecord,
     linkStatus,
+    reportedDroneId,
+    droneIdMismatch,
   } = useDrone();
+  // The vehicle reports its own id, so this is normally shown rather than
+  // asked for. Editing exists for the drone that has never been connected —
+  // locking the field outright would make it impossible to set one up ahead of
+  // time — but it is off by default so nobody retypes a value we already know.
+  const [editDroneId, setEditDroneId] = useState(false);
   const connected = linkStatus === "connected";
   const navigate = useNavigate();
   const [form, setForm] = useState(null);
@@ -101,16 +108,47 @@ export default function SettingsPage() {
                 </span>
               </label>
               <label className="field">
-                <span className="eyebrow">Drone ID (optional)</span>
+                <span className="eyebrow">Drone ID</span>
                 <input
                   className="mono"
                   value={form.drone_id || ""}
-                  placeholder="Must match DRONE_ID on the drone"
+                  placeholder={
+                    reportedDroneId
+                      ? reportedDroneId
+                      : "Set automatically when the drone connects"
+                  }
+                  readOnly={!editDroneId}
                   onChange={(e) => setForm({ ...form, drone_id: e.target.value })}
                 />
                 <span className="field-help">
-                  Tags uploaded media so the Media page shows only this drone's
-                  captures. Leave blank to show everything in the fleet.
+                  {droneIdMismatch ? (
+                    // Never silently overwritten: the operator may have set this
+                    // deliberately. But it has to be said plainly, because the
+                    // consequence is invisible everywhere else in the app.
+                    <strong>
+                      This drone reports{" "}
+                      <span className="mono">{droneIdMismatch.reported}</span>, but
+                      this says <span className="mono">{droneIdMismatch.configured}</span>.
+                      Operator identity is disabled and media is mis-scoped until
+                      they match.
+                    </strong>
+                  ) : (
+                    <>
+                      The drone's own name for itself, filled in automatically the
+                      first time it connects. It has to match for sign-in to
+                      authorise you by account rather than by this drone's access
+                      token, and it scopes the Media page to this vehicle.
+                    </>
+                  )}{" "}
+                  {!editDroneId && (
+                    <button
+                      type="button"
+                      className="btn-small"
+                      onClick={() => setEditDroneId(true)}
+                    >
+                      Edit anyway
+                    </button>
+                  )}
                 </span>
               </label>
               <label className="field">
