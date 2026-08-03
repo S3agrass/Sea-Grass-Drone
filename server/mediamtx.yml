@@ -1,3 +1,30 @@
+# MediaMTX configuration for the Seagrass vehicle.
+#
+# AUTHENTICATION. Every publish and read is checked against media_server.py,
+# which validates the same SEAGRASS_TOKEN the control link and the media API
+# use. One secret for the whole vehicle, and no credentials in this file —
+# which matters because scripts/renew-turn-credentials.py rewrites it on a
+# timer, as root.
+#
+# This file was previously three lines with no auth at all, while the WHEP
+# endpoint is published to the internet through a Cloudflare Tunnel
+# (cam.seagrassrobotics.com — see DEFAULT_CAMERA_URL in
+# src/context/DroneContext.jsx). Anyone who found the hostname could watch the
+# live feed and, because `source: publisher` accepts whoever connects first,
+# could also PUBLISH to the `cam` path and replace the operator's video with
+# their own. Spoofing the camera on a vehicle that is navigated by camera is a
+# control-integrity problem, not only a privacy one.
+authMethod: http
+authHTTPAddress: http://127.0.0.1:8000/mediamtx-auth
+
+# MediaMTX's own housekeeping endpoints. They are not part of the media path and
+# are not exposed off the Pi; excluding them avoids an auth round trip for
+# internal calls (and avoids coupling MediaMTX's startup to media_server.py).
+authHTTPExclude:
+  - action: api
+  - action: metrics
+  - action: pprof
+
 paths:
   cam:
     source: publisher

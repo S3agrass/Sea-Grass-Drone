@@ -22,7 +22,7 @@ import os
 import threading
 import time
 from http import server
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote, urlparse
 
 from PIL import Image, ImageDraw
 
@@ -80,10 +80,23 @@ class Handler(server.BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
 
+    def _route(self):
+        """Path without the query string. The real media_server.py accepts a
+        ?token= on media URLs (the browser loads them from <img>/<video> src,
+        where no header can be set), and the frontend now appends one — so
+        matching on the raw path would 404 every media request against the sim."""
+        return urlparse(self.path).path
+
     def _authed(self):
+        # Unlike media_server.py this stays open when TOKEN is unset: it's a
+        # simulator on localhost, and needing a secret to run it is friction with
+        # nothing to protect. The token forms it DOES accept mirror the real one.
         if not TOKEN:
             return True
-        return self.headers.get("Authorization", "") == f"Bearer {TOKEN}"
+        header = self.headers.get("Authorization", "")
+        if header.startswith("Bearer "):
+            return header[len("Bearer "):] == TOKEN
+        return parse_qs(urlparse(self.path).query).get("token", [""])[0] == TOKEN
 
     def _json(self, obj, status=200):
         body = json.dumps(obj).encode()
@@ -100,12 +113,13 @@ class Handler(server.BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        if self.path == "/":
+        route = self._route()
+        if route == "/":
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
             self.end_headers()
             self.wfile.write(PAGE)
-        elif self.path == "/stream.mjpg":
+        elif route == "/stream.mjpg":
             self.send_response(200)
             self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=FRAME")
             self._cors()
@@ -124,25 +138,26 @@ class Handler(server.BaseHTTPRequestHandler):
                     time.sleep(1 / 15)
             except (BrokenPipeError, ConnectionResetError, OSError):
                 pass
-        elif self.path == "/health":
+        elif route == "/health":
             self._json({"status": "ok", "streaming": True})
-        elif self.path == "/record/status":
+        elif route == "/record/status":
             self._json(self._status())
-        elif self.path == "/media":
+        elif route == "/media":
             self._json({"media": self._list()})
-        elif self.path.startswith("/media/"):
-            self._serve(self.path[len("/media/"):])
+        elif route.startswith("/media/"):
+            self._serve(route[len("/media/"):])
         else:
             self.send_error(404)
 
     def do_POST(self):
         if not self._authed():
             return self._json({"error": "unauthorized"}, 401)
-        if self.path == "/record/start":
+        route = self._route()
+        if route == "/record/start":
             self._json(self._start())
-        elif self.path == "/record/stop":
+        elif route == "/record/stop":
             self._json(self._stop())
-        elif self.path == "/photo":
+        elif route == "/photo":
             name = self._photo()
             self._json({"name": name, "url": f"/media/{name}"})
         else:
@@ -151,8 +166,9 @@ class Handler(server.BaseHTTPRequestHandler):
     def do_DELETE(self):
         if not self._authed():
             return self._json({"error": "unauthorized"}, 401)
-        if self.path.startswith("/media/"):
-            path = safe_media_path(self.path[len("/media/"):])
+        route = self._route()
+        if route.startswith("/media/"):
+            path = safe_media_path(route[len("/media/"):])
             if not path or not os.path.isfile(path):
                 return self._json({"error": "not found"}, 404)
             os.remove(path)

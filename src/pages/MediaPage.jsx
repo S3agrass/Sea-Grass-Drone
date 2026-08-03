@@ -5,7 +5,7 @@ import { useDrone } from "../context/DroneContext";
 import {
   deleteMedia,
   mediaCloudEnabled,
-  mediaUrl,
+  mediaUrls,
   subscribeMedia,
 } from "../lib/mediaStore";
 
@@ -72,7 +72,7 @@ export default function MediaPage() {
     }
     setLocalStatus("loading");
     try {
-      const resp = await fetch(`${mediaBase}/media`);
+      const resp = await fetch(`${mediaBase}/media`, { headers: authHeaders() });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
       setLocal(data.media || []);
@@ -80,7 +80,7 @@ export default function MediaPage() {
     } catch {
       setLocalStatus("error");
     }
-  }, [mediaBase]);
+  }, [mediaBase, authHeaders]);
 
   useEffect(() => {
     refresh();
@@ -125,14 +125,27 @@ export default function MediaPage() {
   // flight from the previous run. Those paths were already recorded as started,
   // so nothing ever retried them and no cloud media would play at all.
   useEffect(() => {
-    for (const item of items) {
-      const path = item.storagePath;
-      if (!path || requested.current.has(path)) continue;
-      requested.current.add(path);
-      mediaUrl(path)
-        ?.then((url) => setUrls((prev) => ({ ...prev, [path]: url })))
-        .catch(() => requested.current.delete(path)); // let a retry happen
-    }
+    const pending = items
+      .map((item) => item.storagePath)
+      .filter((path) => path && !requested.current.has(path));
+    if (!pending.length) return;
+
+    for (const path of pending) requested.current.add(path);
+
+    // One request and one state update for the whole batch. Signing these
+    // individually meant a round trip per capture and a re-render per response.
+    mediaUrls(pending)
+      .then((resolved) => {
+        setUrls((prev) => ({ ...prev, ...resolved }));
+        // Anything the batch didn't resolve is released so a later pass retries
+        // it, matching the old per-item catch.
+        for (const path of pending) {
+          if (!resolved[path]) requested.current.delete(path);
+        }
+      })
+      .catch(() => {
+        for (const path of pending) requested.current.delete(path);
+      });
   }, [items]);
 
   /** Best playable URL for an item: cloud first, drone as the fallback. */
@@ -140,10 +153,16 @@ export default function MediaPage() {
     (item) => {
       const cloudUrl = item.storagePath ? urls[item.storagePath] : null;
       if (cloudUrl) return cloudUrl;
-      if (item.onDrone && mediaBase) return `${mediaBase}/media/${item.name}`;
+      // Token in the query string, not a header: the browser issues these
+      // requests itself from <img src>/<video src> below, where there is no
+      // opportunity to set one. The media server accepts either form.
+      if (item.onDrone && mediaBase) {
+        const q = token ? `?token=${encodeURIComponent(token)}` : "";
+        return `${mediaBase}/media/${encodeURIComponent(item.name)}${q}`;
+      }
       return undefined;
     },
-    [urls, mediaBase],
+    [urls, mediaBase, token],
   );
 
   async function remove(item) {

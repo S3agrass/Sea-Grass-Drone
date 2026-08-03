@@ -61,7 +61,15 @@ drop policy if exists "Users can remove their own drones" on public.drones;
 -- per drone — but take a copy first if you want them:
 --   select * from public.drones;
 -- Captured media is NOT touched by this.
-delete from public.drones where owner !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
+--
+-- `owner::text` rather than a bare `owner`, so this survives re-running. Once
+-- the alter below has happened, owner is a uuid, and `!~*` has no uuid operator
+-- — the whole script died here with "operator does not exist: uuid !~* unknown"
+-- on any project that had already migrated, despite the file promising it was
+-- safe to re-run. Cast, and it is a no-op second time around: every uuid
+-- matches the pattern, so nothing is deleted.
+delete from public.drones
+where owner::text !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
 
 -- Now the column can carry a genuine Supabase user id again.
 alter table public.drones alter column owner type uuid using owner::uuid;
@@ -71,11 +79,29 @@ alter table public.drones
   add constraint drones_owner_fkey foreign key (owner)
   references auth.users(id) on delete cascade;
 
+-- Indexes for the columns RLS actually filters on. Without the first one, every
+-- policy below sequentially scans this table — and because the media and
+-- storage policies reach ownership through a subquery against drones, that scan
+-- happens on their behalf too. It is invisible with a handful of rows and it is
+-- the first thing to hurt with a real user base.
+create index if not exists drones_owner_idx on public.drones (owner);
+
+-- The media/storage policies join on drone_id, and skip the blank convention
+-- (see the `drone_id <> ''` guard below), so the index skips it too.
+create index if not exists drones_drone_id_idx
+  on public.drones (drone_id) where drone_id <> '';
+
 -- Row Level Security, genuinely scoped this time. auth.uid() is a real value on
 -- every request now that sign-in is Supabase's, so Postgres enforces the
 -- boundary. This is the part that has to be right: the anon key ships inside
 -- the client bundle, so anyone can call the REST API directly — filtering in
 -- the browser would look identical in the UI and protect nothing.
+--
+-- Every predicate says `(select auth.uid())` rather than a bare `auth.uid()`.
+-- Same result, very different plan: called bare it is re-evaluated once per row,
+-- while wrapped in a scalar subquery the planner hoists it into an InitPlan
+-- evaluated once for the whole statement. On a large table that is the
+-- difference between a policy you can ignore and the dominant cost of the query.
 alter table public.drones enable row level security;
 
 -- The permissive policies from the Firebase era. Dropped by their old names so
@@ -89,14 +115,14 @@ drop policy if exists "Anyone can remove drones" on public.drones;
 drop policy if exists "Users can view their own drones" on public.drones;
 create policy "Users can view their own drones"
   on public.drones for select
-  using (auth.uid() = owner);
+  using ((select auth.uid()) = owner);
 
 -- with check, not using: this is what stops someone inserting a row that claims
 -- to belong to another account.
 drop policy if exists "Users can register drones" on public.drones;
 create policy "Users can register drones"
   on public.drones for insert
-  with check (auth.uid() = owner);
+  with check ((select auth.uid()) = owner);
 
 -- Both clauses. `using` decides which rows you may edit, `with check` decides
 -- what they may look like afterwards — without the latter you could hand your
@@ -104,13 +130,13 @@ create policy "Users can register drones"
 drop policy if exists "Users can update their own drones" on public.drones;
 create policy "Users can update their own drones"
   on public.drones for update
-  using (auth.uid() = owner)
-  with check (auth.uid() = owner);
+  using ((select auth.uid()) = owner)
+  with check ((select auth.uid()) = owner);
 
 drop policy if exists "Users can remove their own drones" on public.drones;
 create policy "Users can remove their own drones"
   on public.drones for delete
-  using (auth.uid() = owner);
+  using ((select auth.uid()) = owner);
 
 
 -- ---------------------------------------------------------------------------
@@ -146,6 +172,18 @@ create table if not exists public.media (
 create index if not exists media_drone_captured_idx
   on public.media (drone_id, captured_at desc);
 
+-- The fleet-wide view (blank drone_id in the UI) orders by captured_at with no
+-- drone_id to anchor on, so the composite index above cannot serve it — that
+-- query is a full scan plus a sort without this.
+create index if not exists media_captured_at_idx
+  on public.media (captured_at desc);
+
+-- storage.objects' policies resolve an object back to its row with
+-- `m.storage_path = objects.name`. Unindexed, that is a scan of this table for
+-- every object the bucket lists.
+create index if not exists media_storage_path_idx
+  on public.media (storage_path);
+
 alter table public.media enable row level security;
 
 -- Read and delete only, and scoped to the signed-in operator. There is no owner
@@ -166,7 +204,7 @@ create policy "Users can view media from their drones"
   using (
     exists (
       select 1 from public.drones d
-      where d.owner = auth.uid()
+      where d.owner = (select auth.uid())
         and d.drone_id <> ''
         and d.drone_id = public.media.drone_id
     )
@@ -178,7 +216,7 @@ create policy "Users can delete media from their drones"
   using (
     exists (
       select 1 from public.drones d
-      where d.owner = auth.uid()
+      where d.owner = (select auth.uid())
         and d.drone_id <> ''
         and d.drone_id = public.media.drone_id
     )
@@ -216,7 +254,7 @@ create policy "Users can read their media objects"
       join public.drones d
         on d.drone_id = m.drone_id and d.drone_id <> ''
       where m.storage_path = storage.objects.name
-        and d.owner = auth.uid()
+        and d.owner = (select auth.uid())
     )
   );
 
@@ -231,6 +269,6 @@ create policy "Users can delete their media objects"
       join public.drones d
         on d.drone_id = m.drone_id and d.drone_id <> ''
       where m.storage_path = storage.objects.name
-        and d.owner = auth.uid()
+        and d.owner = (select auth.uid())
     )
   );

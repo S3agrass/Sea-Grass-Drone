@@ -148,9 +148,24 @@ tar -xzf mediamtx_*.tar.gz
 sudo mv mediamtx /usr/local/bin/
 ```
 
-The default `mediamtx.yml` works out of the box. MediaMTX listens on:
-- `:8554` — RTSP ingest (where `camera_stream.py` pushes to)
-- `:8889` — WebRTC / WHEP (where the browser connects from)
+**Do not use the default `mediamtx.yml`.** Copy this repo's
+`server/mediamtx.yml` into place instead:
+
+```bash
+sudo cp ~/Sea-Grass-Drone/server/mediamtx.yml /mediamtx.yml
+```
+
+MediaMTX ships with authentication off, which means anyone who can reach it can
+watch the camera *and* publish to it — replacing the operator's video feed with
+their own. That is not theoretical here: the WHEP endpoint is published to the
+internet through a Cloudflare Tunnel. This repo's config delegates every publish
+and read to `media_server.py`, so the camera is gated by the same
+`SEAGRASS_TOKEN` as the control link. `media_server.py` must be running for
+MediaMTX to authorise anyone.
+
+MediaMTX listens on:
+- `:8554` — RTSP ingest (where `camera_stream.py` pushes to, with credentials)
+- `:8889` — WebRTC / WHEP (where the browser connects from, with credentials)
 
 **Autostart:**
 ```ini
@@ -179,7 +194,10 @@ Before using the UI, verify GStreamer can stream to MediaMTX:
 python3 ~/Sea-Grass-Drone/server/camera_stream.py
 ```
 
-Then open a browser and go to `http://<pi-tailscale-ip>:8889/cam` — you should see a test page with the live stream.
+Then open a browser and go to
+`http://<pi-tailscale-ip>:8889/cam?user=seagrass&pass=<SEAGRASS_TOKEN>` — you
+should see a test page with the live stream. Without the credentials MediaMTX
+answers 401, which is the config working, not a fault.
 
 ### 5d. Environment variables for camera_stream.py
 
