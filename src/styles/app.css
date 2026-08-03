@@ -16,9 +16,12 @@
   height: 100vh;
 }
 
+/* No overflow:hidden here. It existed only to stop the expanding sonar rings
+   spilling out, but it also clipped the brand's particle canvas back to roughly
+   the panel's padding — reinstating the very rectangle BLEED exists to remove.
+   The clip now lives on .login-rings, which is the only thing that needed it. */
 .login-hero {
   position: relative;
-  overflow: hidden;
   background:
     radial-gradient(120% 90% at 20% 10%, #0e2a3d 0%, transparent 60%),
     linear-gradient(180deg, #08192b 0%, var(--abyss) 70%, #04101c 100%);
@@ -28,12 +31,20 @@
   padding: 64px;
 }
 
+/* Fills the panel and clips to it, so the rings stay inside while the brand's
+   particle canvas — a sibling further down — is free to overhang. */
 .login-rings {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.login-rings-origin {
   position: absolute;
   top: 28%;
   left: 58%;
 }
-.login-rings span {
+.login-rings-origin span {
   position: absolute;
   width: 12px;
   height: 12px;
@@ -42,8 +53,8 @@
   border: 1px solid rgba(59, 217, 187, 0.5);
   animation: sonar 4.5s ease-out infinite;
 }
-.login-rings span:nth-child(2) { animation-delay: 1.5s; }
-.login-rings span:nth-child(3) { animation-delay: 3s; }
+.login-rings-origin span:nth-child(2) { animation-delay: 1.5s; }
+.login-rings-origin span:nth-child(3) { animation-delay: 3s; }
 
 .login-hero-inner { position: relative; max-width: 460px; }
 
@@ -52,10 +63,30 @@
    stylesheet stays the single source of the size, weight and tracking. The
    gradient is still declared here and mirrored onto the canvas — the particles
    sample their colour from the rasterised text rather than being told it. */
+/* Shrink-wraps the wordmark so the sub-line below can inherit its exact width
+   rather than the column's. */
+.login-lockup { display: inline-block; }
+
 .login-brand {
   position: relative;
   display: inline-block;
   line-height: 1.1;
+}
+
+/* SEAGRASS / ROBOTICS lockup. space-between pushes the outer letters flush to
+   each edge, so the sub-line always measures exactly as wide as the word above
+   regardless of the face's glyph widths. */
+.login-brand-sub { display: block; margin-top: 6px; }
+.login-brand-sub-letters {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--muted);
+  /* Optical nudge: without it the flush-left R sits a hair inside the S above,
+     because the 56px word carries 0.06em of trailing space on its last glyph. */
+  padding-right: 0.06em;
 }
 
 .login-brand .particle-title-text {
@@ -69,19 +100,18 @@
   color: transparent;
 }
 
-/* Canvas sits exactly over the text it replaced. pointer-events stay on the
-   wrapper so the repulsion tracks the cursor across the whole word, including
-   the gaps between letters where the canvas has nothing drawn. */
+/* Canvas is centred on the text it replaced but deliberately larger than it, so
+   dots thrown by the cursor are never sliced off along the element's edge. The
+   cursor is tracked on the window, not this wrapper — see ParticleTitle. */
 .particle-title {
   position: relative;
   display: inline-block;
 }
 
+/* Position and size come from the component (see BLEED): the canvas is
+   deliberately larger than the word so scattered dots are never clipped. */
 .particle-title-canvas {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
   pointer-events: none;
 }
 
