@@ -48,12 +48,60 @@ function toItem(row) {
 export function subscribeMedia(droneId, cb, onError) {
 	if (!supabase) return () => {};
 
+	// Local mirror of what the caller last saw, so a change can be applied to it
+	// instead of re-reading the table.
+	let items = [];
+	let closed = false;
+
+	const emit = () => {
+		items.sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
+		cb([...items]);
+	};
+
+	// Full read. Runs once at mount and again whenever the socket (re)subscribes,
+	// which is the moment incremental state could have drifted — anything that
+	// changed while the connection was down produced no event to apply.
 	const load = async () => {
 		let q = supabase.from("media").select("*").order("captured_at", { ascending: false });
 		if (droneId) q = q.eq("drone_id", droneId);
 		const { data, error } = await q;
+		if (closed) return;
 		if (error) onError?.(error);
-		else cb((data || []).map(toItem));
+		else {
+			items = (data || []).map(toItem);
+			emit();
+		}
+	};
+
+	// Apply one row change rather than re-reading everything.
+	//
+	// This used to call load() on every event. During an upload backlog drain —
+	// a drone surfacing after a dive, which is the entire reason this
+	// subscription exists — n inserted rows meant n complete re-downloads of a
+	// list that is at its largest precisely then. Quadratic, and worst exactly
+	// when it matters.
+	const apply = (payload) => {
+		if (closed) return;
+		const row = payload.new;
+		const gone = payload.old;
+
+		if (payload.eventType === "DELETE") {
+			// Delete payloads carry only the primary key unless the table is set
+			// to REPLICA IDENTITY FULL, which is why this matches on id alone.
+			if (gone?.id) items = items.filter((i) => i.id !== gone.id);
+			return emit();
+		}
+		if (!row?.id) return;
+		// Belt and braces: the channel is already filtered server-side when a
+		// drone is selected, but a fleet-wide subscription sees everything the
+		// caller may read, and a row could arrive for another drone.
+		if (droneId && row.drone_id !== droneId) return;
+
+		const item = toItem(row);
+		const at = items.findIndex((i) => i.id === item.id);
+		if (at === -1) items.push(item);
+		else items[at] = item;
+		emit();
 	};
 
 	load();
@@ -61,12 +109,32 @@ export function subscribeMedia(droneId, cb, onError) {
 	// Realtime must be enabled for the table in the Supabase dashboard. If it
 	// isn't, the initial load above still works — the page just won't update
 	// until refreshed, which is a degradation rather than a failure.
+	//
+	// Channel name includes the drone so two mounts don't collide on one topic.
 	const channel = supabase
-		.channel("media-changes")
-		.on("postgres_changes", { event: "*", schema: "public", table: "media" }, load)
-		.subscribe();
+		.channel(`media-changes:${droneId || "all"}`)
+		.on(
+			"postgres_changes",
+			{
+				event: "*",
+				schema: "public",
+				table: "media",
+				// Server-side filter: without it every client is woken for every
+				// row in the table and discards most of them.
+				...(droneId ? { filter: `drone_id=eq.${droneId}` } : {}),
+			},
+			apply,
+		)
+		.subscribe((status) => {
+			// Reconcile on (re)connect. Events that happened while the socket was
+			// down were never delivered, so the mirror can be stale.
+			if (status === "SUBSCRIBED") load();
+		});
 
-	return () => supabase.removeChannel(channel);
+	return () => {
+		closed = true;
+		supabase.removeChannel(channel);
+	};
 }
 
 /** Resolve a storage path to a playable URL, or null. */

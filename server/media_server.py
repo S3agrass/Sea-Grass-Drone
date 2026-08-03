@@ -150,6 +150,11 @@ _STUN_FALLBACK = {"iceServers": [{"urls": "stun:stun.l.google.com:19302"}]}
 #
 # The window is per source IP and covers every endpoint, so it also caps how
 # fast anyone can pull media (Pi uplink) or trigger TURN work.
+# Ceiling on connections served at once (see BoundedThreadingHTTPServer). The Pi
+# is also flying a vehicle; the media API is not allowed to spend unbounded
+# threads on it.
+MAX_CONCURRENT_REQUESTS = 48
+
 RATE_WINDOW_S = 60.0
 RATE_MAX_REQUESTS = 240      # generous: a media grid loads many thumbnails at once
 AUTH_FAIL_GRACE = 5
@@ -513,9 +518,45 @@ class MediaHandler(server.BaseHTTPRequestHandler):
         pass  # suppresses terminal spam
 
 
+class BoundedThreadingHTTPServer(server.ThreadingHTTPServer):
+    """ThreadingHTTPServer with a ceiling on concurrent connections.
+
+    The stock class spawns a thread per connection with no limit, so a few
+    thousand open sockets is a few thousand threads on a Pi that is also flying
+    a vehicle. The rate limiter caps requests per IP but not sockets, and it
+    cannot help before a connection is accepted.
+
+    A refused connection is a far better outcome than an unresponsive Pi: the
+    media API degrading under load must not take the control server's CPU with
+    it. Backlog rather than error, so a brief burst queues instead of failing.
+
+    The semaphore is taken in process_request — the accept loop, before the
+    thread exists — not in process_request_thread. Taking it inside the thread
+    would bound how many requests run at once while still spawning a thread per
+    connection, which is the resource actually being protected."""
+
+    request_queue_size = 64
+    _slots = threading.Semaphore(MAX_CONCURRENT_REQUESTS)
+
+    def process_request(self, request, client_address):
+        self._slots.acquire()
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            # The thread never started, so nothing else will release this.
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+
 def main():
     address = ('', MEDIA_HTTP_PORT)
-    httpd = server.ThreadingHTTPServer(address, MediaHandler)
+    httpd = BoundedThreadingHTTPServer(address, MediaHandler)
     print(f"Media server listening on http://0.0.0.0:{MEDIA_HTTP_PORT}  (dir={MEDIA_DIR})")
     try:
         httpd.serve_forever()
