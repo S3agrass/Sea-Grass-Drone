@@ -72,7 +72,31 @@ delete from public.drones
 where owner::text !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
 
 -- Now the column can carry a genuine Supabase user id again.
-alter table public.drones alter column owner type uuid using owner::uuid;
+--
+-- Guarded, and it has to be. Postgres refuses to change a column's type while
+-- any policy depends on it, and the media and storage.objects policies further
+-- down both reach `drones.owner` through their EXISTS subqueries. On a fresh
+-- database they do not exist yet when this runs, so it passes; on a re-run they
+-- do, and the script died here with:
+--
+--   cannot alter type of a column used in a policy definition
+--   DETAIL: policy Users can view media from their drones on table media
+--           depends on column "owner"
+--
+-- Dropping those policies first would work, but it would also rewrite the whole
+-- table on every run to change uuid into uuid. Skipping the alter when the
+-- column is already uuid is both correct and free — and the only time it needs
+-- to run is the one-off migration off Firebase.
+do $$
+begin
+  if (
+    select data_type from information_schema.columns
+    where table_schema = 'public' and table_name = 'drones' and column_name = 'owner'
+  ) is distinct from 'uuid' then
+    execute 'alter table public.drones alter column owner type uuid using owner::uuid';
+  end if;
+end $$;
+
 alter table public.drones alter column owner set default auth.uid();
 alter table public.drones drop constraint if exists drones_owner_fkey;
 alter table public.drones
