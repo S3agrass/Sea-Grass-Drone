@@ -189,10 +189,12 @@ export default function CameraView() {
     recordStart,
     recordStop,
     capturePhoto,
+    operatorCredential,
   } = useDrone();
-  // media_server.py authenticates /turn-credentials now — same shared secret the
-  // control link uses.
-  const camToken = activeDrone?.token || "";
+  // Authenticates both /turn-credentials and the WHEP read, which MediaMTX
+  // hands to media_server for a verdict. Same credential as the control link —
+  // the operator's Supabase session when signed in, the drone token otherwise.
+  const camToken = operatorCredential || "";
 
   const streamUrl = activeDrone?.camera_url || "";
   const type = streamType(streamUrl);

@@ -62,6 +62,11 @@ beforeEach(() => {
   mockCtx = {
     mediaBase: 'http://pi.local:8000',
     activeDrone: { name: 'Seagrass One', token: 'secret', camera_url: 'http://pi.local:8000/stream.mjpg' },
+    // What DroneContext resolves to: the operator's Supabase session token when
+    // signed in, the drone's own token in local mode. The page must not reach
+    // past this to activeDrone.token — that is the long-lived secret the JWT
+    // work exists to keep out of the browser's hands.
+    operatorCredential: 'secret',
     pushToast: vi.fn(),
     // TopBar needs these:
     linkStatus: 'connected',
@@ -92,6 +97,35 @@ function card(name) {
 }
 
 describe('MediaPage', () => {
+  it('presents the operator session token, not the drone secret', async () => {
+    // The whole point of the JWT work: a signed-in browser stops sending the
+    // vehicle's long-lived credential. If this page reached for
+    // activeDrone.token again, that secret would be back in the URL bar and in
+    // every request, and nothing else would look wrong.
+    mockCtx.operatorCredential = 'header.payload.signature';
+    mockCtx.activeDrone = { ...mockCtx.activeDrone, token: 'long-lived-drone-secret' };
+    renderPage();
+
+    await screen.findByText('rec-1.mp4');
+    const dl = within(card('rec-1.mp4')).getByText(/download/i).closest('a');
+    expect(dl.getAttribute('href')).toContain('token=header.payload.signature');
+    expect(dl.getAttribute('href')).not.toContain('long-lived-drone-secret');
+
+    const listing = global.fetch.mock.calls.find(([url]) => url.endsWith('/media'));
+    expect(listing[1].headers.Authorization).toBe('Bearer header.payload.signature');
+  });
+
+  it('falls back to the drone token in local mode, which has no session', async () => {
+    // Local mode has no Supabase session at all, so DroneContext resolves the
+    // credential to the drone's own token. That path has to keep working.
+    mockCtx.operatorCredential = 'drone-token-only';
+    renderPage();
+
+    await screen.findByText('rec-1.mp4');
+    const dl = within(card('rec-1.mp4')).getByText(/download/i).closest('a');
+    expect(dl.getAttribute('href')).toContain('token=drone-token-only');
+  });
+
   it('lists media from the drone with download links', async () => {
     renderPage();
     expect(await screen.findByText('rec-1.mp4')).toBeInTheDocument();

@@ -49,8 +49,10 @@ function fmtContext(item) {
 }
 
 export default function MediaPage() {
-  const { mediaBase, activeDrone, pushToast } = useDrone();
-  const token = activeDrone?.token || "";
+  const { mediaBase, activeDrone, pushToast, operatorCredential } = useDrone();
+  // The operator's session token when signed in, the drone's own token in local
+  // mode — see DroneContext. Either way media_server settles it the same way.
+  const token = operatorCredential || "";
 
   const [local, setLocal] = useState([]); // on the drone's SD card
   const [cloud, setCloud] = useState([]); // uploaded to Supabase

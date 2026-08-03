@@ -53,6 +53,7 @@ import urllib.request
 import websockets
 from pymavlink import mavutil
 
+import auth
 from sonar_reader import SonarReader
 
 # pid_controller.py lives at the repo root (one level up from server/), so make
@@ -1857,15 +1858,6 @@ def read_telemetry():
 helm_holder = None  # only one client controls the drone at a time
 
 
-def _token_ok(supplied):
-    """Constant-time token check. `supplied` comes straight out of client JSON,
-    so it may be any type at all — anything that isn't a string is simply wrong,
-    not an error worth raising."""
-    if not isinstance(supplied, str):
-        return False
-    return hmac.compare_digest(supplied.encode("utf-8"), TOKEN.encode("utf-8"))
-
-
 def _auth_delay(ip):
     """Seconds to stall before answering a bad hello from `ip`. Doubles per
     failure past AUTH_FAIL_GRACE, capped, and forgotten after a quiet period so a
@@ -2105,13 +2097,20 @@ async def client_handler(ws):
             mtype = msg.get("type")
 
             if mtype == "hello":
-                if not _token_ok(msg.get("token")):
+                ok, subject, reason = auth.verify_operator(msg.get("token"))
+                if not ok:
                     # Stall before answering. The socket is about to close and
                     # reconnecting costs nothing, so this delay is the only thing
                     # standing between the token and an offline-speed guessing run.
                     ip = ws.remote_address[0] if ws.remote_address else "?"
                     delay = _auth_delay(ip)
                     _note_auth_failure(ip)
+                    # `subject` is set when a real, correctly-signed Supabase
+                    # token was presented by someone who simply is not an owner
+                    # of this vehicle. That is worth naming in the log — it is a
+                    # very different event from a bad password.
+                    who = f" (user {subject})" if subject else ""
+                    print(f"Auth refused from {ip}{who}: {reason}", flush=True)
                     # Never stall past the hello deadline. Otherwise the deadline
                     # task closes the socket mid-sleep and the reply below is
                     # never sent — an operator who mistyped their token twice
@@ -2126,6 +2125,11 @@ async def client_handler(ws):
                     await ws.close(code=4401, reason="unauthorized")
                     return
                 authed = True
+                # Who is flying this. Until now the log could only say a client
+                # connected, never which person — the credential carried no
+                # identity to record.
+                print(f"Authenticated {ws.remote_address}: "
+                      f"{subject or 'shared token'}", flush=True)
                 start_streams()
                 await send({"type": "hello_ok"})
                 await state()
@@ -2440,6 +2444,14 @@ async def main():
     print(f"Auto-capture: {'ON' if AUTOCAPTURE else 'off'}"
           + (f" (conf >= {AUTOCAPTURE_MIN_CONF}, every {AUTOCAPTURE_COOLDOWN_S:.0f}s)"
              if AUTOCAPTURE else ""))
+    # Refresh the operator signing keys once at boot, on a thread — it is a
+    # network call and must not sit in front of the event loop starting. A
+    # failure here is survivable: verification reads the on-disk cache, which is
+    # the whole reason the cache exists. A vehicle at sea with no uplink still
+    # authenticates its operator.
+    if auth.is_jwt_enabled():
+        await asyncio.to_thread(auth.refresh_jwks)
+
     ssl_ctx = _build_ws_ssl_context()
     scheme = "wss" if ssl_ctx else "ws"
     async with websockets.serve(
@@ -2451,6 +2463,7 @@ async def main():
     ):
         print(f"Seagrass drone server listening on {scheme}://{WS_HOST}:{WS_PORT}")
         print(f"Allowed browser origins: {', '.join(sorted(ALLOWED_ORIGINS))}")
+        print(auth.status_line())
         warn_on_origin_mismatch()
         await asyncio.Future()
 

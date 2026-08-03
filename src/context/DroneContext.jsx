@@ -140,7 +140,7 @@ function loadLocalFleet() {
 }
 
 export function DroneProvider({ children }) {
-  const { user, localMode } = useAuth();
+  const { user, localMode, accessToken } = useAuth();
   const linkRef = useRef(null);
   if (!linkRef.current) linkRef.current = new DroneLink();
   const link = linkRef.current;
@@ -571,8 +571,13 @@ export function DroneProvider({ children }) {
 
   const connect = useCallback(() => {
     if (!activeDrone?.host) return;
-    link.connect(activeDrone.host, activeDrone.token || "");
-  }, [link, activeDrone]);
+    // Prefer the operator's Supabase session token over the drone's own secret.
+    // The vehicle verifies it against the project's public key and checks the
+    // user is one of its owners, so a signed-in browser no longer has to hold a
+    // permanent vehicle credential at all. The per-drone token remains for local
+    // mode, which has no session, and as break-glass if the Pi cannot verify.
+    link.connect(activeDrone.host, accessToken || activeDrone.token || "");
+  }, [link, activeDrone, accessToken]);
 
   const disconnect = useCallback(() => link.disconnect(), [link]);
 
@@ -706,6 +711,11 @@ export function DroneProvider({ children }) {
     saveDrone,
     removeDrone,
     activeDrone,
+    // What to present to this vehicle's servers — the control link, the media
+    // API and MediaMTX all take the same thing. One value so the three cannot
+    // disagree: a page still reading activeDrone.token would keep sending the
+    // long-lived secret the JWT work exists to retire.
+    operatorCredential: accessToken || activeDrone?.token || "",
     selectDrone,
     connect,
     disconnect,
