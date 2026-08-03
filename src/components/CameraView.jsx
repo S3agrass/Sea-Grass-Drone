@@ -190,11 +190,25 @@ export default function CameraView() {
     recordStop,
     capturePhoto,
     operatorCredential,
+    credentialMode,
+    credentialReady,
   } = useDrone();
   // Authenticates both /turn-credentials and the WHEP read, which MediaMTX
   // hands to media_server for a verdict. Same credential as the control link —
   // the operator's Supabase session when signed in, the drone token otherwise.
   const camToken = operatorCredential || "";
+
+  // Read through a ref, never depended on directly.
+  //
+  // A WebRTC connection needs a credential at negotiation time; it does not need
+  // to be rebuilt because the string later changed. This value is NOT stable —
+  // it starts empty, becomes the drone token, then the session JWT once
+  // getSession() resolves, and changes again on every hourly refresh. With it in
+  // the effect's dependency array each of those tore the peer connection down
+  // and rebuilt it: two negotiations on every page load, and a dropout every
+  // hour on a vehicle being steered by this picture.
+  const camTokenRef = useRef(camToken);
+  camTokenRef.current = camToken;
 
   const streamUrl = activeDrone?.camera_url || "";
   const type = streamType(streamUrl);
@@ -233,9 +247,16 @@ export default function CameraView() {
   // for a reason to connect. It is one round trip to the Pi that otherwise sits
   // in front of the peer connection being built at all, and by the time the
   // camera is wanted the answer is usually already cached.
+  // Skipped until there is a credential to warm it WITH: /turn-credentials is
+  // authenticated now, so firing this early spends a round trip on a 401 and,
+  // worse, parks a shared in-flight promise that the first real caller would
+  // wait on and inherit the failure from.
   useEffect(() => {
-    if (mediaBase) getIceServers(mediaBase, camToken).catch(() => {});
-  }, [mediaBase, camToken]);
+    if (!mediaBase || !credentialReady || !camTokenRef.current) return;
+    getIceServers(mediaBase, camTokenRef.current).catch(() => {});
+    // credentialMode, not the token: a refresh gets the same servers back and
+    // the cache entry expires on its own TTL anyway.
+  }, [mediaBase, credentialMode, credentialReady]);
 
   // When the camera subprocess starts/stops on the Pi, or the stream URL
   // changes, reset the feed state so the WHEP hook re-runs.
@@ -249,20 +270,40 @@ export default function CameraView() {
   }, [wantFeed, type, retryKey]);
 
   // WebRTC WHEP connection — only runs when camera is active and type is webrtc.
-  // Keyed on wantFeed/type/streamUrl/mediaBase/retryKey — deliberately NOT on
-  // feedState. This effect is what SETS feedState (to "live", "error", etc.),
-  // so depending on its own output meant every setFeedState("live") call
-  // re-triggered this same effect, tearing down the connection that had just
-  // succeeded a moment after establishing it — invisible as a bug until ICE
-  // actually started succeeding (see the WebRTC NAT-traversal fix), at which
-  // point "live" badge showing a permanently blank feed was the symptom.
+  //
+  // Keyed on wantFeed/type/streamUrl/mediaBase/credentialMode/credentialReady/
+  // retryKey — deliberately NOT on feedState. This effect is what SETS feedState
+  // (to "live", "error", etc.), so depending on its own output meant every
+  // setFeedState("live") call re-triggered this same effect, tearing down the
+  // connection that had just succeeded a moment after establishing it —
+  // invisible as a bug until ICE actually started succeeding (see the WebRTC
+  // NAT-traversal fix), at which point "live" badge showing a permanently blank
+  // feed was the symptom.
+  //
+  // And deliberately NOT on the credential itself, for the same reason in a
+  // different disguise: the token changes on its own schedule, so depending on
+  // it reintroduced exactly that teardown. credentialMode is here instead
+  // because the DISTINCTION matters — a refreshed JWT must leave a working
+  // connection alone, while a demotion to the drone token (droneLink's 4401
+  // fallback) must reconnect, or the camera stays dark after the fallback has
+  // already rescued the control link.
   useEffect(() => {
+    // Nothing negotiates until the session has resolved; otherwise the first
+    // attempt uses whatever credential happens to exist a tick after mount and
+    // is thrown away moments later.
+    if (!credentialReady) return;
     if (!wantFeed || type !== "webrtc" || !streamUrl) return;
 
     const controller = new AbortController();
     let pc = null;
 
-    connectWHEP(streamUrl, videoRef.current, controller.signal, mediaBase, camToken)
+    connectWHEP(
+      streamUrl,
+      videoRef.current,
+      controller.signal,
+      mediaBase,
+      camTokenRef.current,
+    )
       .then((conn) => {
         if (!conn) return; // aborted
         pc = conn;
@@ -285,7 +326,7 @@ export default function CameraView() {
       pc?.close();
       if (videoRef.current) videoRef.current.srcObject = null;
     };
-  }, [wantFeed, type, streamUrl, mediaBase, camToken, retryKey]);
+  }, [wantFeed, type, streamUrl, mediaBase, credentialMode, credentialReady, retryKey]);
 
   // Detection overlay — draw normalized bounding boxes onto a canvas sized to
   // the displayed feed. Boxes arrive as fractions (0-1) of the full source
