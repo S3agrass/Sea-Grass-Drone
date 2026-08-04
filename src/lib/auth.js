@@ -52,8 +52,28 @@ export const logout = async () => {
  *  Authentication -> URL Configuration -> Redirect URLs. Supabase silently
  *  falls back to the project's Site URL when it is not, which sends people to
  *  the login page with a code no one ever exchanges. */
-const resetRedirect = () =>
-  `${window.location.origin}/desktop/#/reset-password`;
+/** Where the hosted GCS lives. Only used as a fallback for builds that have no
+ *  usable origin of their own — see below. */
+const HOSTED_RESET_URL = "https://seagrassrobotics.com/desktop/#/reset-password";
+
+const resetRedirect = () => {
+  const { origin, protocol, pathname } = window.location;
+
+  // Electron loads the bundle from file://, where `origin` is "null" or "file://"
+  // — not a valid redirect target and impossible to allow-list. Desktop users get
+  // sent to the hosted GCS to finish the reset, which works because the session
+  // the link establishes is per-browser anyway.
+  if (protocol !== "http:" && protocol !== "https:") return HOSTED_RESET_URL;
+
+  // The directory the app is actually served from, NOT a hardcoded "/desktop/".
+  // Under `vite dev` the GCS is at the origin root, and assemble-hosting.mjs only
+  // moves it under /desktop/ for the Firebase build. Hardcoding the production
+  // path meant a reset requested from a dev server emailed a link to
+  // localhost:5173/desktop/, which does not exist there — the link opened a page
+  // that could never complete the reset.
+  const base = pathname.replace(/[^/]*$/, "");
+  return `${origin}${base}#/reset-password`;
+};
 
 /** Emails a password-recovery link. Resolves either way — Supabase does not
  *  reveal whether an address has an account, and neither should we. */
