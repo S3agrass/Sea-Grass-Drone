@@ -20,10 +20,20 @@ export default function TopBar() {
         {demoMode && <span className="demo-chip mono">DEMO</span>}
       </div>
 
+      {/* Not a live region. The coordinates change continuously, so announcing
+          this block would never stop talking; the link going up or down is the
+          part worth interrupting for and <FlightStatus> owns that. The labels
+          are spelled out because "LINK LIVE" next to a green dot is a visual
+          idiom, and the reading is for someone who cannot see the dot. */}
       <div className="topbar-center mono">
-        <span className={`ping-dot ${connected ? "live" : "off"}`} />
-        <span>{connected ? "LINK LIVE" : "LINK DOWN"}</span>
-        <span className="topbar-sep">·</span>
+        <span className={`ping-dot ${connected ? "live" : "off"}`} aria-hidden="true" />
+        <span>
+          <span aria-hidden="true">{connected ? "LINK LIVE" : "LINK DOWN"}</span>
+          <span className="visually-hidden">
+            {connected ? "Drone link is live" : "Drone link is down"}
+          </span>
+        </span>
+        <span className="topbar-sep" aria-hidden="true">·</span>
         <span>
           {telemetry.lat != null && telemetry.lon != null
             ? `${telemetry.lat.toFixed(5)}, ${telemetry.lon.toFixed(5)}`
@@ -31,19 +41,25 @@ export default function TopBar() {
         </span>
       </div>
 
-      <nav className="topbar-nav">
-        <Link className={pathname === "/control" ? "active" : ""} to="/control">
-          Control
-        </Link>
-        <Link className={pathname === "/media" ? "active" : ""} to="/media">
-          Media
-        </Link>
-        <Link className={pathname === "/fleet" ? "active" : ""} to="/fleet">
-          Fleet
-        </Link>
-        <Link className={pathname === "/settings" ? "active" : ""} to="/settings">
-          Settings
-        </Link>
+      {/* Named, because a page with more than one nav needs them told apart,
+          and aria-current so "which page am I on" is carried by something other
+          than a CSS class — the .active styling is invisible to a reader. */}
+      <nav className="topbar-nav" aria-label="Primary">
+        {[
+          ["/control", "Control"],
+          ["/media", "Media"],
+          ["/fleet", "Fleet"],
+          ["/settings", "Settings"],
+        ].map(([to, label]) => (
+          <Link
+            key={to}
+            to={to}
+            className={pathname === to ? "active" : ""}
+            aria-current={pathname === to ? "page" : undefined}
+          >
+            {label}
+          </Link>
+        ))}
       </nav>
     </header>
   );

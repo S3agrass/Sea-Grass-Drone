@@ -13,7 +13,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: npm ci && npm run build:web
+      - run: npm ci
+
+      # Same gate as the merge workflow — see the note there. On a PR this is
+      # the more useful of the two: it fails the check before review rather
+      # than after the change is already on main.
+      - run: npm run lint
+      - run: npm test
+
+      - run: npm run build:web
         env:
           VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
           VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}

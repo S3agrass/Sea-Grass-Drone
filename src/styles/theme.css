@@ -10,20 +10,26 @@
      every panel dissolved into the background. Each step is now a visible lift,
      which is what actually makes a panel read as raised.
 
-     Text contrast was checked against the new --console, not the old one:
-     --ink 13.1:1 and --muted 4.9:1, both still over the 4.5:1 floor. */
+     Text contrast is checked against the LIGHTEST surface a token can land on,
+     which is --rail, not --console — a muted label inside a hovered nav item or
+     a raised modal has less contrast than the same label on a flat panel, and
+     checking only the common case is how the old values passed review while
+     failing in situ. Every text token below clears 4.5:1 on all four surfaces
+     (abyss / console / raised / rail); --ink 10.2:1 and --faint 4.8:1 at worst. */
   --console: #122844;
   --rail: #1c3a5e;
   --console-raised: #1a3355;   /* modals, hover — one step above a panel */
   --line: #2a4d76;
   --line-soft: #1f4066;
   --ink: #e9f2f8;
-  --muted: #7c97ad;
-  --faint: #4d6a82;
+  --muted: #a3b7c7;
+  --faint: #93aabd;
   --teal: #3bd9bb;
   --teal-dim: #1e8f7c;
   --amber: #ffb454;
-  --red: #ff5c6c;
+  /* Lighter than the signal red used for fills, because this is also the text
+     colour of .btn-danger and .login-error; #ff5c6c was 3.85:1 on --rail. */
+  --red: #ff8a95;
   --blue: #59a8ff;
   --green: #4ade80;
 
@@ -185,7 +191,10 @@ button {
   background: none;
   color: inherit;
 }
-button:focus-visible, input:focus-visible, a:focus-visible {
+/* [tabindex] catches the custom widgets — the resizer separators, the waypoint
+   rows — which are focusable without being a button, input or link. */
+button:focus-visible, input:focus-visible, select:focus-visible,
+textarea:focus-visible, a:focus-visible, [tabindex]:focus-visible {
   outline: 2px solid var(--teal);
   outline-offset: 2px;
 }
@@ -222,11 +231,15 @@ input, select {
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 input::placeholder { color: var(--faint); }
+/* No `outline: none` here. This rule sits after the :focus-visible block above
+   and matches with the same specificity, so an outline reset here silently wins
+   for keyboard users too — the field lit up with a 12%-opacity ring and nothing
+   else, which is not a visible focus indicator. The glow is decorative; the
+   outline from :focus-visible is the actual indicator and must survive. */
 input:focus, select:focus {
   border-color: var(--teal-dim);
-  outline: none;
   box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35),
-              0 0 0 3px rgba(59, 217, 187, 0.12);
+              0 0 0 3px rgba(59, 217, 187, 0.28);
 }
 input:disabled, select:disabled { opacity: 0.5; cursor: not-allowed; }
 
@@ -297,7 +310,12 @@ input:disabled, select:disabled { opacity: 0.5; cursor: not-allowed; }
   transform: translateY(1px);
   box-shadow: none;
 }
-.btn:disabled {
+/* aria-disabled gets the same treatment as :disabled. It is used where the
+   control has to stay focusable so its blocked-reason description can be
+   reached — a `disabled` button is out of the tab order, which hides the
+   explanation from the only people who need it read aloud. */
+.btn:disabled,
+.btn[aria-disabled="true"] {
   opacity: 0.4;
   cursor: not-allowed;
   transform: none;
@@ -358,5 +376,15 @@ input:disabled, select:disabled { opacity: 0.5; cursor: not-allowed; }
 
 @media (prefers-reduced-motion: reduce) {
   .ping-dot::after { animation: none; }
-  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  /* iteration-count is the part people leave off, and without it this block
+     makes things worse rather than better: `blink` and `recPulse` are declared
+     `infinite`, so squashing the duration to 0.01ms turns a slow pulse into a
+     full-speed strobe — a seizure risk, not a mitigation. Pinning the count to
+     1 is what actually stops them. */
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

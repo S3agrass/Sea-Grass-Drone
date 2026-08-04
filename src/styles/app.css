@@ -1,3 +1,34 @@
+/* ============ skip link ============ */
+/* First tab stop in the app: the deck puts a fixed top bar and four nav links
+   ahead of the content, and without this a keyboard user re-tabs through all of
+   them on every route change. Mirrors the marketing site's treatment — offscreen
+   until focused, then it drops into view under the bar. Uses transform rather
+   than display so it stays focusable. */
+.skip-link {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  transform: translate(-50%, -140%);
+  z-index: 2000;
+  background: var(--teal);
+  color: #04241d;
+  font-family: var(--font-mono);
+  font-size: var(--t-body);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  padding: 10px 18px;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  text-decoration: none;
+  transition: transform 0.18s ease;
+}
+.skip-link:focus { transform: translate(-50%, 0); }
+
+/* Programmatic focus targets — the route <h1>s we move focus to on navigation.
+   They carry tabindex="-1" only so focus() works; they are not tab stops and
+   must not draw a ring, which would look like a stray selection to a sighted
+   user who never pressed Tab. Screen readers announce them regardless. */
+[tabindex="-1"]:focus { outline: none; }
+
 /* ============ boot ============ */
 .boot {
   height: 100vh;
@@ -185,6 +216,17 @@
 .login-tabs button.active { background: var(--rail); color: var(--ink); }
 
 .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+/* Dialog headings carry .eyebrow for the look; this only strips the UA margin
+   that comes with promoting them from <div> to <h2>. */
+.modal-title { margin: 0; }
+/* Panel titles promoted from <span class="eyebrow"> to real <h2>s so the deck's
+   panels are findable by heading; this only strips the UA heading margin. */
+.panel-title { margin: 0; }
+/* Always-mounted wrapper for a role="alert". It must occupy no space while
+   empty — the point is that the live region exists before the message does, so
+   the message is announced when it arrives rather than being missed because the
+   region itself was what appeared. */
+.login-error-slot:empty { display: none; }
 .field-help { font-size: 12px; color: var(--faint); line-height: 1.5; }
 
 .login-error {
@@ -221,6 +263,11 @@
 }
 .login-link:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* Change-password form inside the Settings account card. Constrained so the
+   fields do not run the full width of a wide settings column. */
+.change-password { max-width: 340px; margin-top: var(--s3); }
+.change-password .field { margin-bottom: var(--s3); }
+
 .login-submit { width: 100%; padding: 12px; font-size: 14px; }
 .login-muted { color: var(--muted); line-height: 1.6; font-size: 13px; }
 .login-foot { font-size: 10px; letter-spacing: 0.2em; color: var(--faint); }
@@ -250,10 +297,16 @@
 .fleet-sub { color: var(--muted); font-size: 13px; }
 .fleet-head-actions { display: flex; gap: 10px; }
 
+/* A <ul>, so the fleet announces as a list with a count. The bullets and the
+   UA's own padding are reset here rather than the markup being downgraded back
+   to divs to avoid them. */
 .fleet-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 18px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 
 .drone-card {
@@ -278,10 +331,13 @@
 }
 
 .drone-card-top { display: flex; align-items: center; gap: 10px; }
+/* An <h2>; margin reset so promoting it from a div changed the semantics and
+   nothing else. */
 .drone-card-name {
   font-family: var(--font-display);
   font-size: 18px;
   font-weight: 700;
+  margin: 0;
 }
 
 .drone-card-meta {
@@ -497,7 +553,13 @@
 }
 .resizer:hover .resizer-grip,
 .resizer:focus-visible .resizer-grip { background: var(--teal); }
-.resizer:focus-visible { outline: none; }
+/* The grip recolour above is a nice hover affordance but cannot carry keyboard
+   focus on its own: it is a 2px colour change on a hairline, which is both too
+   small to meet the focus-appearance minimum and colour-only. The splitter is
+   keyboard-operable (arrows, Home, Escape), so it needs a real outline like any
+   other control — hence no reset here. Offset is negative so the ring sits
+   inside the 6px-wide hit area instead of overlapping the panels either side. */
+.resizer:focus-visible { outline: 2px solid var(--teal); outline-offset: -1px; }
 
 /* Column splitter: the rail's leading edge, full height of the rail. */
 .resizer-vertical {
@@ -566,9 +628,32 @@
 /* The sonar sits in the rail now; it no longer spans the deck. */
 .deck-right > .sonar-panel { grid-column: auto; width: 100%; }
 
-.deck.map-focus > *:not(.deck-map) {
+/* Map-focus hides the panels to give the map the deck. The heading and the
+   flight-status control are exempt: display:none removes an element from the
+   accessibility tree, and hiding the page's only h1 and the one control that
+   reads telemetry aloud would leave a screen-reader user in map-focus with no
+   heading, no status and no way back out. Neither takes visible space. */
+.deck.map-focus > *:not(.deck-map):not(.flight-status):not(h1) {
   display: none;
 }
+
+/* Reads telemetry on demand — see FlightStatus.jsx. It sits offscreen until
+   focused, like the skip link, for two reasons: the deck is a two-column grid
+   and a visible button here would claim a track, and the operators who need it
+   arrive by Tab. Alt+S works whether or not it is showing. */
+.flight-status {
+  position: absolute;
+  z-index: 1150;
+}
+.flight-status-btn {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  white-space: nowrap;
+  transform: translateY(-200%);
+  transition: transform 0.18s ease;
+}
+.flight-status-btn:focus { transform: translateY(0); }
 
 /* The goal is that these never actually scroll — the content is laid out to
    fit. `auto` stays rather than `hidden` deliberately: it is a safety net, not
@@ -690,12 +775,25 @@
   color: var(--muted);
   min-width: 0;
 }
+/* dt/dd since these rows became a description list — the UA's default dd
+   indent would otherwise push every value off the right edge of the rail. */
+.conn-row > dt, .conn-row > dd { margin: 0; min-width: 0; }
 .conn-row > :last-child { color: var(--ink); text-align: right; }
 .conn-row .ok { color: var(--teal); }
 .conn-row .armed { color: var(--amber); }
 .conn-row .dim { color: var(--faint); }
 
-.conn-actions { display: flex; gap: 8px; }
+/* The reason an aria-disabled control cannot be used. Visible, not just an
+   aria-describedby target: sighted users were the ones relying on the `title`
+   tooltip this replaced, and they should keep the information. */
+.conn-hint {
+  flex-basis: 100%;
+  font-size: var(--t-small);
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.conn-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .conn-actions .btn { flex: 1; padding: 9px 8px; font-size: 12px; }
 
 /* instruments — a grid of tiles, not a stack.
@@ -1308,6 +1406,57 @@
   flex-direction: column;
   gap: 6px;
 }
+
+/* The route as text — the keyboard's way to add, inspect and delete waypoints,
+   which the Leaflet canvas offers no path to at all. A <details> so it is one
+   tab stop and a couple of lines tall until it is opened, rather than a panel
+   permanently taking deck space from the map. Bottom-left, clear of the map
+   controls at top-right and the route hint at bottom-centre. */
+.waypoint-panel {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  z-index: 500;
+  max-width: min(320px, calc(100% - 24px));
+  max-height: calc(100% - 24px);
+  overflow-y: auto;
+  background: rgba(12, 28, 46, 0.94);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  font-size: var(--t-small);
+}
+.waypoint-summary {
+  cursor: pointer;
+  padding: 6px 10px;
+  color: var(--muted);
+  letter-spacing: 0.1em;
+}
+.waypoint-summary:hover { color: var(--ink); }
+.waypoint-body {
+  padding: 4px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.waypoint-adders { display: flex; flex-direction: column; gap: 4px; }
+.waypoint-form { display: flex; flex-direction: column; gap: 4px; }
+.waypoint-form .field { margin-bottom: 4px; }
+.waypoint-form input { padding: 5px 8px; font-size: var(--t-small); }
+.waypoint-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+}
+.waypoint-items li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
 .map-btn {
   background: rgba(12, 28, 46, 0.92);
   border: 1px solid var(--line);
@@ -1579,6 +1728,18 @@
   justify-content: center;
   padding: 32px;
 }
+/* The dialog element the shared <Modal> wraps the feed in. It exists to be the
+   focus container and the role="dialog" host, not to add a box of its own.
+   Not display:contents — an element with a role and a tabindex that generates
+   no box is exactly the case browsers have historically dropped from the
+   accessibility tree, and the dialog semantics are the whole point of it. It
+   takes a real box that matches what the feed used to occupy. */
+.camera-modal-inner {
+  position: relative;
+  display: flex;
+  width: min(1100px, 100%);
+  max-height: 100%;
+}
 .camera-modal .camera-feed.fullscreen {
   width: min(1100px, 100%);
   aspect-ratio: 4 / 3;
@@ -1612,11 +1773,18 @@
   color: var(--muted);
   font-size: 13px;
 }
+/* A <ul> so the gallery announces an item count and can be stepped through. */
 .media-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 16px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
+/* Live region for the loading/unreachable/empty states — collapses when none
+   of them applies, so an always-mounted region costs no layout. */
+.media-status:empty { display: none; }
 .media-card {
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-sm);
@@ -1727,11 +1895,17 @@
 
 .kbd-diag { margin-top: 10px; }
 
+/* Both legends are <dl>s now — reset the UA list margins and the dd indent so
+   the semantics changed and the layout did not. */
 .kbd-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 6px;
+  margin: 0;
 }
+.kbd-grid dd, .kbd-row dd { margin: 0; }
+/* Live region wrapping the helm warnings; collapses when there are none. */
+.kbd-warnings:empty { display: none; }
 .kbd-grid.disabled { opacity: 0.45; pointer-events: none; }
 
 /* Compacted so the camera above it keeps a usable height: nine keycaps at the
@@ -1762,7 +1936,7 @@
 .kbd-key-label { font-size: 13px; font-weight: 700; }
 .kbd-key-hint { font-size: 9px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
 
-.kbd-row { display: flex; gap: 6px; margin-top: 6px; }
+.kbd-row { display: flex; gap: 6px; margin: 6px 0 0; }
 .kbd-key.wide { flex: 1; }
 
 .estop {
@@ -1802,8 +1976,16 @@
   padding: 24px;
 }
 .settings-card > .eyebrow { display: block; margin-bottom: 16px; }
-.settings-actions { display: flex; gap: 10px; margin-top: 6px; }
+.settings-actions { display: flex; gap: 10px; margin-top: 6px; align-items: center; }
 .settings-muted { color: var(--muted); font-size: 13px; line-height: 1.6; }
+/* Card titles are <h2> now; strip the UA margin, keep the .eyebrow look. */
+.settings-card-title { margin: 0; }
+/* Save confirmation, moved out of the save button's own label — see
+   SettingsPage.jsx. Sits beside the button rather than inside it. */
+.settings-saved { color: var(--teal); font-size: var(--t-small); }
+/* Lifted out of the Drone ID field's help text, where it was a button nested
+   inside another control's accessible name. */
+.settings-edit-anyway { align-self: start; margin-top: 6px; }
 
 .settings-toggle-row {
   display: flex;
@@ -1813,15 +1995,19 @@
 }
 .settings-toggle-title { font-weight: 600; margin-bottom: 4px; }
 
+/* A <dl> now — key as <dt>, what it does as <dd>. The rows are wrapped in divs
+   so each pair stays on one line inside the column flex. */
 .mapping {
   display: flex;
   flex-direction: column;
   gap: 8px;
   font-size: 12px;
   color: var(--muted);
-  margin-bottom: 14px;
+  margin: 0 0 14px;
 }
-.mapping span {
+.mapping > div { display: flex; gap: 4px; }
+.mapping dd { margin: 0; }
+.mapping dt {
   display: inline-block;
   min-width: 64px;
   color: var(--teal);
@@ -1838,7 +2024,20 @@
   flex-direction: column;
   gap: 8px;
   max-width: min(380px, calc(100vw - 40px));
+  /* The stack is always mounted so its two live regions exist before any
+     message does; without this it would swallow clicks on the deck beneath it
+     whenever it was empty. Individual toasts take pointer events back. */
+  pointer-events: none;
 }
+/* The assertive (error) and polite regions inside the stack. Empty ones
+   collapse so they contribute no gap. */
+.toast-region {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.toast-region:empty { display: none; }
+.toast-stack .toast { pointer-events: auto; }
 
 .toast {
   display: flex;
@@ -1901,3 +2100,10 @@
 }
 
 .field-hint { display: block; margin-top: 4px; font-size: 11px; color: var(--muted); line-height: 1.5; }
+
+/* Instrument tile titles, promoted from <div class="eyebrow"> to <h3> so the
+   strip has an outline and each tile is findable by heading. h3 because they
+   sit under the deck's h1 and the panel h2s. */
+.inst-title { margin: 0; }
+/* The attitude readout is a <dl> now; strip the UA dd indent. */
+.attitude-readout dd { margin: 0; }

@@ -72,8 +72,16 @@ describe('SettingsPage — save feedback', () => {
 
     await user.click(screen.getByRole('button', { name: /save changes/i }));
 
+    // The confirmation is a status region beside the button, not the button's
+    // own label. Renaming the control that currently has focus is announced as
+    // a different control appearing — and the old name came back two seconds
+    // later, usually before a screen reader had reached it.
+    // Scoped by name: the toast stack's polite region is also a role="status"
+    // on this page.
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: /saved ✓/i })).toBeInTheDocument(),
+      expect(screen.getByRole('status', { name: /save status/i })).toHaveTextContent(
+        /saved ✓/i,
+      ),
     );
     expect(mockDrone.saveDrone).toHaveBeenCalledTimes(1);
   });

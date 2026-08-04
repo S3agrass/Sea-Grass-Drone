@@ -256,93 +256,111 @@ export default function GamepadControl() {
   }, [canDrive, gamepadIndex, link]);
 
   return (
-    <div className="kbd-panel">
+    <section className="kbd-panel" aria-labelledby="helm-panel-title">
       <div className="panel-head">
-        <span className="eyebrow">Helm · gamepad</span>
+        <h2 className="eyebrow panel-title" id="helm-panel-title">Helm · gamepad</h2>
+        {/* The button's own text is "Active"/"Off", which names a state and not
+            a thing — labelledby borrows the panel title so it announces "Helm ·
+            gamepad, Off, toggle button". */}
         <button
           className={`toggle ${enabled ? "on" : ""}`}
           onClick={() => setEnabled((v) => !v)}
           aria-pressed={enabled}
+          aria-labelledby="helm-panel-title"
         >
-          <span className="toggle-knob" />
+          <span className="toggle-knob" aria-hidden="true" />
           {enabled ? "Active" : "Off"}
         </button>
       </div>
 
-      {enabled && gamepadIndex === null && (
-        <div className="kbd-warning">
-          No gamepad detected — connect a controller and press any button.
-        </div>
-      )}
-      {enabled && linkStatus !== "connected" && !demoMode && (
-        <div className="kbd-warning">Connect to the drone to take the helm.</div>
-      )}
-      {enabled && canDrive && !armed && !demoMode && (
-        <div className="kbd-warning">Thrusters are disarmed — arm to move.</div>
-      )}
-      {padInfo && padInfo.mapping !== "standard" && (
-        <div className="kbd-warning">
-          Non-standard mapping reported — verify indices below before flying.
-        </div>
-      )}
+      {/* These four warnings are exactly the messages that explain why the helm
+          is not responding, and they appeared and vanished with no announcement
+          whatsoever — so the answer to "why is nothing moving" was on screen and
+          nowhere else. One always-mounted polite region covers all of them. */}
+      <div role="status" aria-live="polite" className="kbd-warnings">
+        {enabled && gamepadIndex === null && (
+          <div className="kbd-warning">
+            No gamepad detected — connect a controller and press any button.
+          </div>
+        )}
+        {enabled && linkStatus !== "connected" && !demoMode && (
+          <div className="kbd-warning">Connect to the drone to take the helm.</div>
+        )}
+        {enabled && canDrive && !armed && !demoMode && (
+          <div className="kbd-warning">Thrusters are disarmed — arm to move.</div>
+        )}
+        {padInfo && padInfo.mapping !== "standard" && (
+          <div className="kbd-warning">
+            Non-standard mapping reported — verify indices below before flying.
+          </div>
+        )}
+      </div>
 
       <div className="conn-host mono kbd-diag">
         {padInfo ? padInfo.id : "No gamepad detected"}
       </div>
-      <div className="conn-rows">
+      {/* Term/definition pairs, matching the connection panel — the label and
+          its value were two adjacent spans with nothing binding them. */}
+      <dl className="conn-rows">
         <div className="conn-row">
-          <span>Mapping</span>
-          <span className="mono">{padInfo?.mapping || "(non-standard / empty)"}</span>
+          <dt>Mapping</dt>
+          <dd className="mono">{padInfo?.mapping || "(non-standard / empty)"}</dd>
         </div>
         {motors && (
           <>
             <div className="conn-row">
-              <span>Stick</span>
-              <span className="mono">
+              <dt>Stick</dt>
+              <dd className="mono">
                 {motors.angle?.toFixed(1)}° · mag {motors.mag?.toFixed(2)}
-              </span>
+              </dd>
             </div>
             <div className="conn-row">
-              <span>Motor L</span>
-              <span className="mono">
+              <dt>Motor L</dt>
+              <dd className="mono">
                 {Math.round(Math.abs(motors.left) * 100)}% ({motors.left_pwm} PWM)
-              </span>
+              </dd>
             </div>
             <div className="conn-row">
-              <span>Motor R</span>
-              <span className="mono">
+              <dt>Motor R</dt>
+              <dd className="mono">
                 {Math.round(Math.abs(motors.right) * 100)}% ({motors.right_pwm} PWM)
-              </span>
+              </dd>
             </div>
           </>
         )}
-      </div>
+      </dl>
       {debugText && <div className="conn-host mono kbd-diag">{debugText}</div>}
 
-      <div className={`kbd-grid ${canDrive ? "" : "disabled"}`}>
+      {/* The key legend: a reference list of control → what it does. As a <dl>
+          each binding reads as a pair; as sibling spans it was a stream of
+          letters followed by a stream of phrases. */}
+      <dl className={`kbd-grid ${canDrive ? "" : "disabled"}`}>
         {Object.keys(KEY_HINTS).map((key) => (
           <div key={key} className={`kbd-key ${pressed.has(key) ? "down" : ""}`}>
-            <span className="kbd-key-label mono">{key.toUpperCase()}</span>
-            <span className="kbd-key-hint">{KEY_HINTS[key]}</span>
+            <dt className="kbd-key-label mono">{key.toUpperCase()}</dt>
+            <dd className="kbd-key-hint">{KEY_HINTS[key]}</dd>
           </div>
         ))}
-      </div>
+      </dl>
 
-      <div className="kbd-row">
+      <dl className="kbd-row">
         <div className={`kbd-key wide ${lightOn ? "down" : ""}`}>
-          <span className="kbd-key-label mono">L1</span>
-          <span className="kbd-key-hint">Light toggle</span>
+          <dt className="kbd-key-label mono">L1</dt>
+          <dd className="kbd-key-hint">Light toggle</dd>
         </div>
         <div className={`kbd-key wide ${speedLocked ? "down" : ""}`}>
-          <span className="kbd-key-label mono">R1</span>
-          <span className="kbd-key-hint">Speed lock</span>
+          <dt className="kbd-key-label mono">R1</dt>
+          <dd className="kbd-key-hint">Speed lock</dd>
         </div>
         <div className="kbd-key wide">
-          <span className="kbd-key-label mono">OPT</span>
-          <span className="kbd-key-hint">All stop</span>
+          <dt className="kbd-key-label mono">OPT</dt>
+          <dd className="kbd-key-hint">All stop</dd>
         </div>
-      </div>
+      </dl>
 
+      {/* The glyph is hidden: unhidden, the app's emergency stop announced
+          itself as "power symbol all stop options", which is not what you want
+          the safety control to be called. */}
       <button
         className="btn btn-danger estop"
         onClick={() => {
@@ -351,8 +369,10 @@ export default function GamepadControl() {
         }}
         disabled={linkStatus !== "connected"}
       >
-        ⏻ ALL STOP <span className="mono estop-hint">OPTIONS</span>
+        <span aria-hidden="true">⏻ </span>ALL STOP{" "}
+        <span className="mono estop-hint" aria-hidden="true">OPTIONS</span>
+        <span className="visually-hidden"> (gamepad Options button)</span>
       </button>
-    </div>
+    </section>
   );
 }

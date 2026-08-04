@@ -122,9 +122,26 @@ describe('deck layout', () => {
   it('keeps focus mode able to hide everything but the map', () => {
     // Focus mode hides `.deck > *:not(.deck-map)`, so both survivors have to
     // stay direct children of the deck.
+    //
+    // The page heading and the flight-status control are the two exemptions in
+    // that selector. They are deliberately outside the hiding rule: display:none
+    // drops an element from the accessibility tree, and focus mode would
+    // otherwise leave a screen-reader user with no h1 and no way to hear
+    // telemetry. Neither occupies a grid track.
     const { container } = renderDeck();
     const kids = [...container.querySelector('.deck').children];
-    expect(kids.every((k) => k.matches('.deck-map, .deck-right, .inst-cluster'))).toBe(true);
+    expect(
+      kids.every((k) =>
+        k.matches('.deck-map, .deck-right, .inst-cluster, .flight-status, h1'),
+      ),
+    ).toBe(true);
+  });
+
+  it('exempts the heading and flight-status readout from focus mode', () => {
+    const { container } = renderDeck();
+    const deck = container.querySelector('.deck');
+    expect(deck.querySelector(':scope > h1')).toBeInTheDocument();
+    expect(deck.querySelector(':scope > .flight-status')).toBeInTheDocument();
   });
 });
 

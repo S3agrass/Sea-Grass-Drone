@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useDrone } from "../context/DroneContext";
+import Modal from "./Modal";
 
 // Detect stream protocol from URL.
 // Anything ending in .mjpg/.mjpeg falls back to legacy MJPEG img tag.
@@ -435,22 +436,35 @@ export default function CameraView() {
     >
       {flash && <div className="camera-flash" />}
 
-      {/* WebRTC video element — always rendered so the ref is stable */}
+      {/* WebRTC video element — always rendered so the ref is stable.
+          autoPlay is kept here, unlike the media lightbox: this is a live
+          silent telemetry feed with no audio track to talk over anyone, and a
+          drone camera that waits to be pressed play is not a camera. It is
+          muted and carries an accessible name so it is not an anonymous
+          "video" in the reader's element list.
+          No <track>: a live feed has no captions to give, and there is no audio
+          to caption. The textual equivalent of what the camera sees is the
+          detection readout below, not a caption file. */}
+      {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
       {type === "webrtc" && (
         <video
           ref={videoRef}
           autoPlay
           playsInline
           muted
+          aria-label="Live camera feed from the drone"
           style={{ opacity: feedState === "live" ? 1 : 0 }}
         />
       )}
 
       {/* Detection bounding-box overlay — drawn over whichever feed is live.
           Mounted for MJPEG as well as WebRTC: the Pi serves MJPEG, so gating
-          this on webrtc meant boxes were never drawn on real hardware. */}
+          this on webrtc meant boxes were never drawn on real hardware.
+          aria-hidden: it is a purely visual annotation of the video beneath it
+          and exposes nothing readable. What it draws is reported as text by the
+          detection summary instead. */}
       {(type === "webrtc" || type === "mjpeg") && (
-        <canvas ref={canvasRef} className="detection-overlay" />
+        <canvas ref={canvasRef} className="detection-overlay" aria-hidden="true" />
       )}
 
       {/* Legacy MJPEG img element */}
@@ -466,11 +480,16 @@ export default function CameraView() {
         />
       )}
 
-      {/* Overlay shown when not live */}
+      {/* Overlay shown when not live. role="status" so the feed dropping from
+          live to unreachable is spoken — visually it is unmissable, but without
+          this the video simply stopped existing for a screen reader with no
+          announcement that anything had changed. Polite, not assertive: the
+          arm/link alerts own the interrupting channel. */}
       {feedState !== "live" && (
-        <div className="camera-placeholder">
+        <div className="camera-placeholder" role="status">
           <div
             className={`ping-dot ${feedState === "connecting" ? "warn" : "off"}`}
+            aria-hidden="true"
           />
           <div className="camera-placeholder-title">
             {noUrl
@@ -507,20 +526,29 @@ export default function CameraView() {
 
       {feedState === "live" && (
         <div className="camera-badge mono">
-          <span className="ping-dot live" /> LIVE
+          <span className="ping-dot live" aria-hidden="true" /> LIVE
         </div>
       )}
 
-      {/* Wall clock — current time, bottom-left of the feed */}
+      {/* Wall clock — current time, bottom-left of the feed.
+          aria-hidden: it re-renders every second, and the one thing a screen
+          reader user can always get without us is the time. Exposing it would
+          add noise to every scan of the panel and tell them nothing. */}
       {feedState === "live" && (
-        <div className="camera-clock mono">{clock.toLocaleTimeString()}</div>
+        <div className="camera-clock mono" aria-hidden="true">
+          {clock.toLocaleTimeString()}
+        </div>
       )}
 
       {/* Recording indicator + elapsed time, bottom-right. Shown whenever the Pi
-          is recording (it keeps recording even if the local view drops). */}
+          is recording (it keeps recording even if the local view drops).
+          The elapsed counter is hidden for the same reason as the clock — it
+          ticks every second. That recording is happening at all is announced
+          once, on the transition, by the flight-status alerts. */}
       {recording && (
         <div className="camera-rec mono">
-          <span className="rec-dot" /> REC {fmtTime(recElapsed || 0)}
+          <span className="rec-dot" aria-hidden="true" /> REC{" "}
+          <span aria-hidden="true">{fmtTime(recElapsed || 0)}</span>
         </div>
       )}
 
@@ -529,16 +557,18 @@ export default function CameraView() {
           className="camera-close btn"
           onClick={() => setFullscreen(false)}
         >
-          ✕ Close
+          <span aria-hidden="true">✕ </span>Close
         </button>
       )}
     </div>
   );
 
   return (
-    <div className="camera-panel">
+    // A named region, so the deck's panels are distinguishable landmarks in the
+    // rotor instead of an undifferentiated run of divs.
+    <section className="camera-panel" aria-labelledby="camera-panel-title">
       <div className="panel-head">
-        <span className="eyebrow">Camera · Arducam</span>
+        <h2 className="eyebrow panel-title" id="camera-panel-title">Camera · Arducam</h2>
         <div className="camera-head-actions">
           {/* No manual camera power control — the camera is fully automatic,
               on whenever the Pixhawk is connected (see shouldCameraBeOn in
@@ -547,10 +577,17 @@ export default function CameraView() {
               off on its own short of the all-stop kill switch. */}
 
           {/* Object detection toggle — needs the camera running to have frames */}
+          {/* aria-pressed, not a CSS class: "on" was carried by the knob's
+              position and colour alone, so the button announced itself as "AI"
+              in both states and a screen-reader user could not tell whether
+              detection was running. The name spells out what "AI" means, since
+              a two-letter label is not a purpose. */}
           <button
             className={`toggle detect-power ${detectActive ? "on" : ""}`}
             onClick={detectActive ? detectOff : detectOn}
             disabled={!connected || !cameraActive}
+            aria-pressed={detectActive}
+            aria-label="AI object detection"
             title={
               !connected
                 ? "Connect to drone first"
@@ -561,7 +598,7 @@ export default function CameraView() {
                 : "Turn object detection on"
             }
           >
-            <span className="toggle-knob" />
+            <span className="toggle-knob" aria-hidden="true" />
             AI
           </button>
 
@@ -570,26 +607,39 @@ export default function CameraView() {
             onClick={() => setFullscreen(true)}
             disabled={!canCapture}
           >
-            ⛶ Expand
+            <span aria-hidden="true">⛶ </span>Expand
           </button>
         </div>
       </div>
 
+      {/* Fullscreen was a bare div painted over the deck: everything behind it
+          stayed tabbable, Escape did nothing, and focus never entered it. It is
+          a dialog in every respect except that it had never been told so. */}
       {fullscreen ? <div className="camera-feed placeholder-slot" /> : feed}
-      {fullscreen && <div className="camera-modal">{feed}</div>}
+      {fullscreen && (
+        <Modal
+          onClose={() => setFullscreen(false)}
+          label="Camera feed, fullscreen"
+          backdropClassName="camera-modal"
+          className="camera-modal-inner"
+        >
+          {feed}
+        </Modal>
+      )}
 
       <div className="camera-actions">
         <button className="btn" onClick={snapshot} disabled={!canControl}>
-          ⊙ Snapshot
+          <span aria-hidden="true">⊙ </span>Snapshot
         </button>
         <button
           className={`btn ${recording ? "btn-danger" : ""}`}
           onClick={toggleRecord}
           disabled={!canControl}
         >
-          {recording ? "■ Stop" : "● Record"}
+          <span aria-hidden="true">{recording ? "■ " : "● "}</span>
+          {recording ? "Stop" : "Record"}
         </button>
       </div>
-    </div>
+    </section>
   );
 }
