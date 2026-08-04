@@ -69,7 +69,8 @@ export default function ChangePassword({ email }) {
       } else if (msg.includes("same as the old")) {
         setError("That is already your password — choose a different one.");
       } else if (code === "over_request_rate_limit" || msg.includes("rate limit")) {
-        setError("Too many attempts. Wait a minute and try again.");
+        // No email involved on this path, so this really is an attempt limit.
+        setError("Too many attempts. Wait a few minutes and try again.");
       } else {
         setError(err.message);
       }

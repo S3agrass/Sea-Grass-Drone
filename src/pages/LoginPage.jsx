@@ -85,8 +85,20 @@ export default function LoginPage() {
 			} else if (code === "email_not_confirmed" || msg.includes("not confirmed")) {
 				setError("Confirm your email address first — check your inbox.");
 				setUnconfirmed(true);
+				// Checked BEFORE the generic rate-limit branch: sign-up sends a
+				// confirmation email, so it trips the project's hourly email quota
+				// rather than any per-attempt limit. Reported as "too many attempts"
+				// it sent people hunting for a problem with their password, when the
+				// truth is nobody can receive mail from this project for an hour.
+			} else if (
+				code === "over_email_send_rate_limit" ||
+				msg.includes("email rate limit")
+			) {
+				setError(
+					"This project's email limit is used up — it can only send a few messages an hour. Wait about an hour, or ask an administrator to configure SMTP.",
+				);
 			} else if (code === "over_request_rate_limit" || msg.includes("rate limit")) {
-				setError("Too many attempts. Wait a minute and try again.");
+				setError("Too many attempts. Wait a few minutes and try again.");
 			} else {
 				setError(err.message);
 			}
@@ -119,11 +131,21 @@ export default function LoginPage() {
 
 			if (
 				code === "over_email_send_rate_limit" ||
+				msg.includes("email rate limit")
+			) {
+				// The hourly project quota, not a per-user cooldown. Waiting "a
+				// minute" — which this used to say — does nothing.
+				setError(
+					"This project's email limit is used up — it can only send a few messages an hour. Wait about an hour, or ask an administrator to configure SMTP.",
+				);
+			} else if (
 				code === "over_request_rate_limit" ||
 				msg.includes("rate limit") ||
 				msg.includes("security purposes")
 			) {
-				setError("Too many emails requested. Wait a minute and try again.");
+				// This one IS short — Supabase enforces a brief gap between repeat
+				// sends to the same address.
+				setError("Just sent one. Wait a minute before requesting another.");
 			} else if (code === "validation_failed" || msg.includes("invalid email")) {
 				setError("Please enter a valid email address.");
 			} else {

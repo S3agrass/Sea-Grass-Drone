@@ -23,10 +23,22 @@ Authentication is Supabase, not Firebase. Firebase is **hosting only** — it ne
 2. Decide on **Confirm email**, in the same panel. Leaving it on is the safer default, but be aware of what it means: a new account cannot sign in until the emailed link is clicked, and Supabase's built-in SMTP is rate-limited to a handful of messages an hour. If those emails do not arrive, operators are locked out of accounts that look perfectly fine in the dashboard.
 3. **Authentication → URL Configuration**:
    - **Site URL** — `https://seagrassrobotics.com`
-   - **Redirect URLs** — add `https://seagrassrobotics.com/desktop/#/reset-password`, plus `http://localhost:5173/#/reset-password` for local development.
+   - **Redirect URLs** — add `https://seagrassrobotics.com/desktop/**`, plus `http://localhost:5173/**` for local development.
 
-   Password-reset links are rejected if their redirect is not on this list; Supabase quietly falls back to the Site URL, which drops people on the login page holding a code nothing ever exchanges.
-4. **Project Settings → API** → copy the URL and the `anon` key into `.env` (see [step 3](#3-supabase-cloud-fleet-registry--captured-media)).
+   Use the wildcard form. Matching against an exact URL containing a `#` fragment is unreliable, and a redirect that fails to match is not rejected — Supabase quietly substitutes the Site URL, so the link lands on the marketing site instead of the reset page and nothing explains why.
+4. **Authentication → Emails → Reset Password** — replace the link in the template body with:
+
+   ```
+   {{ .SiteURL }}/desktop/#/reset-password?token_hash={{ .TokenHash }}&type=recovery
+   ```
+
+   **This one matters more than it looks.** The default template uses `{{ .ConfirmationURL }}`, which routes through Supabase's PKCE flow — and PKCE cannot survive an email. Requesting a reset stashes a `code_verifier` in *that browser's* localStorage, and the link needs it back. Open the mail on your phone, in a webmail preview, or in any other browser and verification fails, reporting itself as an expired link. People open password-reset mail on their phones constantly, so this is the normal case, not an edge one.
+
+   `token_hash` carries its whole proof in the URL and needs nothing stored locally, so it works wherever the mail was opened. The app accepts both, so links already in flight keep working.
+5. **Project Settings → API** → copy the URL and the `anon` key into `.env` (see [step 3](#3-supabase-cloud-fleet-registry--captured-media)).
+6. **Authentication → Emails → SMTP Settings** — configure a real provider (Resend, SendGrid, Postmark; all free at this volume).
+
+   The built-in mailer allows only a few messages **per hour, project-wide**. That ceiling is shared across password resets *and* sign-up confirmations, so three test clicks lock out every new operator for an hour — and the failure surfaces as a rate-limit error on an unrelated account, which looks like a problem with that account. Do this before any demo.
 
 **Sign up:** use the "Create account" tab on the login page. To manage users directly, use **Authentication → Users** in the Supabase dashboard.
 
