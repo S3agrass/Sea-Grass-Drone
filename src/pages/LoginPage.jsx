@@ -186,12 +186,6 @@ export default function LoginPage() {
 						Autonomous ocean vehicle command. Connect, pilot, and survey from
 						anywhere.
 					</div>
-
-					<div className="login-specs mono">
-						<span>PIXHAWK · ARDUSUB</span>
-						<span>RASPBERRY PI 5 · BLUEOS</span>
-						<span>MAVLINK LIVE LINK</span>
-					</div>
 				</div>
 			</div>
 
