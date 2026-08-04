@@ -26,15 +26,11 @@ Authentication is Supabase, not Firebase. Firebase is **hosting only** — it ne
    - **Redirect URLs** — add `https://seagrassrobotics.com/desktop/**`, plus `http://localhost:5173/**` for local development.
 
    Use the wildcard form. Matching against an exact URL containing a `#` fragment is unreliable, and a redirect that fails to match is not rejected — Supabase quietly substitutes the Site URL, so the link lands on the marketing site instead of the reset page and nothing explains why.
-4. **Authentication → Emails → Reset Password** — replace the link in the template body with:
+4. **Email templates need no changes.** The stock **Reset Password** template works.
 
-   ```
-   {{ .SiteURL }}/desktop/#/reset-password?token_hash={{ .TokenHash }}&type=recovery
-   ```
+   This is worth stating because an earlier version of this app required a custom template, and it was a dead end. The app used Supabase's PKCE flow, which cannot survive an email: requesting a reset stashes a `code_verifier` in *that browser's* localStorage, and the emailed link is worthless without it. The app now uses the implicit flow, where the link carries the session itself — so it works on whatever device opened the mail, with the default template.
 
-   **This one matters more than it looks.** The default template uses `{{ .ConfirmationURL }}`, which routes through Supabase's PKCE flow — and PKCE cannot survive an email. Requesting a reset stashes a `code_verifier` in *that browser's* localStorage, and the link needs it back. Open the mail on your phone, in a webmail preview, or in any other browser and verification fails, reporting itself as an expired link. People open password-reset mail on their phones constantly, so this is the normal case, not an edge one.
-
-   `token_hash` carries its whole proof in the URL and needs nothing stored locally, so it works wherever the mail was opened. The app accepts both, so links already in flight keep working.
+   If a custom template was configured previously, revert it to `{{ .ConfirmationURL }}`.
 5. **Project Settings → API** → copy the URL and the `anon` key into `.env` (see [step 3](#3-supabase-cloud-fleet-registry--captured-media)).
 6. **Authentication → Emails → SMTP Settings** — configure a real provider (Resend, SendGrid, Postmark; all free at this volume).
 

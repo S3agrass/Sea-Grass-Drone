@@ -149,14 +149,23 @@ export const changePassword = async (email, currentPassword, newPassword) => {
  */
 export const readRecoveryParams = (loc) => {
   const fromSearch = new URLSearchParams(loc.search);
-  // Everything after the first "?" inside the fragment, if there is one.
-  const hashQuery = loc.hash.includes("?")
-    ? loc.hash.slice(loc.hash.indexOf("?") + 1)
-    : "";
-  const fromHash = new URLSearchParams(hashQuery);
+  // Three shapes have to be readable, because which one arrives depends on the
+  // email template and the flow, and we control neither at read time:
+  //   /desktop/?code=x#/reset-password        query
+  //   /desktop/#/reset-password?code=x        after a hash ROUTE
+  //   /desktop/#access_token=x&type=recovery  the fragment IS the params
+  const hash = loc.hash.startsWith("#") ? loc.hash.slice(1) : loc.hash;
+  const fromHash = new URLSearchParams(
+    hash.includes("?") ? hash.slice(hash.indexOf("?") + 1) : hash,
+  );
 
   const pick = (key) => fromSearch.get(key) || fromHash.get(key) || "";
   return {
+    // Implicit flow: the session itself, handed straight back in the link. No
+    // verifier, no exchange, works on any device.
+    accessToken: pick("access_token"),
+    refreshToken: pick("refresh_token"),
+    type: pick("type"),
     // Preferred. Carries everything needed in the link itself, so it works on
     // whatever device the email was opened on — see verifyRecoveryToken.
     tokenHash: pick("token_hash"),
@@ -166,6 +175,68 @@ export const readRecoveryParams = (loc) => {
     error: pick("error"),
     errorDescription: pick("error_description"),
   };
+};
+
+/** Where captureRecoveryFragment parks what it found. sessionStorage, not a
+ *  module variable, so a reload on the reset page does not lose it. */
+const RECOVERY_STASH = "seagrass-recovery-params";
+
+/**
+ * Takes the recovery values out of the URL before React starts, and rewrites
+ * the address bar to the reset route.
+ *
+ * Must run before the router mounts. A recovery link lands as
+ * `/desktop/#access_token=...&type=recovery`, and to a HashRouter that fragment
+ * reads as a route named "access_token=..." — no <Route> matches, the catch-all
+ * fires, and the person is bounced to the login page while holding a perfectly
+ * good session. That is what "it just redirects me to the website" was.
+ *
+ * Rewriting with replaceState rather than assigning location.hash: assigning
+ * triggers a hashchange the router would act on, and leaves the tokens in
+ * browser history where they have no business being.
+ */
+export const captureRecoveryFragment = (win = window) => {
+  const params = readRecoveryParams(win.location);
+  const isRecovery =
+    params.type === "recovery" ||
+    ((params.accessToken || params.tokenHash || params.code) &&
+      win.location.hash.includes("reset-password"));
+
+  if (!isRecovery && !params.error) return null;
+
+  try {
+    win.sessionStorage.setItem(RECOVERY_STASH, JSON.stringify(params));
+  } catch {
+    // Private browsing can refuse. The page still reads straight from the URL.
+  }
+
+  win.history.replaceState({}, "", `${win.location.pathname}#/reset-password`);
+  return params;
+};
+
+/** Reads what captureRecoveryFragment stashed, falling back to the live URL. */
+export const takeRecoveryParams = (win = window) => {
+  try {
+    const raw = win.sessionStorage.getItem(RECOVERY_STASH);
+    if (raw) {
+      win.sessionStorage.removeItem(RECOVERY_STASH);
+      return JSON.parse(raw);
+    }
+  } catch {
+    // fall through
+  }
+  return readRecoveryParams(win.location);
+};
+
+/** Installs a session handed back by an implicit-flow recovery link. */
+export const establishRecoverySession = async (accessToken, refreshToken) => {
+  if (!supabaseConfigured) return notConfigured();
+  const { data, error } = await supabase.auth.setSession({
+    access_token: accessToken,
+    refresh_token: refreshToken,
+  });
+  if (error) throw error;
+  return data;
 };
 
 /**
