@@ -1,8 +1,10 @@
 import { useState } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
+import { Link, Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import ParticleTitle from "../components/ParticleTitle";
-import { sendPasswordReset, resendConfirmation } from "../lib/auth";
+import { resendConfirmation } from "../lib/auth";
+import { describeRecoveryError } from "../lib/recoveryErrors";
+import { MIN_PASSWORD_LENGTH } from "../lib/passwordPolicy";
 import { supabaseConfigured } from "../lib/supabase";
 
 export default function LoginPage() {
@@ -107,9 +109,11 @@ export default function LoginPage() {
 		}
 	}
 
-	// Shared by both recovery actions: they need an address, they report through
-	// the same live region as sign-in, and they must never disclose whether an
-	// account exists — so the confirmation reads the same either way.
+	// Only resend-confirmation now — forgot-password moved to its own page,
+	// which is where the address is asked for rather than borrowed from the
+	// sign-in field. Kept in this shape because resend has the same shape of
+	// problem: it needs an address, and it reports through the sign-in form's
+	// live region.
 	async function runRecovery(action, confirmation) {
 		setError("");
 		setNotice("");
@@ -126,41 +130,11 @@ export default function LoginPage() {
 			setNotice(confirmation);
 			setUnconfirmed(false);
 		} catch (err) {
-			const code = err.code ?? "";
-			const msg = (err.message ?? "").toLowerCase();
-
-			if (
-				code === "over_email_send_rate_limit" ||
-				msg.includes("email rate limit")
-			) {
-				// The hourly project quota, not a per-user cooldown. Waiting "a
-				// minute" — which this used to say — does nothing.
-				setError(
-					"This project's email limit is used up — it can only send a few messages an hour. Wait about an hour, or ask an administrator to configure SMTP.",
-				);
-			} else if (
-				code === "over_request_rate_limit" ||
-				msg.includes("rate limit") ||
-				msg.includes("security purposes")
-			) {
-				// This one IS short — Supabase enforces a brief gap between repeat
-				// sends to the same address.
-				setError("Just sent one. Wait a minute before requesting another.");
-			} else if (code === "validation_failed" || msg.includes("invalid email")) {
-				setError("Please enter a valid email address.");
-			} else {
-				setError(err.message);
-			}
+			setError(describeRecoveryError(err));
 		} finally {
 			setBusy(false);
 		}
 	}
-
-	const handleForgotPassword = () =>
-		runRecovery(
-			sendPasswordReset,
-			`If an account exists for ${email}, a password reset link is on its way. The link expires in one hour.`,
-		);
 
 	const handleResendConfirmation = () =>
 		runRecovery(
@@ -291,21 +265,20 @@ export default function LoginPage() {
 
 						{tab === "signup" && (
 							<p id="password-req" className="field-help">
-								Must be at least 6 characters.
+								Must be at least {MIN_PASSWORD_LENGTH} characters.
 							</p>
 						)}
 
-						{/* type="button" is load-bearing inside this form — the default
-						    is submit, which would fire a sign-in attempt instead. */}
+						{/* A link to its own page now, not a button in this form. As a
+						    button it depended on the email field above having already been
+						    filled in correctly, and its whole response to an empty field
+						    was to ask you to go and fill it in. It also needed
+						    type="button" to avoid submitting the sign-in form, which is a
+						    bug waiting to be reintroduced. A <Link> can do neither. */}
 						{tab === "signin" && (
-							<button
-								type="button"
-								className="login-link"
-								disabled={busy || !supabaseConfigured}
-								onClick={handleForgotPassword}
-							>
+							<Link className="login-link" to="/forgot-password">
 								Forgot password?
-							</button>
+							</Link>
 						)}
 					</div>
 

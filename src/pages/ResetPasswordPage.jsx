@@ -8,6 +8,11 @@ import {
 	verifyRecoveryToken,
 } from "../lib/auth";
 import { supabaseConfigured } from "../lib/supabase";
+import {
+	PASSWORD_RULES,
+	describePasswordError,
+	validateNewPassword,
+} from "../lib/passwordPolicy";
 
 // Where a password-recovery email lands.
 //
@@ -20,8 +25,6 @@ import { supabaseConfigured } from "../lib/supabase";
 // The code arrives as ?code= in the QUERY string rather than the fragment,
 // because the client is configured for the PKCE flow — see src/lib/supabase.js
 // for why the fragment is unusable here.
-
-const MIN_PASSWORD = 6; // matches the weak_password branch on the login page
 
 export default function ResetPasswordPage() {
 	const navigate = useNavigate();
@@ -94,10 +97,16 @@ export default function ResetPasswordPage() {
 				// Single-use and now spent. Drop it from the address bar so a refresh
 				// does not re-run a doomed exchange, and so the link does not sit in
 				// history for anyone reading over a shoulder.
+				//
+				// Splits on `#` as well as `?`: the implicit flow appends its fragment
+				// to the one we asked to be redirected to, so a live link reads
+				// `#/reset-password#access_token=...` and splitting on `?` alone would
+				// leave the whole session sitting in the address bar.
+				const route = window.location.hash.replace(/^#/, "").split(/[#?]/)[0];
 				window.history.replaceState(
 					{},
 					"",
-					`${window.location.pathname}${window.location.hash.split("?")[0]}`,
+					`${window.location.pathname}#${route}`,
 				);
 			})
 			.catch(() => {
@@ -121,12 +130,9 @@ export default function ResetPasswordPage() {
 		e.preventDefault();
 		setError("");
 
-		if (password.length < MIN_PASSWORD) {
-			setError(`Password must be at least ${MIN_PASSWORD} characters.`);
-			return;
-		}
-		if (password !== confirm) {
-			setError("Those passwords do not match.");
+		const invalid = validateNewPassword(password, confirm);
+		if (invalid) {
+			setError(invalid);
 			return;
 		}
 
@@ -135,16 +141,9 @@ export default function ResetPasswordPage() {
 			await updatePassword(password);
 			navigate("/fleet", { replace: true });
 		} catch (err) {
-			const code = err.code ?? "";
-			const msg = (err.message ?? "").toLowerCase();
-
-			if (code === "weak_password" || msg.includes("password should be")) {
-				setError(`Password must be at least ${MIN_PASSWORD} characters.`);
-			} else if (msg.includes("same as the old")) {
-				setError("That is already your password — choose a different one.");
-			} else {
-				setError(err.message);
-			}
+			// Includes the one rule the client cannot check: Supabase rejects a
+			// password identical to the current one, and only it knows what that is.
+			setError(describePasswordError(err));
 		} finally {
 			setBusy(false);
 		}
@@ -205,9 +204,19 @@ export default function ResetPasswordPage() {
 								/>
 							</label>
 
-							<p id="reset-req" className="field-help">
-								Must be at least {MIN_PASSWORD} characters.
-							</p>
+							{/* Stated up front, not discovered by failing. Both rules are
+							    listed even though only the length one can be checked here
+							    — the other is enforced by Supabase on submit, and someone
+							    reaching for their old password deserves to know it will be
+							    refused before they type it twice. */}
+							<div id="reset-req" className="field-help">
+								<p>Your new password:</p>
+								<ul className="login-hints">
+									{PASSWORD_RULES.map((rule) => (
+										<li key={rule}>{rule}</li>
+									))}
+								</ul>
+							</div>
 						</>
 					)}
 

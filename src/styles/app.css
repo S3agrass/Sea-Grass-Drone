@@ -228,6 +228,17 @@
    region itself was what appeared. */
 .login-error-slot:empty { display: none; }
 .field-help { font-size: 12px; color: var(--faint); line-height: 1.5; }
+.field-help p { margin: 0 0 4px; }
+
+/* The password rules, and the what-happens-next list on the forgot-password
+   confirmation. A real <ul>, not styled paragraphs, so a screen reader
+   announces how many rules there are before reading them. */
+.login-hints { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
+.login-hints li { line-height: 1.5; }
+
+/* Sits under the submit button rather than inline with the form controls, so
+   the way back is reachable without tabbing through the whole form again. */
+.login-foot-link { display: inline-block; margin-top: 12px; text-align: center; }
 
 .login-error {
   background: rgba(255, 92, 108, 0.1);

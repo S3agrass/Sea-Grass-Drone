@@ -9,6 +9,7 @@ import {
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { DroneProvider } from "./context/DroneContext";
 import LoginPage from "./pages/LoginPage";
+import ForgotPasswordPage from "./pages/ForgotPasswordPage";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
 import FleetPage from "./pages/FleetPage";
 import ControlPage from "./pages/ControlPage";
@@ -19,7 +20,8 @@ import "./styles/app.css";
 
 const ROUTE_TITLES = {
   "/": "Sign in",
-  "/reset-password": "Reset password",
+  "/forgot-password": "Reset your password",
+  "/reset-password": "Set a new password",
   "/fleet": "Your fleet",
   "/control": "Flight deck",
   "/media": "Media",
@@ -111,6 +113,9 @@ export default function App() {
           <SkipLink />
           <Routes>
             <Route path="/" element={<LoginPage />} />
+            {/* Also outside <Protected>, for the obvious reason: someone who
+                cannot get past the sign-in form is exactly who needs this. */}
+            <Route path="/forgot-password" element={<ForgotPasswordPage />} />
             {/* Deliberately NOT wrapped in <Protected>, and ahead of the
                 catch-all. Exchanging the recovery code signs the user in, and
                 LoginPage sends anyone authed to /fleet — so this has to be a
