@@ -125,7 +125,12 @@ describe('password reset', () => {
     );
   });
 
-  it('reports a send rate limit in plain language', async () => {
+  // The project's hourly email quota and the short per-address cooldown are
+  // different problems with different fixes, and both used to render as "wait a
+  // minute". For the quota that is simply false — it is an hour, it is
+  // project-wide, and no amount of retrying from another account or device
+  // helps. Being told to wait a minute sent us looking at passwords instead.
+  it('names the hourly project email quota, and does not call it a minute', async () => {
     const user = userEvent.setup();
     sendPasswordReset.mockRejectedValue({ code: 'over_email_send_rate_limit' });
     renderLogin();
@@ -133,9 +138,40 @@ describe('password reset', () => {
     await user.type(screen.getByLabelText(/email/i), 'locked@example.com');
     await user.click(screen.getByRole('button', { name: /forgot password/i }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      /too many emails requested/i,
-    );
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/email limit/i);
+    expect(alert).toHaveTextContent(/hour/i);
+    expect(alert).not.toHaveTextContent(/wait a minute/i);
+  });
+
+  it('keeps the short per-address cooldown separate', async () => {
+    const user = userEvent.setup();
+    sendPasswordReset.mockRejectedValue({
+      message: 'For security purposes, you can only request this once every 60 seconds',
+    });
+    renderLogin();
+
+    await user.type(screen.getByLabelText(/email/i), 'locked@example.com');
+    await user.click(screen.getByRole('button', { name: /forgot password/i }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/wait a minute/i);
+    expect(alert).not.toHaveTextContent(/email limit/i);
+  });
+
+  it('explains an exhausted quota on sign-up too, where it also bites', async () => {
+    const user = userEvent.setup();
+    mockAuth.signUp.mockRejectedValue({ code: 'over_email_send_rate_limit' });
+    renderLogin();
+
+    await user.click(screen.getByRole('tab', { name: /sign up/i }));
+    await user.type(screen.getByLabelText(/email/i), 'new@example.com');
+    await user.type(screen.getByLabelText(/password/i), 'hunter22');
+    await user.click(screen.getByRole('button', { name: /create account/i }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/email limit/i);
+    expect(alert).not.toHaveTextContent(/too many attempts/i);
   });
 });
 

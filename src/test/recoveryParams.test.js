@@ -61,3 +61,36 @@ describe('readRecoveryParams', () => {
     ).toBe('access_denied');
   });
 });
+
+// token_hash is what makes a recovery link work on the phone someone actually
+// opened their mail on. PKCE cannot: requesting the reset stashes a
+// code_verifier in that browser's localStorage, and without it the exchange
+// fails looking exactly like an expired link. Both shapes have to be readable
+// while old links are still in flight.
+describe('readRecoveryParams — token_hash links', () => {
+  it('finds a token_hash in the fragment, where the email template puts it', () => {
+    const { tokenHash } = readRecoveryParams(
+      loc('', '#/reset-password?token_hash=pkce_abc&type=recovery'),
+    );
+    expect(tokenHash).toBe('pkce_abc');
+  });
+
+  it('finds a token_hash in the query string too', () => {
+    expect(
+      readRecoveryParams(loc('?token_hash=pkce_abc&type=recovery', '#/reset-password'))
+        .tokenHash,
+    ).toBe('pkce_abc');
+  });
+
+  it('reports both when a link somehow carries each', () => {
+    const p = readRecoveryParams(loc('?code=c1', '#/reset-password?token_hash=t1'));
+    expect(p.tokenHash).toBe('t1');
+    expect(p.code).toBe('c1');
+  });
+
+  it('leaves tokenHash empty on a legacy code-only link', () => {
+    const p = readRecoveryParams(loc('?code=abc123', '#/reset-password'));
+    expect(p.tokenHash).toBe('');
+    expect(p.code).toBe('abc123');
+  });
+});

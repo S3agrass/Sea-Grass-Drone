@@ -4,6 +4,7 @@ import {
 	exchangeRecoveryCode,
 	readRecoveryParams,
 	updatePassword,
+	verifyRecoveryToken,
 } from "../lib/auth";
 import { supabaseConfigured } from "../lib/supabase";
 
@@ -41,7 +42,7 @@ export default function ResetPasswordPage() {
 			return;
 		}
 
-		const { code, error: linkError, errorDescription } =
+		const { tokenHash, code, error: linkError, errorDescription } =
 			readRecoveryParams(window.location);
 
 		// Supabase reports a link that expired before it was opened this way,
@@ -56,7 +57,7 @@ export default function ResetPasswordPage() {
 			return;
 		}
 
-		if (!code) {
+		if (!tokenHash && !code) {
 			setStage("invalid");
 			setError(
 				"This page needs a recovery link. Request a new one from the sign-in page.",
@@ -64,25 +65,39 @@ export default function ResetPasswordPage() {
 			return;
 		}
 
+		// token_hash first: it proves itself from the URL alone, so it works on
+		// whichever device opened the mail. `code` is PKCE and only works in the
+		// browser that asked for the reset — kept as a fallback for links issued
+		// before the email template moved over.
+		const verify = tokenHash
+			? verifyRecoveryToken(tokenHash)
+			: exchangeRecoveryCode(code);
+
 		let active = true;
-		exchangeRecoveryCode(code)
+		verify
 			.then(() => {
 				if (!active) return;
 				setStage("ready");
-				// The code is single-use and now spent. Drop it from the address bar
-				// so a refresh does not re-run a doomed exchange, and so the link
-				// does not sit in history for anyone reading over a shoulder.
+				// Single-use and now spent. Drop it from the address bar so a refresh
+				// does not re-run a doomed exchange, and so the link does not sit in
+				// history for anyone reading over a shoulder.
 				window.history.replaceState(
 					{},
 					"",
-					`${window.location.pathname}${window.location.hash}`,
+					`${window.location.pathname}${window.location.hash.split("?")[0]}`,
 				);
 			})
 			.catch(() => {
 				if (!active) return;
 				setStage("invalid");
 				setError(
-					"That recovery link has expired or was already used. Request a new one from the sign-in page.",
+					tokenHash
+						? "That recovery link has expired or was already used. Request a new one from the sign-in page."
+						: // The PKCE path fails identically whether the link expired or was
+							// simply opened somewhere else, and the second is far more common.
+							// Saying so is the difference between a fixable problem and a
+							// mystery.
+							"This link could not be verified. It may have expired, or it was opened on a different device from the one that requested it. Request a new one and open it on the same device.",
 				);
 			});
 

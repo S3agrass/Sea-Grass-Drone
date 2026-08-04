@@ -157,10 +157,40 @@ export const readRecoveryParams = (loc) => {
 
   const pick = (key) => fromSearch.get(key) || fromHash.get(key) || "";
   return {
+    // Preferred. Carries everything needed in the link itself, so it works on
+    // whatever device the email was opened on — see verifyRecoveryToken.
+    tokenHash: pick("token_hash"),
+    // Legacy PKCE path, kept for links issued before the email template moved
+    // to token_hash. Only works in the browser that requested the reset.
     code: pick("code"),
     error: pick("error"),
     errorDescription: pick("error_description"),
   };
+};
+
+/**
+ * Verifies a recovery link that carries a `token_hash`, and signs the holder in
+ * so they can set a new password.
+ *
+ * This exists because PKCE cannot survive an email. Requesting a reset makes
+ * supabase-js stash a `code_verifier` in THAT browser's localStorage, and
+ * exchangeCodeForSession needs it back — so a link requested on a laptop and
+ * opened on a phone fails, and fails looking exactly like an expired link.
+ * People open password-reset mail on their phones constantly, so that is the
+ * common case, not the edge one.
+ *
+ * verifyOtp carries the whole proof in the URL and needs nothing stored
+ * locally, so it works wherever the mail was opened. It requires the email
+ * template to send `token_hash` — see SETUP.md.
+ */
+export const verifyRecoveryToken = async (tokenHash) => {
+  if (!supabaseConfigured) return notConfigured();
+  const { data, error } = await supabase.auth.verifyOtp({
+    token_hash: tokenHash,
+    type: "recovery",
+  });
+  if (error) throw error;
+  return data;
 };
 
 /** Trades the `?code=` on a recovery link for a real session. */
