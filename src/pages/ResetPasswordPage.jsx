@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
+	establishRecoverySession,
 	exchangeRecoveryCode,
-	readRecoveryParams,
+	takeRecoveryParams,
 	updatePassword,
 	verifyRecoveryToken,
 } from "../lib/auth";
@@ -42,8 +43,14 @@ export default function ResetPasswordPage() {
 			return;
 		}
 
-		const { tokenHash, code, error: linkError, errorDescription } =
-			readRecoveryParams(window.location);
+		const {
+			accessToken,
+			refreshToken,
+			tokenHash,
+			code,
+			error: linkError,
+			errorDescription,
+		} = takeRecoveryParams(window);
 
 		// Supabase reports a link that expired before it was opened this way,
 		// rather than by failing the exchange.
@@ -57,7 +64,7 @@ export default function ResetPasswordPage() {
 			return;
 		}
 
-		if (!tokenHash && !code) {
+		if (!accessToken && !tokenHash && !code) {
 			setStage("invalid");
 			setError(
 				"This page needs a recovery link. Request a new one from the sign-in page.",
@@ -65,13 +72,19 @@ export default function ResetPasswordPage() {
 			return;
 		}
 
-		// token_hash first: it proves itself from the URL alone, so it works on
-		// whichever device opened the mail. `code` is PKCE and only works in the
-		// browser that asked for the reset — kept as a fallback for links issued
-		// before the email template moved over.
-		const verify = tokenHash
-			? verifyRecoveryToken(tokenHash)
-			: exchangeRecoveryCode(code);
+		// Ordered by how well each survives an email.
+		//   access_token — the session itself, in the link. Nothing stored, works
+		//                  anywhere. What the implicit flow now sends.
+		//   token_hash   — proves itself from the URL, also device-independent.
+		//   code         — PKCE. Needs a verifier in this browser's localStorage,
+		//                  so it only works where the reset was requested, and
+		//                  not even reliably there. Last resort, for links that
+		//                  were already in flight.
+		const verify = accessToken
+			? establishRecoverySession(accessToken, refreshToken)
+			: tokenHash
+				? verifyRecoveryToken(tokenHash)
+				: exchangeRecoveryCode(code);
 
 		let active = true;
 		verify
@@ -91,13 +104,11 @@ export default function ResetPasswordPage() {
 				if (!active) return;
 				setStage("invalid");
 				setError(
-					tokenHash
-						? "That recovery link has expired or was already used. Request a new one from the sign-in page."
-						: // The PKCE path fails identically whether the link expired or was
-							// simply opened somewhere else, and the second is far more common.
-							// Saying so is the difference between a fixable problem and a
-							// mystery.
-							"This link could not be verified. It may have expired, or it was opened on a different device from the one that requested it. Request a new one and open it on the same device.",
+					code && !accessToken && !tokenHash
+						? // Only the PKCE path can fail for reasons other than the link
+							// itself, so only it gets the longer explanation.
+							"This link could not be verified. It may have expired, or it was issued before the sign-in system was updated. Request a new one from the sign-in page."
+						: "That recovery link has expired or was already used. Request a new one from the sign-in page.",
 				);
 			});
 
