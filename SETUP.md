@@ -25,7 +25,9 @@ Authentication is Supabase, not Firebase. Firebase is **hosting only** — it ne
    - **Site URL** — `https://seagrassrobotics.com`
    - **Redirect URLs** — add `https://seagrassrobotics.com/desktop/**`, plus `http://localhost:5173/**` for local development.
 
-   Use the wildcard form. Matching against an exact URL containing a `#` fragment is unreliable, and a redirect that fails to match is not rejected — Supabase quietly substitutes the Site URL, so the link lands on the marketing site instead of the reset page and nothing explains why.
+   **This step is not optional, and it fails silently when skipped.** A redirect that does not match is not rejected — Supabase quietly substitutes the Site URL. The symptom is a reset email whose link ends `redirect_to=https://seagrassrobotics.com`, which drops the operator on the marketing homepage with no error anywhere. If you are debugging a reset that "goes to the wrong page", read `redirect_to` out of the emailed link first: if it is the bare Site URL, it is this.
+
+   Use the wildcard form. The app asks to be redirected to the app root (`https://seagrassrobotics.com/desktop/`) and nothing deeper — `sendPasswordReset` deliberately puts no `#/reset-password` on the end, because matching a pattern against a URL carrying a `#` is unreliable. The recovery route is reached by `captureRecoveryFragment()` once the page loads, not by the URL Supabase is given.
 4. **Email templates need no changes.** The stock **Reset Password** template works.
 
    This is worth stating because an earlier version of this app required a custom template, and it was a dead end. The app used Supabase's PKCE flow, which cannot survive an email: requesting a reset stashes a `code_verifier` in *that browser's* localStorage, and the emailed link is worthless without it. The app now uses the implicit flow, where the link carries the session itself — so it works on whatever device opened the mail, with the default template.

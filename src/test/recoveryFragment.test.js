@@ -80,6 +80,71 @@ describe('readRecoveryParams — all three link shapes', () => {
   });
 });
 
+// The shape a real implicit-flow link actually arrives in, and the one that
+// broke recovery in production.
+//
+// We used to ask Supabase to redirect to `/desktop/#/reset-password`, because
+// the app hash-routes and that is the reset route. Supabase APPENDS its own
+// fragment instead of replacing ours, so the link landed carrying two `#`:
+//
+//   /desktop/#/reset-password#access_token=...&type=recovery
+//
+// Splitting the fragment on `?` alone left the second `#` buried inside the
+// first key, which parsed as `/reset-password#access_token` — the session was
+// present in the URL and unreachable. `type=recovery` follows an `&` so it read
+// correctly regardless, and that is what made the failure so misleading:
+// captureRecoveryFragment recognised the link and rewrote the address bar, and
+// then the reset page reported having no recovery link at all.
+//
+// resetRedirect() no longer puts a fragment on the redirect at all, so this
+// shape should not arise any more. Pinned anyway: what Supabase appends to a
+// redirect target is not ours to control, and the cost of being wrong about
+// that is a recovery flow that fails while insisting the link is fine.
+describe('readRecoveryParams — Supabase appended to our own fragment', () => {
+  const doubled =
+    '#/reset-password#access_token=at123&refresh_token=rt456&expires_in=3600&token_type=bearer&type=recovery';
+
+  it('reads the session out from behind the second #', () => {
+    const p = readRecoveryParams({ search: '', hash: doubled });
+    expect(p.accessToken).toBe('at123');
+    expect(p.refreshToken).toBe('rt456');
+    expect(p.type).toBe('recovery');
+  });
+
+  it('does not leave the token stranded in a mangled key', () => {
+    // The exact regression: type parsed, access_token did not, so the link read
+    // as a recovery link with nothing in it.
+    const p = readRecoveryParams({ search: '', hash: doubled });
+    expect(p.type).toBe('recovery');
+    expect(p.accessToken).not.toBe('');
+  });
+
+  it('reads a token_hash delivered the same way', () => {
+    const p = readRecoveryParams({
+      search: '',
+      hash: '#/reset-password#token_hash=th789&type=recovery',
+    });
+    expect(p.tokenHash).toBe('th789');
+  });
+
+  it('reads an error appended to our fragment too', () => {
+    const p = readRecoveryParams({
+      search: '',
+      hash: '#/reset-password#error=access_denied&error_description=Email+link+is+invalid+or+has+expired',
+    });
+    expect(p.error).toBe('access_denied');
+    expect(p.errorDescription).toMatch(/expired/);
+  });
+
+  it('still rescues the session end to end', () => {
+    const win = fakeWindow(doubled);
+    captureRecoveryFragment(win);
+    expect(win.__url()).toBe('/desktop/#/reset-password');
+    expect(win.__url()).not.toContain('at123');
+    expect(takeRecoveryParams(win).accessToken).toBe('at123');
+  });
+});
+
 describe('captureRecoveryFragment', () => {
   let win;
   beforeEach(() => {

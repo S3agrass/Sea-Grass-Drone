@@ -52,6 +52,7 @@ vi.mock('../lib/supabase', () => ({
 }));
 
 const LoginPage = (await import('../pages/LoginPage')).default;
+const ForgotPasswordPage = (await import('../pages/ForgotPasswordPage')).default;
 
 const renderLogin = () =>
   render(
@@ -71,58 +72,123 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('password reset', () => {
-  it('offers a reset action on the sign-in tab', () => {
+// Asking for the reset link now happens on /forgot-password, not on a button
+// inside the sign-in form. The old arrangement borrowed the address from the
+// sign-in email field, so recovering an account required having already typed
+// the right address into a form about something else, and an empty field got
+// you told to go and fill it in rather than anything useful.
+describe('password reset — the link out of the sign-in form', () => {
+  it('offers a way to reach recovery from the sign-in tab', () => {
     renderLogin();
     expect(
-      screen.getByRole('button', { name: /forgot password/i }),
-    ).toBeInTheDocument();
+      screen.getByRole('link', { name: /forgot password/i }),
+    ).toHaveAttribute('href', '/forgot-password');
   });
 
-  it('is a plain button, so it cannot submit the sign-in form', () => {
-    renderLogin();
-    // The whole point: inside a <form>, the default type is "submit".
-    expect(
-      screen.getByRole('button', { name: /forgot password/i }),
-    ).toHaveAttribute('type', 'button');
-  });
-
-  it('sends a reset without attempting a sign-in', async () => {
+  it('does not send anything from the sign-in form itself', async () => {
     const user = userEvent.setup();
     renderLogin();
 
-    await user.type(screen.getByLabelText(/email/i), 'locked@example.com');
-    await user.click(screen.getByRole('button', { name: /forgot password/i }));
+    await user.click(screen.getByRole('link', { name: /forgot password/i }));
+
+    // Navigating is the whole job. A link cannot submit the form it sits in,
+    // which is what the old type="button" was defending against.
+    expect(sendPasswordReset).not.toHaveBeenCalled();
+    expect(mockAuth.signIn).not.toHaveBeenCalled();
+  });
+});
+
+describe('forgot-password page', () => {
+  const renderForgot = () =>
+    render(
+      <MemoryRouter initialEntries={['/forgot-password']}>
+        <ForgotPasswordPage />
+      </MemoryRouter>,
+    );
+
+  const submit = async (user, email) => {
+    if (email) await user.type(screen.getByLabelText(/email/i), email);
+    await user.click(screen.getByRole('button', { name: /send reset link/i }));
+  };
+
+  it('asks for the address on its own, rather than borrowing one', async () => {
+    const user = userEvent.setup();
+    renderForgot();
+
+    await submit(user, 'locked@example.com');
 
     await waitFor(() =>
       expect(sendPasswordReset).toHaveBeenCalledWith('locked@example.com'),
     );
-    expect(mockAuth.signIn).not.toHaveBeenCalled();
+  });
+
+  it('trims the address, because copied email tends to bring whitespace', async () => {
+    const user = userEvent.setup();
+    renderForgot();
+
+    await submit(user, '  locked@example.com  ');
+
+    await waitFor(() =>
+      expect(sendPasswordReset).toHaveBeenCalledWith('locked@example.com'),
+    );
   });
 
   it('asks for an address rather than emailing nobody', async () => {
     const user = userEvent.setup();
-    renderLogin();
+    renderForgot();
 
-    await user.click(screen.getByRole('button', { name: /forgot password/i }));
+    await submit(user);
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      /enter your email address first/i,
+      /enter your email address/i,
     );
     expect(sendPasswordReset).not.toHaveBeenCalled();
   });
 
   it('does not reveal whether the account exists', async () => {
     const user = userEvent.setup();
-    renderLogin();
+    renderForgot();
 
-    await user.type(screen.getByLabelText(/email/i), 'nobody@example.com');
-    await user.click(screen.getByRole('button', { name: /forgot password/i }));
+    await submit(user, 'nobody@example.com');
 
     // "If an account exists" — the same wording either way.
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      /if an account exists/i,
+    expect(await screen.findByText(/if an account exists/i)).toBeInTheDocument();
+  });
+
+  // Every failed attempt so far ended with someone clicking an older email, so
+  // the confirmation says which one to open rather than just "check your mail".
+  it('says the link is single-use and that a new request kills the old one', async () => {
+    const user = userEvent.setup();
+    renderForgot();
+
+    await submit(user, 'locked@example.com');
+
+    const status = await screen.findByRole('status');
+    expect(status.closest('.login-card')).toHaveTextContent(/only be used once/i);
+    expect(status.closest('.login-card')).toHaveTextContent(
+      /invalidates the previous one/i,
     );
+  });
+
+  it('replaces the form once sent, so there is nothing to click twice', async () => {
+    const user = userEvent.setup();
+    renderForgot();
+
+    await submit(user, 'locked@example.com');
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', { name: /send reset link/i }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
+  it('states the password rules before the email is even sent', () => {
+    renderForgot();
+    expect(screen.getByText(/at least 6 characters/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/different from your current password/i),
+    ).toBeInTheDocument();
   });
 
   // The project's hourly email quota and the short per-address cooldown are
@@ -133,10 +199,9 @@ describe('password reset', () => {
   it('names the hourly project email quota, and does not call it a minute', async () => {
     const user = userEvent.setup();
     sendPasswordReset.mockRejectedValue({ code: 'over_email_send_rate_limit' });
-    renderLogin();
+    renderForgot();
 
-    await user.type(screen.getByLabelText(/email/i), 'locked@example.com');
-    await user.click(screen.getByRole('button', { name: /forgot password/i }));
+    await submit(user, 'locked@example.com');
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(/email limit/i);
@@ -149,15 +214,28 @@ describe('password reset', () => {
     sendPasswordReset.mockRejectedValue({
       message: 'For security purposes, you can only request this once every 60 seconds',
     });
-    renderLogin();
+    renderForgot();
 
-    await user.type(screen.getByLabelText(/email/i), 'locked@example.com');
-    await user.click(screen.getByRole('button', { name: /forgot password/i }));
+    await submit(user, 'locked@example.com');
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(/wait a minute/i);
     expect(alert).not.toHaveTextContent(/email limit/i);
   });
+
+  it('keeps the form up after a failure, so the address is not retyped', async () => {
+    const user = userEvent.setup();
+    sendPasswordReset.mockRejectedValue({ code: 'over_email_send_rate_limit' });
+    renderForgot();
+
+    await submit(user, 'locked@example.com');
+
+    await screen.findByRole('alert');
+    expect(screen.getByLabelText(/email/i)).toHaveValue('locked@example.com');
+  });
+});
+
+describe('sign-in form recovery errors', () => {
 
   it('explains an exhausted quota on sign-up too, where it also bites', async () => {
     const user = userEvent.setup();

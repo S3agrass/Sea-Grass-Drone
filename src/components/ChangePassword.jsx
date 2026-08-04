@@ -1,5 +1,10 @@
 import { useState } from "react";
 import { changePassword } from "../lib/auth";
+import {
+  PASSWORD_RULES,
+  describePasswordError,
+  validateNewPassword,
+} from "../lib/passwordPolicy";
 
 // Change-password form for a signed-in operator.
 //
@@ -11,8 +16,9 @@ import { changePassword } from "../lib/auth";
 // Its own component rather than more markup inside SettingsPage: it owns four
 // pieces of state and a submit path, none of which the rest of that page cares
 // about.
-
-const MIN_PASSWORD = 6; // matches the weak_password branch elsewhere
+//
+// The length rule and its wording live in lib/passwordPolicy.js, shared with the
+// reset and forgot-password pages, so all three state and enforce the same thing.
 
 export default function ChangePassword({ email }) {
   const [open, setOpen] = useState(false);
@@ -39,14 +45,13 @@ export default function ChangePassword({ email }) {
       setError("Enter your current password.");
       return;
     }
-    if (next.length < MIN_PASSWORD) {
-      setError(`New password must be at least ${MIN_PASSWORD} characters.`);
+    const invalid = validateNewPassword(next, confirm);
+    if (invalid) {
+      setError(invalid);
       return;
     }
-    if (next !== confirm) {
-      setError("Those passwords do not match.");
-      return;
-    }
+    // Checkable here, unlike on the reset page, because this form asks for the
+    // current password — so it is caught before a pointless round trip.
     if (next === current) {
       setError("That is already your password — choose a different one.");
       return;
@@ -64,15 +69,11 @@ export default function ChangePassword({ email }) {
 
       if (code === "invalid_current_password") {
         setError("Current password is incorrect.");
-      } else if (code === "weak_password" || msg.includes("password should be")) {
-        setError(`New password must be at least ${MIN_PASSWORD} characters.`);
-      } else if (msg.includes("same as the old")) {
-        setError("That is already your password — choose a different one.");
       } else if (code === "over_request_rate_limit" || msg.includes("rate limit")) {
         // No email involved on this path, so this really is an attempt limit.
         setError("Too many attempts. Wait a few minutes and try again.");
       } else {
-        setError(err.message);
+        setError(describePasswordError(err));
       }
     } finally {
       setBusy(false);
@@ -145,9 +146,14 @@ export default function ChangePassword({ email }) {
         />
       </label>
 
-      <p id="change-password-req" className="field-help">
-        Must be at least {MIN_PASSWORD} characters.
-      </p>
+      <div id="change-password-req" className="field-help">
+        <p>Your new password:</p>
+        <ul className="login-hints">
+          {PASSWORD_RULES.map((rule) => (
+            <li key={rule}>{rule}</li>
+          ))}
+        </ul>
+      </div>
 
       {/* Assertive: a failure here stops the task, and the message is the only
           thing telling a screen-reader user why nothing happened. */}

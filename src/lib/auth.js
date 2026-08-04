@@ -54,8 +54,25 @@ export const logout = async () => {
  *  the login page with a code no one ever exchanges. */
 /** Where the hosted GCS lives. Only used as a fallback for builds that have no
  *  usable origin of their own — see below. */
-const HOSTED_RESET_URL = "https://seagrassrobotics.com/desktop/#/reset-password";
+const HOSTED_RESET_URL = "https://seagrassrobotics.com/desktop/";
 
+/**
+ * Deliberately NO `#/reset-password` on the end of any of these.
+ *
+ * It used to be there, and it cost us the redirect twice over. Supabase
+ * validates redirectTo against the dashboard allow-list and, when it does not
+ * match, silently substitutes the project's Site URL rather than failing — so a
+ * reset link arrived pointing at the marketing homepage with nothing to explain
+ * why. Matching a pattern against a URL carrying a `#` is unreliable, and a
+ * fragment is not really part of what an allow-list is matching anyway.
+ *
+ * Sending Supabase to the app root instead makes the allow-list entry a plain
+ * path, and costs nothing: the implicit flow appends its own fragment
+ * (`#access_token=...&type=recovery`), and captureRecoveryFragment() below
+ * already recognises that by its `type` and rewrites the address bar to the
+ * reset route before React starts. Asking for the route in the URL was never
+ * what got us there.
+ */
 const resetRedirect = () => {
   const { origin, protocol, pathname } = window.location;
 
@@ -72,7 +89,7 @@ const resetRedirect = () => {
   // localhost:5173/desktop/, which does not exist there — the link opened a page
   // that could never complete the reset.
   const base = pathname.replace(/[^/]*$/, "");
-  return `${origin}${base}#/reset-password`;
+  return `${origin}${base}`;
 };
 
 /** Emails a password-recovery link. Resolves either way — Supabase does not
@@ -149,15 +166,36 @@ export const changePassword = async (email, currentPassword, newPassword) => {
  */
 export const readRecoveryParams = (loc) => {
   const fromSearch = new URLSearchParams(loc.search);
-  // Three shapes have to be readable, because which one arrives depends on the
+  // Four shapes have to be readable, because which one arrives depends on the
   // email template and the flow, and we control neither at read time:
-  //   /desktop/?code=x#/reset-password        query
-  //   /desktop/#/reset-password?code=x        after a hash ROUTE
-  //   /desktop/#access_token=x&type=recovery  the fragment IS the params
+  //   /desktop/?code=x#/reset-password         query
+  //   /desktop/#/reset-password?code=x         after a hash ROUTE
+  //   /desktop/#access_token=x&type=recovery   the fragment IS the params
+  //   /desktop/#/reset-password#access_token=x appended to our own fragment
+  //
+  // That last one is what actually arrives from the implicit flow, and it used
+  // to cost the session. We ask Supabase to redirect to `/desktop/#/reset-password`
+  // — a fragment, because this app hash-routes — and it appends its own
+  // fragment rather than replacing ours, so the URL carries TWO `#`. Splitting
+  // on `?` alone left the second `#` inside the first key, which parsed as
+  // `/reset-password#access_token` and put the session somewhere nothing would
+  // ever look for it. `type=recovery` sits after an `&` so it still read fine,
+  // which is what made this so confusing: the link was recognised as a recovery
+  // link, the address bar was rewritten, and then the page said it had no
+  // recovery link at all.
+  //
+  // So treat BOTH `#` and `?` as separators and merge every segment. No token
+  // material contains either character, so nothing is split that shouldn't be.
   const hash = loc.hash.startsWith("#") ? loc.hash.slice(1) : loc.hash;
-  const fromHash = new URLSearchParams(
-    hash.includes("?") ? hash.slice(hash.indexOf("?") + 1) : hash,
-  );
+  const fromHash = new URLSearchParams();
+  for (const segment of hash.split(/[#?]/)) {
+    if (!segment) continue;
+    for (const [key, value] of new URLSearchParams(segment)) {
+      // First occurrence wins — the earliest segment is the one Supabase's
+      // redirect target carried, and a later repeat cannot improve on it.
+      if (!fromHash.has(key)) fromHash.set(key, value);
+    }
+  }
 
   const pick = (key) => fromSearch.get(key) || fromHash.get(key) || "";
   return {
