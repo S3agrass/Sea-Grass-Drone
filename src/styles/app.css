@@ -189,11 +189,14 @@
   padding: 32px;
 }
 
+/* The 6px top margin here used to separate this from an "Operator access"
+   eyebrow above it. That eyebrow is gone from every auth screen, so the title
+   is the first thing in the card and the offset is just a crooked gap. */
 .login-title {
   font-family: var(--font-display);
   font-size: 26px;
   font-weight: 700;
-  margin: 6px 0 20px;
+  margin: 0 0 20px;
 }
 
 .login-tabs {
@@ -236,9 +239,6 @@
 .login-hints { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
 .login-hints li { line-height: 1.5; }
 
-/* Sits under the submit button rather than inline with the form controls, so
-   the way back is reachable without tabbing through the whole form again. */
-.login-foot-link { display: inline-block; margin-top: 12px; text-align: center; }
 
 .login-error {
   background: rgba(255, 92, 108, 0.1);
@@ -259,9 +259,11 @@
   margin-bottom: 14px;
 }
 
-/* A button that reads as a link. Kept a <button> rather than an <a> because it
-   runs an action and goes nowhere — an anchor without an href is not reachable
-   by keyboard and is announced as nothing useful. */
+/* Small underlined text that sits inside a form. Used by both a real <a> (the
+   "Forgot password?" and "Back to sign in" links, which navigate) and a
+   <button> (resend confirmation, which runs an action and goes nowhere). An
+   anchor without an href would be neither keyboard-reachable nor announced as
+   anything useful, so the distinction is by element, not by class. */
 .login-link {
   display: inline-block;
   margin: -4px 0 16px;
@@ -273,6 +275,16 @@
   cursor: pointer;
 }
 .login-link:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* The way back, under the submit button rather than above it. Must come after
+   .login-link: that rule sets `margin` as a shorthand, so declaring this one
+   earlier in the file left the top margin silently overridden and the link
+   crowding the button above it. */
+.login-foot-link {
+  display: block;
+  margin: 16px 0 0;
+  text-align: center;
+}
 
 /* Change-password form inside the Settings account card. Constrained so the
    fields do not run the full width of a wide settings column. */

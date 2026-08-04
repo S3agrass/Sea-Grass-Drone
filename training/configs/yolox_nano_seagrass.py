@@ -69,3 +69,39 @@ class Exp(MyExp):
 
         # experiment name -> YOLOX_outputs/<exp_name>/
         self.exp_name = os.path.splitext(os.path.basename(__file__))[0]
+
+    def get_evaluator(self, batch_size, is_distributed, testdev=False, legacy=False):
+        """YOLOX's evaluator, but reporting AP per class rather than only the mean.
+
+        The default COCOEvaluator is constructed with per_class_AP=False, so a
+        run prints one mAP number and nothing else. That number is close to
+        useless here, because the merged dataset is badly imbalanced — of ~60k
+        boxes, marine_life is 65% and trash, the actual survey target, is 7.6%:
+
+            marine_life  38,638      trash   4,540
+            fish          9,880      diver   4,393
+                                     rov     2,266
+
+        A model that learned marine_life well and trash poorly scores a
+        respectable mean while failing at the job. Worse, the two failure modes
+        are indistinguishable without the breakdown: a class that reads 0.00 is
+        a mapping bug (its images never carried that label), while one that
+        reads merely low is the imbalance — and those want completely different
+        fixes.
+
+        Overriding rather than setting an attribute because the base Exp has no
+        per_class_AP field to set; it passes the default positionally into the
+        evaluator it builds.
+        """
+        from yolox.evaluators import COCOEvaluator
+
+        return COCOEvaluator(
+            dataloader=self.get_eval_loader(batch_size, is_distributed, testdev, legacy),
+            img_size=self.test_size,
+            confthre=self.test_conf,
+            nmsthre=self.nmsthre,
+            num_classes=self.num_classes,
+            testdev=testdev,
+            per_class_AP=True,
+            per_class_AR=True,
+        )

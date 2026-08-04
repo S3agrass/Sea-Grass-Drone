@@ -153,7 +153,6 @@ export default function ResetPasswordPage() {
 		<main className="login-standalone" id="main">
 			<div className="login-panel">
 				<form className="login-card" onSubmit={handleSubmit} noValidate>
-					<div className="eyebrow">Operator access</div>
 					<h1 className="login-title" id="page-title" tabIndex={-1}>Set a new password</h1>
 
 					{/* This sat outside every live region, so the whole recovery-code
