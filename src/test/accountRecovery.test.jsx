@@ -108,7 +108,7 @@ describe('forgot-password page', () => {
 
   const submit = async (user, email) => {
     if (email) await user.type(screen.getByLabelText(/email/i), email);
-    await user.click(screen.getByRole('button', { name: /send reset link/i }));
+    await user.click(screen.getByRole('button', { name: /send email/i }));
   };
 
   it('asks for the address on its own, rather than borrowing one', async () => {
@@ -178,9 +178,24 @@ describe('forgot-password page', () => {
 
     await waitFor(() =>
       expect(
-        screen.queryByRole('button', { name: /send reset link/i }),
+        screen.queryByRole('button', { name: /send email/i }),
       ).not.toBeInTheDocument(),
     );
+  });
+
+  // Styled as a button, but an <a> underneath. A real <button> could not be
+  // opened in a new tab or copied as a link, and would need an onClick doing by
+  // hand what the router does for free — so the role, not just the label, is
+  // what is worth pinning.
+  it('offers a way back to sign in without sending anything', async () => {
+    const user = userEvent.setup();
+    renderForgot();
+
+    const back = screen.getByRole('link', { name: /go back/i });
+    expect(back).toHaveAttribute('href', '/');
+
+    await user.click(back);
+    expect(sendPasswordReset).not.toHaveBeenCalled();
   });
 
   it('states the password rules before the email is even sent', () => {

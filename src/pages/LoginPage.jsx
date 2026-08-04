@@ -187,8 +187,6 @@ export default function LoginPage() {
 
 			<div className="login-panel">
 				<form className="login-card" onSubmit={handleSubmit} noValidate>
-					<div className="eyebrow">Operator access</div>
-
 					<h1 className="login-title" id="page-title" tabIndex={-1}>
 						{tab === "signin" ? "Sign in" : "Create account"}
 					</h1>

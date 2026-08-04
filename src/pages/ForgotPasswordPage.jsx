@@ -56,7 +56,6 @@ export default function ForgotPasswordPage() {
 					// does not disclose that and neither should this page, or it becomes
 					// a way to test which of your operators' addresses are registered.
 					<div className="login-card">
-						<div className="eyebrow">Operator access</div>
 						<h1 className="login-title" id="page-title" tabIndex={-1}>
 							Check your email
 						</h1>
@@ -79,21 +78,15 @@ export default function ForgotPasswordPage() {
 								is fine.
 							</li>
 						</ul>
-
-						<Link className="btn btn-primary login-submit" to="/">
-							Back to sign in
-						</Link>
 					</div>
 				) : (
 					<form className="login-card" onSubmit={handleSubmit} noValidate>
-						<div className="eyebrow">Operator access</div>
 						<h1 className="login-title" id="page-title" tabIndex={-1}>
-							Reset your password
+						Enter your email to reset your password.
 						</h1>
 
 						<p className="login-muted">
-							Enter the email address for your operator account and we will send
-							you a link to set a new password.
+						We'll send you a link to reset your password.
 						</p>
 
 						<label className="field" htmlFor="recovery-email">
@@ -136,7 +129,7 @@ export default function ForgotPasswordPage() {
 							disabled={busy || !supabaseConfigured}
 							aria-busy={busy}
 						>
-							{busy ? "Sending…" : "Send reset link"}
+							{busy ? "Sending…" : "Send email"}
 						</button>
 
 						{!supabaseConfigured && (
@@ -145,9 +138,13 @@ export default function ForgotPasswordPage() {
 								VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set.
 							</p>
 						)}
-
-						<Link className="login-link login-foot-link" to="/">
-							Back to sign in
+						{/* The way back. Styled as a button, but a <Link> underneath,
+						    because it navigates: a real <button> here could not be opened
+						    in a new tab or copied as a link, and would need an onClick
+						    doing by hand what the router already does. The button look is
+						    the .btn classes; the behaviour is the element. */}
+						<Link className="btn btn-ghost login-submit login-foot-link" to="/">
+							Go Back
 						</Link>
 					</form>
 				)}
