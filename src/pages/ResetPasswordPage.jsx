@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { exchangeRecoveryCode, updatePassword } from "../lib/auth";
+import {
+	exchangeRecoveryCode,
+	readRecoveryParams,
+	updatePassword,
+} from "../lib/auth";
 import { supabaseConfigured } from "../lib/supabase";
 
 // Where a password-recovery email lands.
@@ -37,7 +41,21 @@ export default function ResetPasswordPage() {
 			return;
 		}
 
-		const code = new URLSearchParams(window.location.search).get("code");
+		const { code, error: linkError, errorDescription } =
+			readRecoveryParams(window.location);
+
+		// Supabase reports a link that expired before it was opened this way,
+		// rather than by failing the exchange.
+		if (linkError) {
+			setStage("invalid");
+			setError(
+				errorDescription
+					? `${errorDescription.replace(/\+/g, " ")} Request a new link from the sign-in page.`
+					: "That recovery link is no longer valid. Request a new one from the sign-in page.",
+			);
+			return;
+		}
+
 		if (!code) {
 			setStage("invalid");
 			setError(
@@ -107,15 +125,27 @@ export default function ResetPasswordPage() {
 	}
 
 	return (
-		<div className="login-standalone">
+		<main className="login-standalone" id="main">
 			<div className="login-panel">
 				<form className="login-card" onSubmit={handleSubmit} noValidate>
 					<div className="eyebrow">Operator access</div>
-					<h1 className="login-title">Set a new password</h1>
+					<h1 className="login-title" id="page-title" tabIndex={-1}>Set a new password</h1>
 
-					{stage === "checking" && (
-						<p className="login-muted">Checking your recovery link…</p>
-					)}
+					{/* This sat outside every live region, so the whole recovery-code
+					    exchange was silent: the wait was not announced, and neither
+					    was the moment two password fields appeared at the end of it.
+					    Polite rather than assertive — the failure path is already
+					    covered by the assertive #reset-status below. */}
+					<div role="status" aria-live="polite">
+						{stage === "checking" && (
+							<p className="login-muted">Checking your recovery link…</p>
+						)}
+						{stage === "ready" && (
+							<p className="visually-hidden">
+								Recovery link accepted. Enter a new password.
+							</p>
+						)}
+					</div>
 
 					{stage === "ready" && (
 						<>
@@ -182,6 +212,6 @@ export default function ResetPasswordPage() {
 
 				<div className="login-foot mono">SEAGRASS GCS · v2.0</div>
 			</div>
-		</div>
+		</main>
 	);
 }

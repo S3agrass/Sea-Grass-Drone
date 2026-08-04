@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import TopBar from "../components/TopBar";
 import Toasts from "../components/Toasts";
+import Modal from "../components/Modal";
 import { useDrone } from "../context/DroneContext";
 import {
   deleteMedia,
@@ -205,51 +206,73 @@ export default function MediaPage() {
   return (
     <div className="app-shell">
       <TopBar />
-      <div className="media-page">
+      <main className="media-page" id="main">
         <div className="media-head">
           <div>
-            <h1 className="settings-title">Media</h1>
+            <h1 className="settings-title" id="page-title" tabIndex={-1}>Media</h1>
             <div className="settings-muted">
               Photos and recordings from {activeDrone?.name || "the drone"}.
             </div>
           </div>
-          <button className="btn" onClick={refresh} disabled={localStatus === "loading"}>
-            {localStatus === "loading" ? "Loading…" : "↻ Refresh"}
+          <button
+            className="btn"
+            onClick={refresh}
+            disabled={localStatus === "loading"}
+            aria-busy={localStatus === "loading"}
+          >
+            <span aria-hidden="true">↻ </span>
+            {localStatus === "loading" ? "Loading…" : "Refresh"}
           </button>
         </div>
 
-        {showDroneError && (
-          <div className="media-empty">
-            {mediaBase
-              ? "Couldn't reach the drone's media store, and nothing has been uploaded yet. Check the camera stream URL and that the drone is powered on."
-              : "No camera stream URL configured — add one in Settings to browse media."}
-          </div>
-        )}
-
-        {empty && (
-          <div className="media-empty">
-            No photos or recordings yet. Capture some from the Control screen.
-          </div>
-        )}
+        {/* One always-mounted status region covering all three mutually
+            exclusive outcomes — loading, unreachable, empty. Previously the
+            loading state rendered nothing at all and the two failure messages
+            were inert divs, so a fetch that failed after a slow wait was
+            indistinguishable from one that had not finished. */}
+        <div className="media-status" role="status" aria-live="polite">
+          {loading && <div className="media-empty">Loading media…</div>}
+          {showDroneError && (
+            <div className="media-empty">
+              {mediaBase
+                ? "Couldn't reach the drone's media store, and nothing has been uploaded yet. Check the camera stream URL and that the drone is powered on."
+                : "No camera stream URL configured — add one in Settings to browse media."}
+            </div>
+          )}
+          {empty && (
+            <div className="media-empty">
+              No photos or recordings yet. Capture some from the Control screen.
+            </div>
+          )}
+        </div>
 
         {items.length > 0 && (
-          <div className="media-grid">
+          <ul className="media-grid">
             {items.map((item) => {
               const src = srcOf(item);
               const context = fmtContext(item);
+              const backup = item.cloud ? "Backed up" : "On drone only";
               return (
-                <div className="media-card" key={item.name}>
+                <li className="media-card" key={item.name}>
+                  {/* The whole card's identity is in the meta block below, but
+                      a reader listing buttons hears only the button. For a
+                      photo the <img alt> named it; for a video the name was the
+                      bare glyph "▶", so every video opened an unidentified
+                      thing. An explicit name covers both. */}
                   <button
                     className="media-thumb"
                     onClick={() => setViewing(item)}
-                    title="View"
+                    aria-label={`View ${item.type === "photo" ? "photo" : "video"} ${item.name}`}
                   >
                     {item.type === "photo" ? (
-                      <img src={src} alt={item.name} loading="lazy" />
+                      <img src={src} alt="" loading="lazy" />
                     ) : (
                       <>
-                        <video src={src} preload="metadata" muted />
-                        <span className="media-play">▶</span>
+                        {/* Decorative preview — the button is already named,
+                            and a muted metadata-only thumbnail has nothing to
+                            caption. */}
+                        <video src={src} preload="metadata" muted aria-hidden="true" />
+                        <span className="media-play" aria-hidden="true">▶</span>
                       </>
                     )}
                   </button>
@@ -260,37 +283,65 @@ export default function MediaPage() {
                     </div>
                     {context && <div className="media-sub">{context}</div>}
                     <div className="media-sub">
-                      {item.cloud ? "☁ Backed up" : "On drone only"}
+                      <span aria-hidden="true">{item.cloud ? "☁ " : ""}</span>
+                      {backup}
                     </div>
                   </div>
                   <div className="media-actions">
-                    <a className="btn" href={src} download={item.name}>
-                      ↓ Download
-                    </a>
-                    <button className="btn btn-danger" onClick={() => remove(item)}>
-                      ✕ Delete
+                    {/* srcOf() returns undefined for an item whose host is not
+                        resolvable, and an <a> with no href is not focusable and
+                        not activatable — it looked like a button and was a dead
+                        span. Render a disabled control instead, so the state is
+                        both reachable and announced. */}
+                    {src ? (
+                      <a
+                        className="btn"
+                        href={src}
+                        download={item.name}
+                        aria-label={`Download ${item.name}`}
+                      >
+                        <span aria-hidden="true">↓ </span>Download
+                      </a>
+                    ) : (
+                      <button className="btn" disabled aria-label={`Download ${item.name} — unavailable`}>
+                        <span aria-hidden="true">↓ </span>Download
+                      </button>
+                    )}
+                    <button
+                      className="btn btn-danger"
+                      onClick={() => remove(item)}
+                      aria-label={`Delete ${item.name}`}
+                    >
+                      <span aria-hidden="true">✕ </span>Delete
                     </button>
                   </div>
-                </div>
+                </li>
               );
             })}
-          </div>
+          </ul>
         )}
-      </div>
+      </main>
 
       {viewing && (
-        <div className="camera-modal" onClick={() => setViewing(null)}>
-          <div className="media-viewer" onClick={(e) => e.stopPropagation()}>
-            {viewing.type === "photo" ? (
-              <img src={srcOf(viewing)} alt={viewing.name} />
-            ) : (
-              <video src={srcOf(viewing)} controls autoPlay />
-            )}
-            <button className="camera-close btn" onClick={() => setViewing(null)}>
-              ✕ Close
-            </button>
-          </div>
-        </div>
+        <Modal
+          onClose={() => setViewing(null)}
+          label={`${viewing.type === "photo" ? "Photo" : "Video"}: ${viewing.name}`}
+          backdropClassName="camera-modal"
+          className="media-viewer"
+        >
+          {viewing.type === "photo" ? (
+            <img src={srcOf(viewing)} alt={viewing.name} />
+          ) : (
+            // autoPlay removed: media that starts on its own talks over a
+            // screen reader mid-sentence and there was no way to stop it before
+            // finding the controls. It has controls; the user can press play.
+            // eslint-disable-next-line jsx-a11y/media-has-caption
+            <video src={srcOf(viewing)} controls />
+          )}
+          <button className="camera-close btn" onClick={() => setViewing(null)}>
+            <span aria-hidden="true">✕ </span>Close
+          </button>
+        </Modal>
       )}
 
       <Toasts />

@@ -75,7 +75,7 @@ describe('SonarView', () => {
 
   it('defaults the mount angle to 45 degrees and persists a change', () => {
     render(<SonarView />);
-    const slider = screen.getByLabelText('Sonar mount angle off vertical');
+    const slider = screen.getByLabelText(/mount/);
     expect(slider).toHaveValue('45');
     fireEvent.change(slider, { target: { value: '60' } });
     expect(screen.getByText('60°')).toBeInTheDocument();
@@ -85,12 +85,12 @@ describe('SonarView', () => {
   it('restores a saved mount angle', () => {
     localStorage.setItem('seagrass-sonar-mount-deg', '30');
     render(<SonarView />);
-    expect(screen.getByLabelText('Sonar mount angle off vertical')).toHaveValue('30');
+    expect(screen.getByLabelText(/mount/)).toHaveValue('30');
   });
 
   it('persists the selected max range', () => {
     render(<SonarView />);
-    const select = screen.getByLabelText('Echogram max range');
+    const select = screen.getByLabelText(/range/);
     fireEvent.change(select, { target: { value: '20' } });
     expect(localStorage.getItem('seagrass-sonar-max-range')).toBe('20');
   });
@@ -98,7 +98,7 @@ describe('SonarView', () => {
   it('ignores a saved max range that is not one of the offered choices', () => {
     localStorage.setItem('seagrass-sonar-max-range', '999');
     render(<SonarView />);
-    expect(screen.getByLabelText('Echogram max range')).toHaveValue('10');
+    expect(screen.getByLabelText(/range/)).toHaveValue('10');
   });
 
   it('toggles pitch correction and freeze', () => {

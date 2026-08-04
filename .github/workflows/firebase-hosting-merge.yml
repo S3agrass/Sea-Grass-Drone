@@ -15,7 +15,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - run: npm ci && npm run build:web
+      - run: npm ci
+
+      # Quality gate ahead of the build. Neither workflow ran the test suite or
+      # the linter, so nothing stopped a regression reaching production — the
+      # accessibility rules in particular (oxlint's jsx-a11y plugin, plus the
+      # dialog/label/announcement tests in src/test) only hold the line if
+      # something actually runs them.
+      - run: npm run lint
+      - run: npm test
+
+      - run: npm run build:web
         env:
           VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
           VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}

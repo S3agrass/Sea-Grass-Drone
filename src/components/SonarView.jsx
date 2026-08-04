@@ -689,44 +689,71 @@ export default function SonarView() {
   const linkOk = demoMode || sonar.ok;
 
   return (
-    <section className={`sonar-panel${collapsed ? " collapsed" : ""}`}>
+    <section
+      className={`sonar-panel${collapsed ? " collapsed" : ""}`}
+      aria-labelledby="sonar-panel-title"
+    >
       <div className="panel-head">
+        {/* Was a bare "▸"/"▾" with the meaning only in `title` — an unnamed
+            control. aria-controls ties it to the body it folds. */}
         <button
           className="strip-collapse"
           onClick={() => setCollapsed((c) => !c)}
           aria-expanded={!collapsed}
+          aria-controls="sonar-body"
+          aria-label={collapsed ? "Show the sonar display" : "Hide the sonar display"}
           title={collapsed ? "Show the sonar display" : "Hide the sonar display and give the space to the map"}
         >
-          {collapsed ? "▸" : "▾"}
+          <span aria-hidden="true">{collapsed ? "▸" : "▾"}</span>
         </button>
-        <span className="eyebrow">Sonar</span>
+        <h2 className="eyebrow panel-title" id="sonar-panel-title">Sonar</h2>
         <span
           className="sonar-quality mono"
           style={{ color: linkOk ? q.tone : "var(--faint)",
                    borderColor: linkOk ? q.tone : "var(--faint)" }}
         >
+          <span className="visually-hidden">Signal quality: </span>
           {linkOk ? q.label : "OFF"}
         </span>
         <div className="sonar-controls">
-          <label className="sonar-ctl mono">
+          {/* These carried an aria-label that replaced the visible word beside
+              them, so the control read as "Sonar mount angle off vertical"
+              while the screen said "mount" — speech input users saying "click
+              mount" hit nothing (SC 2.5.3). The visible text is now the start
+              of the name, and the longer explanation moved to a description. */}
+          <label className="sonar-ctl mono" htmlFor="sonar-mount">
             mount
             <input
+              id="sonar-mount"
               type="range" min="0" max="90" step="1" value={mountDeg}
               onChange={(e) => setMountDeg(Number(e.target.value))}
-              aria-label="Sonar mount angle off vertical"
+              aria-describedby="sonar-mount-help"
+              aria-valuetext={`${mountDeg} degrees off vertical`}
             />
             <span className="sonar-ctl-val">{mountDeg}°</span>
           </label>
-          <label className="sonar-ctl mono">
+          <span className="visually-hidden" id="sonar-mount-help">
+            Sonar mount angle off vertical, in degrees.
+          </span>
+          <label className="sonar-ctl mono" htmlFor="sonar-range">
             range
-            <select value={maxRange} onChange={onRangeChange} aria-label="Echogram max range">
+            <select id="sonar-range" value={maxRange} onChange={onRangeChange}
+                    aria-describedby="sonar-range-help">
               {RANGE_CHOICES.map((r) => <option key={r} value={r}>{r} m</option>)}
             </select>
           </label>
+          <span className="visually-hidden" id="sonar-range-help">
+            Maximum range shown on the echogram.
+          </span>
+          {/* A cycle button whose label was its own current value — "plan" —
+              with the purpose only in `title`, so it announced as "plan,
+              button" and gave no hint that pressing it changes the view. The
+              name states the action and the value comes through as the state. */}
           <button
             type="button"
             className={`sonar-toggle mono ${view !== "plan" ? "on" : ""}`}
             onClick={() => setView((v) => MAP_VIEWS[(MAP_VIEWS.indexOf(v) + 1) % MAP_VIEWS.length])}
+            aria-label={`Sonar view: ${view}. Press to change view.`}
             title={"plan: looking down on the vehicle. "
                  + "pov: looking out along the beam. "
                  + "map: contacts accumulated as you turn, north up."}
@@ -737,21 +764,28 @@ export default function SonarView() {
             type="button"
             className={`sonar-toggle mono ${usePitch ? "on" : ""}`}
             onClick={() => setUsePitch((v) => !v)}
+            aria-pressed={usePitch}
+            aria-label="Pitch correction"
             title="Correct the beam angle with live EKF pitch"
           >
             pitch {usePitch ? "on" : "off"}
           </button>
+          {/* The label names the action it will perform, which is the opposite
+              of the current state — so state goes on aria-pressed rather than
+              being inferred from a label that flips. */}
           <button
             type="button"
             className={`sonar-toggle mono ${paused ? "on" : ""}`}
             onClick={() => setPaused((v) => !v)}
+            aria-pressed={paused}
+            aria-label="Freeze the echogram"
           >
             {paused ? "resume" : "freeze"}
           </button>
         </div>
       </div>
 
-      <div className="sonar-body" hidden={collapsed}>
+      <div className="sonar-body" id="sonar-body" hidden={collapsed}>
         {/* ---- where the echo is, right now: plan view or POV tunnel ---- */}
         <div className={`sonar-cone${view === "map" ? " map" : ""}`}>
           {view === "map" ? (

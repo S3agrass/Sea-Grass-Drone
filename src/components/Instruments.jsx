@@ -131,35 +131,61 @@ export function SonarGauge({ distance, raw, confidence, quality = "none", ok = f
   const confPct = confidence == null ? 0 : Math.max(0, Math.min(100, confidence));
 
   return (
-    <div className="inst inst-wide">
-      <div className="eyebrow">
+    // group + heading: the tiles were interchangeable divs, so a reader met a
+    // wall of bare numbers with no way to tell which instrument each belonged
+    // to, and no way to jump between them.
+    <div className="inst inst-wide" role="group" aria-labelledby="inst-sonar-title">
+      <h3 className="eyebrow inst-title" id="inst-sonar-title">
         Sonar
         <span
           className="sonar-quality mono"
           style={{ color: ok ? q.tone : "var(--faint)", borderColor: ok ? q.tone : "var(--faint)" }}
         >
+          <span className="visually-hidden">, signal </span>
           {ok ? q.label : "OFF"}
         </span>
-      </div>
+      </h3>
       <div className="sonar">
-        <div className="sonar-readout">
+        {/* The number and its unit were two spans; as a meter the value is
+            exposed with its range and a spoken form, so it reads "Range to
+            bottom, 4.2 metres" instead of "4.2" then "m". */}
+        <div
+          className="sonar-readout"
+          role="meter"
+          aria-label="Range to bottom"
+          aria-valuemin={0}
+          aria-valuemax={maxRange}
+          aria-valuenow={locked ? distance : undefined}
+          aria-valuetext={locked ? `${fmt(distance, 2)} metres` : "no bottom lock"}
+        >
           <span className="inst-value mono" style={{ color: locked ? q.tone : undefined }}>
             {locked ? fmt(distance, 2) : "—"}
           </span>
           <span className="inst-unit mono">m</span>
         </div>
-        <div className="sonar-range-track" title={`0–${maxRange} m range`}>
+        {/* The bar is a second rendering of the meter above. `title` on a
+            non-focusable div reached neither keyboard nor screen reader, so
+            nothing is lost by hiding it. */}
+        <div className="sonar-range-track" aria-hidden="true" title={`0–${maxRange} m range`}>
           <div className="sonar-range-fill" style={{ width: `${rangePct}%` }} />
         </div>
-        <div className="sonar-conf">
-          <span className="sonar-conf-label mono">conf</span>
-          <div className="sonar-conf-track">
+        <div
+          className="sonar-conf"
+          role="meter"
+          aria-label="Sonar confidence"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={ok && confidence != null ? Math.round(confPct) : undefined}
+          aria-valuetext={ok && confidence != null ? `${Math.round(confPct)} percent` : "unknown"}
+        >
+          <span className="sonar-conf-label mono" aria-hidden="true">conf</span>
+          <div className="sonar-conf-track" aria-hidden="true">
             <div
               className="sonar-conf-fill"
               style={{ width: `${confPct}%`, background: q.tone }}
             />
           </div>
-          <span className="sonar-conf-value mono" style={{ color: q.tone }}>
+          <span className="sonar-conf-value mono" style={{ color: q.tone }} aria-hidden="true">
             {ok && confidence != null ? `${Math.round(confPct)}%` : "—"}
           </span>
         </div>
@@ -279,10 +305,13 @@ export function AttitudeIndicator({ roll, pitch, yaw }) {
   const pitchOffset = Math.max(-40, Math.min(40, p * 2));
   const live = roll != null || pitch != null;
   return (
-    <div className="inst inst-wide">
-      <div className="eyebrow">Attitude</div>
+    <div className="inst inst-wide" role="group" aria-labelledby="inst-attitude-title">
+      <h3 className="eyebrow inst-title" id="inst-attitude-title">Attitude</h3>
       <div className="attitude">
-        <div className="attitude-ball">
+        {/* The artificial horizon is a picture of the three numbers printed
+            beside it. Hidden rather than described, so the values are announced
+            once instead of twice. */}
+        <div className="attitude-ball" aria-hidden="true">
           <svg viewBox="0 0 120 120">
             {/* circular window the horizon is drawn inside */}
             <defs>
@@ -317,20 +346,39 @@ export function AttitudeIndicator({ roll, pitch, yaw }) {
             <circle cx="60" cy="60" r="2" fill="var(--amber)" />
           </svg>
         </div>
-        <div className="attitude-readout mono">
+        {/* A description list so each angle is bound to its own label — as
+            sibling spans, "roll" and "-2.4°" were unrelated runs of text. The
+            degree sign is spelled out because readers pronounce "°"
+            inconsistently, from "degree" to nothing at all. */}
+        <dl className="attitude-readout mono">
           <div className="attitude-row">
-            <span className="attitude-label">roll</span>
-            <span className="attitude-num">{live ? `${fmt(roll, 1)}°` : "—"}</span>
+            <dt className="attitude-label">roll</dt>
+            <dd className="attitude-num">
+              <span aria-hidden="true">{live ? `${fmt(roll, 1)}°` : "—"}</span>
+              <span className="visually-hidden">
+                {live ? `${fmt(roll, 1)} degrees` : "unknown"}
+              </span>
+            </dd>
           </div>
           <div className="attitude-row">
-            <span className="attitude-label">pitch</span>
-            <span className="attitude-num">{live ? `${fmt(pitch, 1)}°` : "—"}</span>
+            <dt className="attitude-label">pitch</dt>
+            <dd className="attitude-num">
+              <span aria-hidden="true">{live ? `${fmt(pitch, 1)}°` : "—"}</span>
+              <span className="visually-hidden">
+                {live ? `${fmt(pitch, 1)} degrees` : "unknown"}
+              </span>
+            </dd>
           </div>
           <div className="attitude-row">
-            <span className="attitude-label">yaw</span>
-            <span className="attitude-num">{yaw == null ? "—" : `${fmt(yaw, 1)}°`}</span>
+            <dt className="attitude-label">yaw</dt>
+            <dd className="attitude-num">
+              <span aria-hidden="true">{yaw == null ? "—" : `${fmt(yaw, 1)}°`}</span>
+              <span className="visually-hidden">
+                {yaw == null ? "unknown" : `${fmt(yaw, 1)} degrees`}
+              </span>
+            </dd>
           </div>
-        </div>
+        </dl>
       </div>
       <PlainStatus tone={attitudeSummary(roll, pitch).tone}>
         {attitudeSummary(roll, pitch).text}
@@ -631,54 +679,102 @@ export function Vitals({ depth, altitude, climb, speed, battery, maxDepth = 10, 
           : "var(--red)";
 
   return (
-    <div className="inst inst-wide">
-      <div className="eyebrow">Vitals</div>
+    <div className="inst inst-wide" role="group" aria-labelledby="inst-vitals-title">
+      <h3 className="eyebrow inst-title" id="inst-vitals-title">Vitals</h3>
       <div className="inst-split">
         <div className="inst-lines">
-          <div className="inst-line">
-            <span className="inst-line-label">DEPTH</span>
-            <span className="inst-line-value mono">{fmt(depth)}</span>
-            <span className="inst-line-unit mono">m</span>
+          {/* Each reading is a meter: the abbreviated label, the number and the
+              unit were three separate spans, so a reader got "DEPTH", "1.40",
+              "m" as three unconnected fragments. aria-valuetext spells the
+              whole thing, including expanding the abbreviations — "BATT" and
+              "SPD" are not words. */}
+          <div
+            className="inst-line"
+            role="meter"
+            aria-label="Depth"
+            aria-valuemin={0}
+            aria-valuemax={maxDepth}
+            aria-valuenow={depth ?? undefined}
+            aria-valuetext={depth == null ? "unknown" : `${fmt(depth)} metres`}
+          >
+            <span className="inst-line-label" aria-hidden="true">DEPTH</span>
+            <span className="inst-line-value mono" aria-hidden="true">{fmt(depth)}</span>
+            <span className="inst-line-unit mono" aria-hidden="true">m</span>
           </div>
-          <div className="inst-linebar">
+          <div className="inst-linebar" aria-hidden="true">
             <div className="inst-linebar-fill" style={{ width: `${depthPct}%` }} />
           </div>
-          <div className="inst-line">
+          <div
+            className="inst-line"
+            role="meter"
+            aria-label="Altitude, barometric"
+            aria-valuenow={altitude ?? undefined}
+            aria-valuetext={altitude == null ? "unknown" : `${fmt(altitude, 2)} metres`}
+          >
             {/* Alt is air pressure and drifts; depth is the one to fly by. The
                 two look interchangeable side by side and are not, which is why
                 the label says which is which rather than relying on a note. */}
-            <span className="inst-line-label">ALT<span className="inst-line-hint"> baro</span></span>
-            <span className="inst-line-value mono">{fmt(altitude, 2)}</span>
-            <span className="inst-line-unit mono">m</span>
+            <span className="inst-line-label" aria-hidden="true">ALT<span className="inst-line-hint"> baro</span></span>
+            <span className="inst-line-value mono" aria-hidden="true">{fmt(altitude, 2)}</span>
+            <span className="inst-line-unit mono" aria-hidden="true">m</span>
           </div>
-          <div className="inst-line">
-            <span className="inst-line-label">CLIMB</span>
-            <span className="inst-line-value mono" style={{ color: climbTone }}>
+          {/* The arrow is the only thing distinguishing ascent from descent —
+              the number itself is an absolute value — so the direction has to
+              be in words, not a glyph. */}
+          <div
+            className="inst-line"
+            role="meter"
+            aria-label="Climb rate"
+            aria-valuenow={climb ?? undefined}
+            aria-valuetext={
+              climb == null
+                ? "unknown"
+                : `${climb >= 0 ? "ascending" : "descending"} ${Math.abs(climb).toFixed(2)} metres per second`
+            }
+          >
+            <span className="inst-line-label" aria-hidden="true">CLIMB</span>
+            <span className="inst-line-value mono" style={{ color: climbTone }} aria-hidden="true">
               {climb == null
                 ? "—"
                 : `${climb >= 0 ? "▲" : "▼"} ${Math.abs(climb).toFixed(2)}`}
             </span>
-            <span className="inst-line-unit mono">m/s</span>
+            <span className="inst-line-unit mono" aria-hidden="true">m/s</span>
           </div>
         </div>
 
         <div className="inst-lines">
-          <div className="inst-line">
-            <span className="inst-line-label">SPD</span>
-            <span className="inst-line-value mono">{fmt(speed)}</span>
-            <span className="inst-line-unit mono">kn</span>
+          <div
+            className="inst-line"
+            role="meter"
+            aria-label="Speed"
+            aria-valuemin={0}
+            aria-valuemax={maxSpeed}
+            aria-valuenow={speed ?? undefined}
+            aria-valuetext={speed == null ? "unknown" : `${fmt(speed)} knots`}
+          >
+            <span className="inst-line-label" aria-hidden="true">SPD</span>
+            <span className="inst-line-value mono" aria-hidden="true">{fmt(speed)}</span>
+            <span className="inst-line-unit mono" aria-hidden="true">kn</span>
           </div>
-          <div className="inst-linebar">
+          <div className="inst-linebar" aria-hidden="true">
             <div className="inst-linebar-fill" style={{ width: `${spdPct}%` }} />
           </div>
-          <div className="inst-line">
-            <span className="inst-line-label">BATT</span>
-            <span className="inst-line-value mono" style={{ color: battTone }}>
+          <div
+            className="inst-line"
+            role="meter"
+            aria-label="Battery"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={battery == null ? undefined : Math.round(pct)}
+            aria-valuetext={battery == null ? "unknown" : `${Math.round(pct)} percent`}
+          >
+            <span className="inst-line-label" aria-hidden="true">BATT</span>
+            <span className="inst-line-value mono" style={{ color: battTone }} aria-hidden="true">
               {battery == null ? "—" : Math.round(pct)}
             </span>
-            <span className="inst-line-unit mono">%</span>
+            <span className="inst-line-unit mono" aria-hidden="true">%</span>
           </div>
-          <div className="inst-linebar">
+          <div className="inst-linebar" aria-hidden="true">
             <div
               className="inst-linebar-fill"
               style={{ width: `${pct}%`, background: battTone }}
@@ -714,11 +810,21 @@ export function Autopilot({
   const blocked = !engaged && !armed;
 
   return (
-    <div className="inst inst-wide">
-      <div className="eyebrow">Autopilot</div>
+    <div className="inst inst-wide" role="group" aria-labelledby="inst-autopilot-title">
+      <h3 className="eyebrow inst-title" id="inst-autopilot-title">Autopilot</h3>
       <div className="inst-split">
-        <div className="pid">
-          <div className="pid-row mono">
+        <div className="pid" role="group" aria-label="Heading hold">
+          {/* The visible rows pack four label/value pairs into two lines of
+              abbreviations — "hdg HOLD hold 142°" is unreadable when spoken. The
+              rows are hidden and one written summary is exposed in their place;
+              the same numbers, in a form that survives being read aloud. */}
+          <span className="visually-hidden">
+            {`Heading hold ${state === "HOLD" ? "engaged" : state === "MANUAL" ? "suspended, manual input" : "off"}. `}
+            {hSet == null ? "No target heading. " : `Target ${fmt(hSet, 0)} degrees. `}
+            {heading == null ? "Current heading unknown. " : `Current ${fmt(heading, 0)} degrees. `}
+            {hErr == null ? "" : `Error ${fmt(hErr, 1)} degrees.`}
+          </span>
+          <div className="pid-row mono" aria-hidden="true">
             <span className="pid-label">hdg</span>
             <span className="pid-tag mono" style={{ color: tone, borderColor: tone }}>
               {state}
@@ -726,7 +832,7 @@ export function Autopilot({
             <span className="pid-label">hold</span>
             <span className="pid-num">{hSet == null ? "—" : `${fmt(hSet, 0)}°`}</span>
           </div>
-          <div className="pid-row mono">
+          <div className="pid-row mono" aria-hidden="true">
             <span className="pid-label">now</span>
             <span className="pid-num">{heading == null ? "—" : `${fmt(heading, 0)}°`}</span>
             <span className="pid-label">err</span>
@@ -734,7 +840,21 @@ export function Autopilot({
               {hErr == null ? "—" : `${fmt(hErr, 1)}°`}
             </span>
           </div>
-          <div className="pid-track" title="steering command −1…+1">
+          {/* `title` on a non-focusable div reached nobody; the bar is a picture
+              of the steering command and the meter below carries the value. */}
+          <div
+            className="pid-track"
+            role="meter"
+            aria-label="Steering command"
+            aria-valuemin={-1}
+            aria-valuemax={1}
+            aria-valuenow={hOut ?? undefined}
+            aria-valuetext={
+              hOut == null
+                ? "unknown"
+                : `${hOut >= 0 ? "starboard" : "port"} ${Math.abs(hOut).toFixed(2)} of full`
+            }
+          >
             <div className="pid-mid" />
             <div
               className="pid-fill"
@@ -745,10 +865,13 @@ export function Autopilot({
               }}
             />
           </div>
+          {/* aria-disabled so the reason stays reachable — "arm the vehicle
+              first" was in a `title` on a button removed from the tab order. */}
           <button
             className={`btn btn-small ${engaged ? "btn-danger" : ""}`}
-            onClick={engaged ? onRelease : onEngage}
-            disabled={blocked}
+            onClick={blocked ? undefined : engaged ? onRelease : onEngage}
+            aria-disabled={blocked}
+            aria-describedby={blocked ? "hdg-hold-blocked" : undefined}
             title={
               blocked
                 ? "Arm the vehicle before engaging heading hold"
@@ -759,10 +882,24 @@ export function Autopilot({
           >
             {engaged ? "Release" : "Hold heading"}
           </button>
+          {blocked && (
+            <span className="field-hint" id="hdg-hold-blocked">
+              Arm the vehicle before engaging heading hold.
+            </span>
+          )}
         </div>
 
-        <div className="pid">
-          <div className="pid-row mono">
+        <div className="pid" role="group" aria-label="Altitude hold, monitor only">
+          {/* Same treatment as the heading half: the abbreviated grid is hidden
+              and the reading is given once in words. "monitor only" is stated
+              first, because it is the thing that changes how the rest is read —
+              none of these numbers actuates anything. */}
+          <span className="visually-hidden">
+            {`Altitude hold, monitor only — this output does not drive the vehicle. `}
+            {`Setpoint ${fmt(pSet, 2)}. Measurement ${fmt(measurement, 2)}. `}
+            {`Error ${fmt(pErr, 2)}. Output ${fmt(pOut, 3)}.`}
+          </span>
+          <div className="pid-row mono" aria-hidden="true">
             <span className="pid-label">alt</span>
             {/* The server is explicit that this output drives nothing — no
                 vertical control authority is wired. The tag says so where the
@@ -774,7 +911,7 @@ export function Autopilot({
             <span className="pid-label">set</span>
             <span className="pid-num">{fmt(pSet, 2)}</span>
           </div>
-          <div className="pid-row mono">
+          <div className="pid-row mono" aria-hidden="true">
             <span className="pid-label">meas</span>
             <span className="pid-num">{fmt(measurement, 2)}</span>
             <span className="pid-label">err</span>
@@ -782,7 +919,7 @@ export function Autopilot({
               {fmt(pErr, 2)}
             </span>
           </div>
-          <div className="pid-row mono">
+          <div className="pid-row mono" aria-hidden="true">
             <span className="pid-label">out</span>
             <span className="pid-num" style={{ color: "var(--faint)" }}>{fmt(pOut, 3)}</span>
             <span className="pid-label" />

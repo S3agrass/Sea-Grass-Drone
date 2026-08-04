@@ -196,8 +196,15 @@ describe('MediaPage', () => {
     renderPage();
     await screen.findByText('photo-2.jpg');
     await waitFor(() => {
-      const img = screen.getByAltText('photo-2.jpg');
-      expect(img).toHaveAttribute('src', 'https://storage.test/drones/seagrass/photo-2.jpg');
+      // The thumbnail is alt="" now: it sits inside a button that already
+      // carries the name ("View photo photo-2.jpg"), and repeating the filename
+      // on the image made a reader announce it twice for one control. Reach it
+      // through the button that names it.
+      const thumb = screen.getByRole('button', { name: /view photo photo-2\.jpg/i });
+      expect(thumb.querySelector('img')).toHaveAttribute(
+        'src',
+        'https://storage.test/drones/seagrass/photo-2.jpg',
+      );
     });
   });
 

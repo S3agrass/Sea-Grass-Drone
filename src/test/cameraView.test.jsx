@@ -116,7 +116,11 @@ describe('CameraView — capture + recording (Pi-side)', () => {
     mockCtx.recording = true;
     mockCtx.recElapsed = 65;
     render(<CameraView />);
-    expect(screen.getByText(/REC 01:05/)).toBeInTheDocument();
+    // The elapsed counter is now its own aria-hidden span — it ticks once a
+    // second and would make the panel unreadable if announced — so "REC" and
+    // the time are separate text nodes.
+    expect(screen.getByText(/REC/)).toBeInTheDocument();
+    expect(screen.getByText('01:05')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /stop/i }));
     expect(mockCtx.recordStop).toHaveBeenCalledOnce();
   });
@@ -125,19 +129,19 @@ describe('CameraView — capture + recording (Pi-side)', () => {
 describe('CameraView — detection toggle', () => {
   it('disables the AI toggle when the camera is off', () => {
     render(<CameraView />);
-    expect(screen.getByRole('button', { name: /^ai$/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /ai object detection/i })).toBeDisabled();
   });
 
   it('enables the AI toggle when connected and camera is on', () => {
     mockCtx.cameraActive = true;
     render(<CameraView />);
-    expect(screen.getByRole('button', { name: /^ai$/i })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: /ai object detection/i })).not.toBeDisabled();
   });
 
   it('calls detectOn when the AI toggle is clicked while off', () => {
     mockCtx.cameraActive = true;
     render(<CameraView />);
-    fireEvent.click(screen.getByRole('button', { name: /^ai$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /ai object detection/i }));
     expect(mockCtx.detectOn).toHaveBeenCalledOnce();
   });
 
@@ -145,7 +149,7 @@ describe('CameraView — detection toggle', () => {
     mockCtx.cameraActive = true;
     mockCtx.detectActive = true;
     render(<CameraView />);
-    fireEvent.click(screen.getByRole('button', { name: /^ai$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /ai object detection/i }));
     expect(mockCtx.detectOff).toHaveBeenCalledOnce();
   });
 

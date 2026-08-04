@@ -147,7 +147,9 @@ export default function LoginPage() {
 		);
 
 	return (
-		<div className="login">
+		// <main> so the sign-in form is reachable by landmark and by the skip
+		// link, like every other screen. The hero half beside it is decorative.
+		<main className="login" id="main">
 			<div className="login-hero">
 				<div className="login-rings" aria-hidden="true">
 					<div className="login-rings-origin">
@@ -197,7 +199,7 @@ export default function LoginPage() {
 				<form className="login-card" onSubmit={handleSubmit} noValidate>
 					<div className="eyebrow">Operator access</div>
 
-					<h1 className="login-title">
+					<h1 className="login-title" id="page-title" tabIndex={-1}>
 						{tab === "signin" ? "Sign in" : "Create account"}
 					</h1>
 
@@ -338,6 +340,6 @@ export default function LoginPage() {
 
 				<div className="login-foot mono">SEAGRASS GCS · v2.0</div>
 			</div>
-		</div>
+		</main>
 	);
 }

@@ -10,6 +10,7 @@ import {
 } from "react-leaflet";
 import L from "leaflet";
 import { routePoints, routeLegs, routeLength } from "../lib/route";
+import WaypointList from "./WaypointList";
 import "leaflet/dist/leaflet.css";
 
 const FALLBACK_CENTER = [37.8065, -122.4305]; // Fort Mason, San Francisco
@@ -97,6 +98,7 @@ export default function DroneMap({
   trail,
   waypoints,
   onAddWaypoint,
+  onRemoveWaypoint,
   onClearWaypoints,
   heading,
   focused = false,
@@ -155,10 +157,13 @@ export default function DroneMap({
 
   return (
     <div className="map-wrap">
+      {/* The tile canvas is a graphic with no text equivalent of its own; the
+          route it displays is available as text in <WaypointList> below. */}
       <MapContainer
         center={center}
         zoom={15}
         zoomControl={false}
+        aria-label="Survey map. Waypoints are listed as text under Route."
         style={{ width: "100%", height: "100%" }}
       >
         <KeepSized />
@@ -235,8 +240,12 @@ export default function DroneMap({
       {/* floating controls */}
       <div className="map-controls">
         {onToggleFocus && (
+          // aria-pressed on the three mode toggles below: "on" was carried by a
+          // CSS class only, so a reader could not tell whether follow, satellite
+          // or focus was engaged.
           <button
             className={`map-btn ${focused ? "on" : ""}`}
+            aria-pressed={focused}
             title={
               focused
                 ? "Bring the camera and instruments back"
@@ -244,40 +253,59 @@ export default function DroneMap({
             }
             onClick={onToggleFocus}
           >
-            {focused ? "⤡ Exit focus" : "⛶ Focus map"}
+            <span aria-hidden="true">{focused ? "⤡ " : "⛶ "}</span>
+            {focused ? "Exit focus" : "Focus map"}
           </button>
         )}
         <button
           className={`map-btn ${locating ? "busy" : ""}`}
           title="Fly to my location"
           onClick={locateMe}
+          aria-busy={locating}
         >
-          ◎ {locating ? "Locating…" : "My location"}
+          <span aria-hidden="true">◎ </span>
+          {locating ? "Locating…" : "My location"}
         </button>
         <button
           className={`map-btn ${follow ? "on" : ""}`}
           title="Keep the drone centered"
           onClick={() => setFollow((f) => !f)}
+          aria-pressed={follow}
         >
-          ⌖ Follow drone
+          <span aria-hidden="true">⌖ </span>Follow drone
         </button>
         <button
           className={`map-btn ${satellite ? "on" : ""}`}
           onClick={() => setSatellite((s) => !s)}
+          aria-pressed={satellite}
+          aria-label="Satellite imagery"
         >
-          ▤ {satellite ? "Dark map" : "Satellite"}
+          <span aria-hidden="true">▤ </span>
+          {satellite ? "Dark map" : "Satellite"}
         </button>
         {waypoints.length > 0 && (
           <button className="map-btn danger" onClick={onClearWaypoints}>
-            ✕ Clear {waypoints.length} waypoint{waypoints.length === 1 ? "" : "s"}
+            <span aria-hidden="true">✕ </span>
+            Clear {waypoints.length} waypoint{waypoints.length === 1 ? "" : "s"}
           </button>
         )}
       </div>
-      <div className="map-hint mono">
+      {/* Polite live region: the route total changes as waypoints are added or
+          removed, and it is the only confirmation that the click or the Add
+          button did anything. */}
+      <div className="map-hint mono" role="status" aria-live="polite">
         {legs.length > 0
           ? `Route ${formatDistance(totalMetres)} · ${legs.length} leg${legs.length === 1 ? "" : "s"}`
           : "Click the map to drop a waypoint"}
       </div>
+
+      <WaypointList
+        waypoints={waypoints}
+        dronePos={dronePos}
+        onAddWaypoint={onAddWaypoint}
+        onRemoveWaypoint={onRemoveWaypoint}
+        onClearWaypoints={onClearWaypoints}
+      />
     </div>
   );
 }

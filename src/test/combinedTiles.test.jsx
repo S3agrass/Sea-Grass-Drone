@@ -59,11 +59,30 @@ describe('Autopilot', () => {
     expect(screen.getByText('HOLD')).toBeInTheDocument();
   });
 
-  it('will not let an unarmed vehicle engage', () => {
+  it('will not let an unarmed vehicle engage', async () => {
     // The server refuses unless armed, so the button must not fire a command
     // that can only come back as a rejection.
+    //
+    // aria-disabled rather than the `disabled` attribute: a disabled button is
+    // not focusable, which put the explanation ("arm the vehicle first") out of
+    // reach of the keyboard and screen-reader users who most need it read out.
+    // The refusal is enforced by the handler instead, so this checks both the
+    // announced state and that pressing it really does nothing.
+    const onEngage = vi.fn();
+    const user = userEvent.setup();
+    render(<Autopilot headingHold={hold} pid={pid} armed={false} onEngage={onEngage} />);
+
+    const button = screen.getByRole('button', { name: /hold heading/i });
+    expect(button).toHaveAttribute('aria-disabled', 'true');
+    await user.click(button);
+    expect(onEngage).not.toHaveBeenCalled();
+  });
+
+  it('explains why engaging is blocked, reachably', () => {
+    // The reason used to live only in a `title` on an unfocusable button.
     render(<Autopilot headingHold={hold} pid={pid} armed={false} />);
-    expect(screen.getByRole('button', { name: /hold heading/i })).toBeDisabled();
+    const button = screen.getByRole('button', { name: /hold heading/i });
+    expect(button).toHaveAccessibleDescription(/arm the vehicle/i);
   });
 
   it('engages and releases', async () => {

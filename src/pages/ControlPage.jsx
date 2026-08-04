@@ -8,6 +8,7 @@ import ConnectionPanel from "../components/ConnectionPanel";
 import SonarView from "../components/SonarView";
 import Resizer from "../components/Resizer";
 import Toasts from "../components/Toasts";
+import FlightStatus from "../components/FlightStatus";
 import {
   SonarGauge,
   AttitudeIndicator,
@@ -103,33 +104,57 @@ export default function ControlPage() {
     [],
   );
 
+  // Removing one waypoint rather than the whole route. Clicking a pin was never
+  // wired to anything, so before the keyboard route editor existed the only way
+  // to undo a misplaced mark was to clear every mark.
+  const removeWaypoint = useCallback(
+    (index) => setWaypoints((wps) => wps.filter((_, i) => i !== index)),
+    [],
+  );
+
   if (!activeDrone) return <Navigate to="/fleet" replace />;
 
   return (
     <div className="app-shell">
       <TopBar />
       <Toasts />
-      <div
+      {/* <main> now wraps the whole deck. It used to wrap only the map, which
+          left the camera, the sonar, the helm and every instrument outside any
+          landmark at all — a screen reader jumping to "main content" on the
+          app's primary screen landed on the map and could reach none of the
+          rest by landmark. */}
+      <main
+        id="main"
         className={`deck ${mapFocus ? "map-focus" : ""}`}
         style={{
           ...(railW ? { "--deck-right-w": `${railW}px` } : null),
           ...(stripH ? { "--deck-strip-h": `${stripH}px` } : null),
         }}
       >
-        <main className="deck-map">
+        {/* The flight deck had no h1 whatsoever. Visually the top bar's brand
+            block does this job, so the heading is for readers only — but the
+            page still needs one, both as a landmark-free navigation anchor and
+            as the target the router moves focus to on arrival. */}
+        <h1 className="visually-hidden" id="page-title" tabIndex={-1}>
+          Flight deck — {activeDrone.name}
+        </h1>
+        <FlightStatus />
+
+        <section className="deck-map" aria-label="Map">
           <DroneMap
             dronePos={dronePos}
             trail={trail}
             waypoints={waypoints}
             onAddWaypoint={addWaypoint}
+            onRemoveWaypoint={removeWaypoint}
             onClearWaypoints={() => setWaypoints([])}
             heading={telemetry.heading}
             focused={mapFocus}
             onToggleFocus={() => setMapFocus((f) => !f)}
           />
-        </main>
+        </section>
 
-        <aside className="deck-right" ref={railRef}>
+        <aside className="deck-right" ref={railRef} aria-label="Camera, sonar and helm">
           <Resizer
             orientation="vertical"
             value={railW}
@@ -164,9 +189,11 @@ export default function ControlPage() {
             off the map's width. As a wide tile in this strip it costs three
             columns of a row that had spare capacity, and the map gets the
             whole rail back. */}
-        <div
+        <section
           className={`inst-cluster${instCollapsed ? " collapsed" : ""}`}
           ref={stripRef}
+          aria-label="Instruments"
+          id="inst-cluster"
         >
           {!instCollapsed && (
             <Resizer
@@ -183,17 +210,23 @@ export default function ControlPage() {
             {/* Absolutely positioned so it costs the strip no height while
                 open — a header row here would take back some of what folding
                 is meant to give the map. */}
+            {/* Expanded, this button's entire content is the glyph "▾" — an
+                unnamed control, since `title` is not a reliable accessible name
+                and is unreachable by touch and keyboard. aria-label names it in
+                both states and aria-controls ties it to what it folds. */}
             <button
               className="strip-collapse inst-collapse"
               onClick={() => setInstCollapsed((c) => !c)}
               aria-expanded={!instCollapsed}
+              aria-controls="inst-cluster"
+              aria-label={instCollapsed ? "Show the instruments" : "Hide the instruments"}
               title={
                 instCollapsed
                   ? "Show the instruments"
                   : "Hide the instruments and give the space to the map and camera"
               }
             >
-              {instCollapsed ? "▸ Instruments" : "▾"}
+              <span aria-hidden="true">{instCollapsed ? "▸ Instruments" : "▾"}</span>
             </button>
             <ConnectionPanel />
             {/* Compass is gone: heading is on the attitude tile, and the map
@@ -225,10 +258,10 @@ export default function ControlPage() {
               onEngage={headingHoldOn}
               onRelease={headingHoldOff}
             />
-        </div>
+        </section>
 
 
-      </div>
+      </main>
     </div>
   );
 }

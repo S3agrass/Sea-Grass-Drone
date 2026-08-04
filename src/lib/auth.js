@@ -102,6 +102,67 @@ export const updatePassword = async (password) => {
   if (error) throw error;
 };
 
+/** Changes the signed-in operator's password, after proving they know the
+ *  current one.
+ *
+ *  Supabase's updateUser() does NOT ask for the existing password — a live
+ *  session is enough. That is fine for the recovery page, where the session was
+ *  just minted by an emailed link, but not here: an unattended, signed-in
+ *  console is a normal state for this app, and without this check anyone
+ *  walking past one could lock out its owner. Re-authenticating is how the
+ *  current password gets verified; Supabase exposes no "check password" call.
+ *
+ *  signInWithPassword on the same account returns a session for the same user,
+ *  so the existing one is refreshed rather than replaced — the caller stays
+ *  signed in either way. */
+export const changePassword = async (email, currentPassword, newPassword) => {
+  if (!supabaseConfigured) return notConfigured();
+
+  const { error: authError } = await supabase.auth.signInWithPassword({
+    email,
+    password: currentPassword,
+  });
+  // Surfaced as a wrong-current-password message by the caller. Not conflated
+  // with the update failing, because the two need different fixes.
+  if (authError) {
+    const err = new Error("Current password is incorrect.");
+    err.code = "invalid_current_password";
+    throw err;
+  }
+
+  const { error } = await supabase.auth.updateUser({ password: newPassword });
+  if (error) throw error;
+};
+
+/**
+ * Finds the recovery code wherever Supabase happened to put it.
+ *
+ * The redirect we ask for already carries a fragment (`#/reset-password`,
+ * because this app hash-routes), and Supabase then has to attach `?code=` to
+ * it. Parsed as a URL the query lands BEFORE the fragment —
+ * `/desktop/?code=x#/reset-password` — and concatenated as a string it lands
+ * after it: `/desktop/#/reset-password?code=x`. Only the first leaves anything
+ * in `window.location.search`, and which one we get is not ours to decide.
+ *
+ * So look in both. Also picks up `error`/`error_description`, which is how a
+ * link that expired before it was opened comes back.
+ */
+export const readRecoveryParams = (loc) => {
+  const fromSearch = new URLSearchParams(loc.search);
+  // Everything after the first "?" inside the fragment, if there is one.
+  const hashQuery = loc.hash.includes("?")
+    ? loc.hash.slice(loc.hash.indexOf("?") + 1)
+    : "";
+  const fromHash = new URLSearchParams(hashQuery);
+
+  const pick = (key) => fromSearch.get(key) || fromHash.get(key) || "";
+  return {
+    code: pick("code"),
+    error: pick("error"),
+    errorDescription: pick("error_description"),
+  };
+};
+
 /** Trades the `?code=` on a recovery link for a real session. */
 export const exchangeRecoveryCode = async (code) => {
   if (!supabaseConfigured) return notConfigured();
