@@ -1,44 +1,103 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Sora:wght@600;700;800&display=swap");
-
 :root {
-  /* palette — ocean survey console */
-  --abyss: #06111e;
-  /* Elevation on a dark theme comes from lighter surfaces, not darker shadows:
-     the page is already near-black, so there is no "darker" left for a shadow
-     to occupy and a drop shadow simply does not render. These three were
-     previously so close together (--console sat 6,11,16 above --abyss) that
-     every panel dissolved into the background. Each step is now a visible lift,
-     which is what actually makes a panel read as raised.
+  /* ==================================================================
+     RECOLOR HERE — tier 1, the app's eight source colours.
 
-     Text contrast is checked against the LIGHTEST surface a token can land on,
-     which is --rail, not --console — a muted label inside a hovered nav item or
-     a raised modal has less contrast than the same label on a flat panel, and
-     checking only the common case is how the old values passed review while
-     failing in situ. Every text token below clears 4.5:1 on all four surfaces
-     (abyss / console / raised / rail); --ink 10.2:1 and --faint 4.8:1 at worst. */
-  --console: #122844;
-  --rail: #1c3a5e;
-  --console-raised: #1a3355;   /* modals, hover — one step above a panel */
-  --line: #2a4d76;
-  --line-soft: #1f4066;
-  --ink: #e9f2f8;
-  --muted: #a3b7c7;
-  --faint: #93aabd;
-  --teal: #3bd9bb;
-  --teal-dim: #1e8f7c;
-  --amber: #ffb454;
-  /* Lighter than the signal red used for fills, because this is also the text
-     colour of .btn-danger and .login-error; #ff5c6c was 3.85:1 on --rail. */
-  --red: #ff8a95;
-  --blue: #59a8ff;
-  --green: #4ade80;
+     Everything else in this file and app.css derives from these, either
+     by alias (tier 2 below) or color-mix(). Change a value here and the
+     whole app follows: buttons, focus rings, live dots, separators,
+     hovers and tints all move together. If something doesn't move, it
+     is a stray literal and a bug.
 
-  --font-display: "Sora", sans-serif;
-  --font-body: "Inter", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", monospace;
+     The base is an Egyptian-blue ramp, hue ≈224° at ~55% saturation —
+     deliberately blue rather than a grey that happens to be dark, but
+     dark enough that the map tiles and the camera feed sit inside the
+     shell instead of glaring against it.
+     ================================================================== */
+  --src-bg:      #101b37;  /* page ground                                */
+  --src-surface: #17264f;  /* panels, cards, top bar                     */
+  --src-raised:  #1e3167;  /* modals, hover, buttons — one step up       */
+  --src-border:  #2a417e;  /* separators                                 */
+  --src-stage:   #0a1124;  /* map / camera / sonar beds — one step DOWN,
+                              so live feeds read as depth, not holes     */
+  --src-ink:     #e7edf9;  /* primary text                               */
+  --src-primary: #3b82f6;  /* azure — actions: buttons, focus, nav, brand */
+  --src-signal:  #10b981;  /* emerald — status: live, armed, OK, locked  */
 
-  --radius: 10px;
-  --radius-sm: 6px;
+  /* Supporting hues. Warn/danger are semantic, not brand, so they sit
+     outside the recolor surface on purpose — swapping the brand blue
+     for a company colour must not silently move the meaning of amber
+     and red. */
+  --src-warn:    #f59e0b;
+  --src-danger:  #f87171;
+
+  /* ==================================================================
+     Tier 2 — derived tokens. app.css and the components consume THESE
+     names; several are also read from JSX via var()/getComputedStyle
+     (Instruments.jsx tones, TopBar's brand mark, ParticleTitle), so
+     every legacy name stays defined even where this file no longer
+     uses it itself.
+
+     Text contrast is checked against the LIGHTEST surface a token can
+     land on, which is --rail/--console-raised, not --console — a muted
+     label inside a hovered nav item or a raised modal has less contrast
+     than the same label on a flat panel. Measured on --src-raised:
+     ink 10.58:1 · muted 5.99:1 · faint 4.92:1 · red 4.55:1 ·
+     teal(signal) 4.90:1 · amber 5.78:1 — all clear 4.5:1.
+     ================================================================== */
+  --abyss: var(--src-bg);
+  --console: var(--src-surface);
+  --rail: var(--src-raised);
+  --console-raised: var(--src-raised);
+  --stage: var(--src-stage);
+  --line: var(--src-border);
+  --line-soft: color-mix(in oklab, var(--src-border) 65%, var(--src-surface));
+  --ink: var(--src-ink);
+  --muted: #a6b4d6;
+  --faint: #93a3c9;
+
+  /* Action colour and its states. Fills are one step deeper than the
+     accent: white text on #3b82f6 is only 3.68:1, on the mixed fill it
+     is ≥4.5:1 — so the lighter azure is for marks, rings and text, and
+     the deeper mix is what buttons are painted with. */
+  --primary: var(--src-primary);
+  --primary-fill: color-mix(in oklab, var(--src-primary) 82%, #007AC1);
+  /* --primary-fill: color-mix(in oklab, var(--src-primary) 82%, #0a1124); */
+  --primary-hover: color-mix(in oklab, var(--src-primary) 88%, white);
+  --primary-tint: color-mix(in oklab, var(--src-primary) 12%, transparent);
+  /* Azure lightened for TEXT duty on panels: the raw accent is 4.0:1 on
+     --console, which is fine for a nav chip beside its underline but not
+     for body-size links. */
+  --primary-soft: color-mix(in oklab, var(--src-primary) 72%, white);
+  --primary-dim: color-mix(in oklab, var(--src-primary) 55%, var(--src-surface));
+
+  /* Status colour. --teal keeps its name because Instruments.jsx,
+     SonarView.jsx and TopBar.jsx read var(--teal) as their OK/live tone
+     — under this palette that tone IS the emerald signal, so the legacy
+     name lands on the right meaning without touching a component. */
+  --teal: var(--src-signal);
+  --teal-dim: color-mix(in oklab, var(--src-signal) 55%, var(--src-surface));
+  --signal-tint: color-mix(in oklab, var(--src-signal) 10%, transparent);
+
+  --amber: var(--src-warn);
+  /* Lightened for text duty: #f87171 is 4.2:1 on a raised surface, the
+     15% white mix clears 4.5:1. Fills and borders use --danger. */
+  --red: color-mix(in oklab, var(--src-danger) 85%, white);
+  --danger: var(--src-danger);
+  --danger-tint: color-mix(in oklab, var(--src-danger) 12%, transparent);
+  --blue: var(--src-primary);
+  --green: var(--src-signal);
+
+  /* Space Grotesk is the marketing site's display face — the app and the
+     site now speak with one voice. Geist / Geist Mono carry body and
+     numerals: quiet, technical, and drawn for exactly this kind of UI. */
+  --font-display: "Space Grotesk", "Sora", sans-serif;
+  --font-body: "Geist", "Inter", system-ui, sans-serif;
+  --font-mono: "Geist Mono", "JetBrains Mono", monospace;
+
+  /* Tight geometry — 4px panels, 3px controls. Circles and the two
+     999px pills opt out where they are declared. */
+  --radius: 4px;
+  --radius-sm: 3px;
 
   /* Spacing scale. The stylesheet had grown fifteen different hand-picked gaps
      (4, 6, 7, 8, 9, 10, 12, 14, 16, 18, 22...), which is why panels never quite
@@ -59,22 +118,21 @@
   --t-lg: 18px;
   --t-xl: 22px;      /* primary instrument readouts */
 
-  /* Shadows are the *supporting* cue here, not the mechanism — see the palette
-     note above. They are pushed to near-opaque black because anything lighter
-     is mathematically invisible against --abyss, and kept tight (small blur,
-     small offset) so they read as a contact shadow hugging the panel edge
-     rather than a glow that fogs the background.
+  /* Shadows. The old near-opaque values existed because nothing darker
+     than the near-black page could render; the lifted base has real room
+     below it, so these are softer and stay tight — a contact shadow
+     hugging the panel edge, not a glow that fogs the background.
 
-     --edge-top is the real workhorse: a 1px white line along the top edge is
-     the classic dark-UI trick for catching light from above, and at 4.5% it
-     was too faint to see, so it is now 12%. */
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.7);
-  --shadow-2: 0 3px 10px rgba(0, 0, 0, 0.8), 0 1px 2px rgba(0, 0, 0, 0.6);
-  --shadow-3: 0 12px 36px rgba(0, 0, 0, 0.9), 0 3px 8px rgba(0, 0, 0, 0.7);
-  --edge-top: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+     --edge-top is the 1px catch-light along a panel's top edge. At the
+     old 12% it was compensating for a near-black ground; on the lifted
+     blue surface that read as a seam, so it is now 6%. */
+  --shadow-1: 0 1px 2px rgba(4, 8, 20, 0.45);
+  --shadow-2: 0 3px 10px rgba(4, 8, 20, 0.55), 0 1px 2px rgba(4, 8, 20, 0.4);
+  --shadow-3: 0 12px 36px rgba(4, 8, 20, 0.7), 0 3px 8px rgba(4, 8, 20, 0.5);
+  --edge-top: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 
-  /* Accent glow, for the one or two things that are genuinely live. */
-  --glow-teal: 0 0 0 1px rgba(59, 217, 187, 0.35), 0 0 16px rgba(59, 217, 187, 0.14);
+  /* Focus/live ring — a crisp 1px line, no outer bloom. */
+  --ring-primary: 0 0 0 1px color-mix(in oklab, var(--src-primary) 45%, transparent);
 
   /* ==================================================================
      CONTROL DECK LAYOUT — every size worth tuning, in one place.
@@ -176,7 +234,7 @@ body {
   overflow: hidden;
 }
 
-::selection { background: rgba(59, 217, 187, 0.3); }
+::selection { background: color-mix(in oklab, var(--src-primary) 30%, transparent); }
 
 /* scrollbars */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -195,7 +253,7 @@ button {
    rows — which are focusable without being a button, input or link. */
 button:focus-visible, input:focus-visible, select:focus-visible,
 textarea:focus-visible, a:focus-visible, [tabindex]:focus-visible {
-  outline: 2px solid var(--teal);
+  outline: 2px solid var(--primary);
   outline-offset: 2px;
 }
 
@@ -227,7 +285,7 @@ input, select {
   /* Inset shadow reads as a recess, the visual opposite of the raised .btn —
      so a field looks like something you type into and a button looks like
      something you press, before you have read either label. */
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+  box-shadow: inset 0 1px 2px rgba(4, 8, 20, 0.35);
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 input::placeholder { color: var(--faint); }
@@ -237,9 +295,9 @@ input::placeholder { color: var(--faint); }
    else, which is not a visible focus indicator. The glow is decorative; the
    outline from :focus-visible is the actual indicator and must survive. */
 input:focus, select:focus {
-  border-color: var(--teal-dim);
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35),
-              0 0 0 3px rgba(59, 217, 187, 0.28);
+  border-color: var(--primary);
+  box-shadow: inset 0 1px 2px rgba(4, 8, 20, 0.35),
+              0 0 0 3px color-mix(in oklab, var(--src-primary) 28%, transparent);
 }
 input:disabled, select:disabled { opacity: 0.5; cursor: not-allowed; }
 
@@ -322,36 +380,38 @@ input:disabled, select:disabled { opacity: 0.5; cursor: not-allowed; }
   box-shadow: none;
 }
 
+/* White label on the deeper fill, not the accent itself — see the note on
+   --primary-fill. No hover glow: hover is a lighter fill plus the standard
+   raised shadow, the same physics as every other button. */
 .btn-primary {
-  background: var(--teal);
-  border-color: var(--teal);
-  color: #04241d;
+  background: var(--primary-fill);
+  border-color: var(--primary-fill);
+  color: #ffffff;
 }
 .btn-primary:hover:not(:disabled) {
-  background: #57e6cc;
-  border-color: #57e6cc;
-  box-shadow: var(--shadow-2), 0 0 18px rgba(59, 217, 187, 0.22);
+  background: var(--src-primary);
+  border-color: var(--src-primary);
+  box-shadow: var(--shadow-2), var(--edge-top);
 }
 
 .btn-danger {
-  background: rgba(255, 92, 108, 0.12);
-  border-color: rgba(255, 92, 108, 0.5);
+  background: var(--danger-tint);
+  border-color: color-mix(in oklab, var(--src-danger) 50%, transparent);
   color: var(--red);
 }
 .btn-danger:hover:not(:disabled) {
-  background: rgba(255, 92, 108, 0.22);
+  background: color-mix(in oklab, var(--src-danger) 22%, transparent);
   border-color: var(--red);
-  box-shadow: var(--shadow-2), 0 0 18px rgba(255, 92, 108, 0.18);
+  box-shadow: var(--shadow-2);
 }
 
 .btn-ghost { background: transparent; box-shadow: none; }
 .btn-ghost:hover:not(:disabled) { box-shadow: none; }
 
-/* sonar ping — the signature */
-@keyframes sonar {
-  0% { transform: scale(1); opacity: 0.7; }
-  100% { transform: scale(3.2); opacity: 0; }
-}
+/* Status dots — static. The expanding sonar-ping ring is gone: state is
+   carried by colour plus the halo, and a console you stare at for a whole
+   mission should not have a dozen things breathing at you. A live dot gets
+   a soft ring of its own colour so on/off differ by shape as well as hue. */
 .ping-dot {
   position: relative;
   width: 8px;
@@ -359,23 +419,19 @@ input:disabled, select:disabled { opacity: 0.5; cursor: not-allowed; }
   border-radius: 50%;
   flex-shrink: 0;
 }
-.ping-dot::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  background: inherit;
-  animation: sonar 2s ease-out infinite;
+.ping-dot.live {
+  background: var(--teal);
+  box-shadow: 0 0 0 3px var(--signal-tint);
 }
-.ping-dot.live { background: var(--teal); }
 .ping-dot.off { background: var(--faint); }
-.ping-dot.off::after { animation: none; }
-.ping-dot.warn { background: var(--amber); }
+.ping-dot.warn {
+  background: var(--amber);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--src-warn) 12%, transparent);
+}
 
 @keyframes blink { 50% { opacity: 0.25; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .ping-dot::after { animation: none; }
   /* iteration-count is the part people leave off, and without it this block
      makes things worse rather than better: `blink` and `recPulse` are declared
      `infinite`, so squashing the duration to 0.01ms turns a slow pulse into a
