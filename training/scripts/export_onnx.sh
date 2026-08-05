@@ -63,13 +63,20 @@ torch.save({"model": state}, dst)
 print(f"checkpoint reduced to weights only -> {dst}")
 PY
 
-# Deliberately NOT trusting the exit status. yolox.tools.export_onnx wraps main()
-# in loguru's @logger.catch, which logs the traceback and then exits 0 — so a
-# failed export looks exactly like a successful one to `set -e`, and this script
-# used to print "Exported ONNX model -> ..." directly underneath a
-# FileNotFoundError. The artefact existing is the only trustworthy signal.
+# Our own exporter, not `python -m yolox.tools.export_onnx`. That tool no longer
+# runs on current PyTorch — it broke twice from a single checkpoint, first in
+# torch.load and then on torch.onnx._export, which PyTorch removed. See
+# export_onnx.py for the detail. YOLOX still supplies the model; only its CLI is
+# replaced.
+#
+# The artefact check below stays regardless. It was written because YOLOX's tool
+# wraps main() in loguru's @logger.catch and exits 0 after logging a traceback,
+# so a failed export looked exactly like a success to `set -e` — this script used
+# to print "Exported ONNX model -> ..." directly underneath a FileNotFoundError.
+# Ours does not do that, but the file existing is still the only signal worth
+# trusting.
 rm -f "${OUT}"
-python -m yolox.tools.export_onnx \
+python "${HERE}/export_onnx.py" \
   -f "${CONFIG}" \
   -c "${SLIM}" \
   --output-name "${OUT}" || true
