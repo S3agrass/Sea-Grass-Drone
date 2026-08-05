@@ -58,6 +58,15 @@ training/*.zip
 training/*.tar
 training/*.tar.gz
 
+# Diagnostic runs — GPS surveys and anything else written by scripts/. These are
+# measurements of one vehicle at one place on one day, not source. The report is
+# worth keeping if it decided something; copy it out deliberately rather than
+# letting every survey land in a commit.
+diagnostics/
+
+# sonar_logger.py writes this into whatever directory it was started from.
+sonar_log.csv
+
 # MAVLink session capture artifacts (runtime, not source)
 *.tlog
 *.tlog.raw
