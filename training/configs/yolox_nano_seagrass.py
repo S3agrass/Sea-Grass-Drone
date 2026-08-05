@@ -70,7 +70,7 @@ class Exp(MyExp):
         # experiment name -> YOLOX_outputs/<exp_name>/
         self.exp_name = os.path.splitext(os.path.basename(__file__))[0]
 
-    def get_evaluator(self, batch_size, is_distributed, testdev=False, legacy=False):
+    def get_evaluator(self, *args, **kwargs):
         """YOLOX's evaluator, but reporting AP per class rather than only the mean.
 
         The default COCOEvaluator is constructed with per_class_AP=False, so a
@@ -89,19 +89,20 @@ class Exp(MyExp):
         reads merely low is the imbalance — and those want completely different
         fixes.
 
-        Overriding rather than setting an attribute because the base Exp has no
-        per_class_AP field to set; it passes the default positionally into the
-        evaluator it builds.
-        """
-        from yolox.evaluators import COCOEvaluator
+        Overriding because the base Exp has no per_class_AP field to set — it
+        passes the default straight into the COCOEvaluator it builds.
 
-        return COCOEvaluator(
-            dataloader=self.get_eval_loader(batch_size, is_distributed, testdev, legacy),
-            img_size=self.test_size,
-            confthre=self.test_conf,
-            nmsthre=self.nmsthre,
-            num_classes=self.num_classes,
-            testdev=testdev,
-            per_class_AP=True,
-            per_class_AR=True,
-        )
+        Deliberately *not* rebuilding that evaluator here. The obvious version of
+        this constructs COCOEvaluator directly, which means also calling
+        get_eval_loader — and YOLOX has changed that method's signature between
+        releases. The one on Colab today takes three positional arguments, so
+        forwarding (batch_size, is_distributed, testdev, legacy) into it dies
+        with "takes 3 positional arguments but 5 were given" before the first
+        epoch. Letting the parent build the evaluator its own way, and flipping
+        two flags on the result, has nothing to get out of step. `*args,
+        **kwargs` for the same reason: this signature is YOLOX's to change.
+        """
+        evaluator = super().get_evaluator(*args, **kwargs)
+        evaluator.per_class_AP = True
+        evaluator.per_class_AR = True
+        return evaluator
