@@ -72,6 +72,18 @@ UERE_M = 4.0
 # means the field was never populated — both are absence, not a perfect DOP.
 _DOP_UNKNOWN = 65535
 
+# h_acc is UINT32 millimetres, and UINT32_MAX is its "unknown" — the same
+# convention eph uses, one field wider. A receiver searching for satellites
+# sends it constantly. Read literally it is an accuracy claim of 4,294 km, and
+# the first survey run on real hardware duly reported "claimed mean ±2204527.8 m
+# (reported)", which is not a measurement, it is a sentinel wearing one's
+# clothes. Anything past _ACC_MAX_SANE_M gets the same treatment: no receiver
+# that knows its position to within a kilometre is telling us anything we can
+# use, so it is absence, and absence must fall through to the HDOP estimate
+# rather than poison the mean.
+ACC_UNKNOWN_MM = 0xFFFFFFFF
+_ACC_MAX_SANE_M = 1000.0
+
 
 def _at_least(value, limit):
     """value >= limit, with None failing rather than raising."""
@@ -104,13 +116,16 @@ def decode_accuracy(h_acc_mm, eph):
 
     h_acc is a MAVLink2 *extension* field on GPS_RAW_INT. On a MAVLink1 link the
     attribute is absent entirely (callers must use getattr, not msg.h_acc, or it
-    raises), and ArduPilot sends 0 when the driver has no estimate to give. Both
-    fall through to an HDOP estimate, which is a weaker claim — hence the
-    source, which the UI says out loud. An estimated figure and a measured one
-    are not the same statement and should not be read as if they were.
+    raises), ArduPilot sends 0 when the driver has no estimate to give, and a
+    receiver still searching sends UINT32_MAX. All three fall through to an HDOP
+    estimate, which is a weaker claim — hence the source, which the UI says out
+    loud. An estimated figure and a measured one are not the same statement and
+    should not be read as if they were.
     """
-    if h_acc_mm:
-        return h_acc_mm / 1000.0, "reported"
+    if h_acc_mm and h_acc_mm != ACC_UNKNOWN_MM:
+        metres = h_acc_mm / 1000.0
+        if metres <= _ACC_MAX_SANE_M:
+            return metres, "reported"
     hdop = decode_hdop(eph)
     if hdop is not None:
         return hdop * UERE_M, "estimated"

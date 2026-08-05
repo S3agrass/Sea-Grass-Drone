@@ -411,10 +411,15 @@ class Survey:
         now = time.time()
         # getattr, not msg.h_acc: on a MAVLink1 link these attributes do not
         # exist and a direct access raises rather than returning nothing.
-        h_acc = getattr(msg, "h_acc", 0) or 0
-        v_acc = getattr(msg, "v_acc", 0) or 0
-        vel_acc = getattr(msg, "vel_acc", 0) or 0
-        hdg_acc = getattr(msg, "hdg_acc", 0) or 0
+        # UINT32_MAX is the "unknown" sentinel for all four, and a receiver that
+        # is still searching sends it on every message. Left raw it lands in the
+        # CSV as a 4,294 km accuracy claim.
+        def ext(name):
+            value = getattr(msg, name, 0) or 0
+            return 0 if value == gq.ACC_UNKNOWN_MM else value
+
+        h_acc, v_acc = ext("h_acc"), ext("v_acc")
+        vel_acc, hdg_acc = ext("vel_acc"), ext("hdg_acc")
         for name, value in (("h_acc", h_acc), ("v_acc", v_acc),
                             ("vel_acc", vel_acc), ("hdg_acc", hdg_acc)):
             if value:

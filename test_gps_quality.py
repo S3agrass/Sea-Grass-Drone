@@ -129,6 +129,24 @@ def test_decode_accuracy():
     check("a missing h_acc field falls back to HDOP", close(m, 0.9 * gq.UERE_M, 1e-9))
     check("that fallback is labelled estimated too", src == "estimated")
 
+    # Regression from the first run on real hardware: a receiver still searching
+    # sends h_acc = UINT32_MAX every message, and the report duly announced
+    # "claimed mean ±2204527.8 m (reported)". A sentinel is an absence, and an
+    # absence that reaches the mean poisons the claimed-vs-measured ratio that
+    # the whole survey exists to produce.
+    m, src = gq.decode_accuracy(gq.ACC_UNKNOWN_MM, 9999)
+    check("UINT32_MAX h_acc is unknown, not a 4294 km claim",
+          src == "estimated" and close(m, 99.99 * gq.UERE_M, 1e-6), f"{m} {src}")
+    m, src = gq.decode_accuracy(gq.ACC_UNKNOWN_MM, 65535)
+    check("UINT32_MAX h_acc with no HDOP gives nothing at all",
+          m is None and src is None, f"{m} {src}")
+    m, src = gq.decode_accuracy(50_000_000, 90)
+    check("an implausible 50 km h_acc falls back to HDOP",
+          src == "estimated" and close(m, 3.6, 1e-9), f"{m} {src}")
+    m, src = gq.decode_accuracy(999_000, 90)
+    check("a large but plausible h_acc is still reported",
+          src == "reported" and close(m, 999.0, 1e-9), f"{m} {src}")
+
     m, src = gq.decode_accuracy(0, 65535)
     check("unknown eph gives no accuracy at all", m is None and src is None,
           f"{m} {src}")
