@@ -25,7 +25,7 @@ import subprocess
 PING_RX_GPIO = 5
 
 
-def _port_owner(port):
+def port_owner(port):
     """PIDs holding `port`, excluding ourselves. Empty list if none or unknown."""
     try:
         out = subprocess.run(
@@ -37,12 +37,20 @@ def _port_owner(port):
     return [int(p) for p in out.split() if p.isdigit() and int(p) != me]
 
 
-def _describe(pid):
+def describe_pid(pid):
     try:
         with open(f"/proc/{pid}/cmdline", "rb") as fh:
             return " ".join(fh.read().decode().split("\0")).strip() or f"pid {pid}"
     except OSError:
         return f"pid {pid}"
+
+
+# The Pixhawk's serial link has exactly the same single-owner problem as the
+# Ping's, so scripts/gps_survey.py reuses these two rather than growing a second
+# copy that drifts. The underscore names stay as aliases: they were the public
+# surface for long enough that something outside this repo may call them.
+_port_owner = port_owner
+_describe = describe_pid
 
 
 def _pin_is_driven_high(gpio):
@@ -77,9 +85,9 @@ def check(port, fix_mux=True):
     """
     problems = []
 
-    owners = _port_owner(port)
+    owners = port_owner(port)
     if owners:
-        who = ", ".join(_describe(p) for p in owners)
+        who = ", ".join(describe_pid(p) for p in owners)
         problems.append(
             f"{port} is already open by another process ({who}).\n"
             f"    Only one process can read the sonar. Stop the server first:\n"

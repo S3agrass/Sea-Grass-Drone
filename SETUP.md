@@ -271,6 +271,59 @@ things in there are worth knowing before you need them:
   The number changes between boots, and when it does the error is identical to
   an unplugged board.
 
+### GPS survey — measuring the fix before trusting it
+
+`scripts/gps_survey.py` answers two questions nothing else here can: how long a
+usable fix takes to arrive, and how accurate it actually is. Run it after
+calibrating a receiver, after moving the antenna, and at any new launch site.
+
+```bash
+sudo systemctl stop drone-server     # the serial link is single-owner
+python3 test_gps_quality.py          # offline maths check, no hardware
+python3 scripts/gps_survey.py --list # the scenarios and how long they take
+python3 scripts/gps_survey.py        # ~34 min of recording, guided
+sudo systemctl start drone-server
+```
+
+It **will not run alongside the server** and will not kill it — unlike
+`scripts/drone`, which frees the port by force because it is the thing that
+should own it. If the survey refuses, that is the guard working; stop the
+service and re-run.
+
+Nine scenarios walk from open sky to fully shielded, each timing how long the
+fix takes to reach every quality tier. `static-scatter` is the one that matters:
+it parks the vehicle for ten minutes and measures the real dispersion (CEP50 /
+CEP95), then divides it by what the receiver claimed for itself. **That ratio is
+the headline.** A receiver reporting one sigma honestly lands around 1.7–2.5;
+much higher means its own accuracy figure is optimistic, and any accuracy circle
+drawn from it on the map would be a picture of a lie.
+
+Two things to check before believing any number in the report:
+
+- **The header must say `MAVLink dialect 2.0` and "accuracy is
+  RECEIVER-REPORTED".** `h_acc` is a MAVLink2 extension field and does not exist
+  at all under the 1.0 dialect, so if the header says ESTIMATED then every `±`
+  figure is `HDOP × 4 m` — an inference, not a measurement — and the ratio above
+  means nothing.
+- **The `indoors` scenario must fail.** It is a hard gate. A receiver that
+  reports a good fix from the middle of a building is not one whose quality
+  reporting can be used to gate anything.
+
+For an unattended soak (e.g. across a tide change) rather than guided scenarios:
+
+```bash
+python3 scripts/gps_survey.py --continuous --duration 3600 --label dock
+```
+
+Output lands in `diagnostics/gps/` (gitignored) as a `.csv` of every sample, a
+`.md` report, and a `.events.jsonl` of every `STATUSTEXT` — which is where the
+autopilot's own `PreArm:` reasons for refusing to arm are captured verbatim.
+
+The grading rubric and its justification live in
+[`server/gps_quality.py`](./server/gps_quality.py), in one place, because the
+survey report and the console must not use the same words to mean different
+things.
+
 ---
 
 ## 5. Raspberry Pi — camera (WebRTC via MediaMTX)
@@ -768,7 +821,18 @@ npm test             # single run
 npm run test:watch   # watch mode
 ```
 
-25 tests covering DroneLink protocol, DroneContext camera state, and CameraView UI. All tests are in `src/test/`.
+Frontend tests live in `src/test/` and cover the DroneLink protocol, DroneContext
+state, the map, and the instrument tiles.
+
+The Python tests are standalone scripts, not pytest — run them individually.
+None of them need hardware:
+
+```bash
+python3 test_gps_quality.py      # GPS grading rubric + accuracy maths
+python3 test_sonar_brake.py      # the sonar brake, both directions
+python3 test_heading_hold.py
+python3 test_pid_synthetic.py
+```
 
 ---
 
