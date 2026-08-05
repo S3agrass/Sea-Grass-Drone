@@ -232,6 +232,45 @@ They interoperate: running `drone` stops the systemd unit first so the two
 never fight over the serial port. Hand the port back afterwards with
 `sudo systemctl start drone-server`.
 
+### Back up `~/.seagrass-env`
+
+That file is **the only thing on the Pi a reflash does not bring back.** The
+code is a `git clone` away; the access token, the Supabase service key and the
+hardware paths are not written down anywhere else. Lose the SD card without a
+copy and you re-pair the drone from scratch and re-derive which
+`/dev/serial/by-id/` path the Pixhawk answers on.
+
+```bash
+scripts/backup-pi-env.sh                  # -> ~/seagrass-backups, timestamped
+scripts/backup-pi-env.sh pi@10.0.0.42     # a different host
+```
+
+Backups land **outside the repo** on purpose, mode `600`. Writing secrets into
+a working tree is one `.gitignore` mistake away from publishing them, and the
+file simply not being there is a stronger guarantee than a rule saying to
+ignore it. The script refuses a copy with no `SEAGRASS_TOKEN` in it, because an
+empty backup is worse than none — nothing questions it until a restore.
+
+Restoring onto a fresh card:
+
+```bash
+scp ~/seagrass-backups/seagrass-env-latest pi@seagrass.local:~/.seagrass-env
+ssh pi@seagrass.local 'chmod 600 ~/.seagrass-env && sudo systemctl restart drone-server'
+```
+
+Building one from scratch instead: [`.seagrass-env.example`](./.seagrass-env.example)
+lists every variable the vehicle reads, with the reasoning attached. Three
+things in there are worth knowing before you need them:
+
+- **`EnvironmentFile` is not a shell.** No `export`, no `~`, no expansion. A
+  path like `~/Sea-Grass-Drone/...` silently does not resolve and fails exactly
+  like a missing file.
+- **Duplicate keys are legal and the last wins**, so appending an override to
+  the end of the file is a valid way to change a setting.
+- **`PIXHAWK_PORT` should be a `/dev/serial/by-id/` path**, not `/dev/ttyACM0`.
+  The number changes between boots, and when it does the error is identical to
+  an unplugged board.
+
 ---
 
 ## 5. Raspberry Pi — camera (WebRTC via MediaMTX)
