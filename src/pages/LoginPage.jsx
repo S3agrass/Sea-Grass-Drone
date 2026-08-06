@@ -147,6 +147,22 @@ export default function LoginPage() {
 		// link, like every other screen. The hero half beside it is decorative.
 		<main className="login" id="main">
 			<div className="login-hero">
+				{/* Own clipped layer, separate from .login-hero itself: the hero
+				    deliberately has no overflow:hidden so the particle-title canvas
+				    below can bleed past its box (see BLEED), so the video needs its
+				    own box to stay contained instead of reusing that one. */}
+				<div className="login-hero-media" aria-hidden="true">
+					<video
+						className="login-hero-video"
+						src="/login-bg.mp4"
+						poster="/login-bg-poster.jpg"
+						autoPlay
+						muted
+						loop
+						playsInline
+					/>
+				</div>
+
 				<div className="login-rings" aria-hidden="true">
 					<div className="login-rings-origin">
 						<span />

@@ -61,29 +61,64 @@
    The clip now lives on .login-rings, which is the only thing that needed it. */
 .login-hero {
   position: relative;
-  /* One wash derived from the palette rather than three hand-picked navies:
-     a raised-surface bloom at the ring origin's corner, falling to the page
-     ground and a touch below it at the foot. */
-  background:
-    radial-gradient(120% 90% at 20% 10%,
-      color-mix(in oklab, var(--src-raised) 55%, var(--src-bg)) 0%, transparent 60%),
-    linear-gradient(180deg,
-      color-mix(in oklab, var(--src-bg) 85%, var(--src-stage)) 0%,
-      var(--abyss) 70%,
-      color-mix(in oklab, var(--src-bg) 55%, var(--src-stage)) 100%);
+  /* Fallback only — what shows for the instant before the video's first
+     frame paints, and if it fails to load at all. */
+  background: var(--abyss);
   border-right: 1px solid var(--line-soft);
   display: flex;
   align-items: flex-end;
   padding: 64px;
 }
 
+/* Video's own clipped box, kept separate from .login-hero (see the BLEED
+   note above): that element deliberately has no overflow:hidden so the
+   particle canvas can bleed past it, so the video needs a box of its own to
+   stay contained instead of reusing that one. */
+.login-hero-media {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+.login-hero-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+/* The dim, applied as a layer over the footage rather than baked into it: a
+   raised-surface bloom at the ring origin's corner (echoing the wash this
+   replaced) over a top-to-bottom fade that is heaviest at the nav edge and
+   the card edge and lightest through the middle — the same shape real light
+   already falls off in through the panel, so it reads as depth rather than
+   a flat tint dropped on the footage. color-mix(...,transparent) turns each
+   solid palette token translucent without hand-picking an rgba. */
+.login-hero-media::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(120% 90% at 20% 10%,
+      color-mix(in oklab, var(--src-raised) 45%, transparent) 0%, transparent 60%),
+    linear-gradient(180deg,
+      color-mix(in oklab, var(--src-bg) 74%, transparent) 0%,
+      color-mix(in oklab, var(--abyss) 42%, transparent) 55%,
+      color-mix(in oklab, var(--src-bg) 78%, transparent) 100%);
+}
+
 /* Fills the panel and clips to it, so the rings stay inside while the brand's
-   particle canvas — a sibling further down — is free to overhang. */
+   particle canvas — a sibling further down — is free to overhang. Explicit
+   z-index (rather than relying on DOM order) because .login-hero-media
+   below it is also positioned: mixing auto and explicit z-index on
+   positioned siblings is fragile, so every stacked layer in this panel
+   states its order plainly. */
 .login-rings {
   position: absolute;
   inset: 0;
   overflow: hidden;
   pointer-events: none;
+  z-index: 1;
 }
 .login-rings-origin {
   position: absolute;
@@ -110,7 +145,7 @@
   border-color: color-mix(in oklab, var(--src-primary) 10%, transparent);
 }
 
-.login-hero-inner { position: relative; max-width: 460px; }
+.login-hero-inner { position: relative; z-index: 2; max-width: 460px; }
 
 /* The brand type lives on the inner span now, not the wrapper: ParticleTitle
    reads these values off it with getComputedStyle to build the canvas, so the
